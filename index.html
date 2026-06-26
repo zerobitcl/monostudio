@@ -7,14 +7,54 @@
   <meta name="description" content="Agencia de crecimiento digital en Chile. Creamos marcas que impactan y código nativo que escala. Diseño UI/UX de autor + ingeniería web con PageSpeed 95+. Sin plantillas.">
   <meta name="theme-color" content="#080b11">
   <link rel="canonical" href="https://monostudio.cl/">
-  <meta name="robots" content="index, follow">
+  <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+  <meta name="googlebot" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+  <meta name="bingbot" content="index, follow">
+  <meta name="author" content="Mono Studio">
+  <meta name="geo.region" content="CL">
+  <meta name="geo.placename" content="Chile">
+  <meta name="language" content="Spanish">
+  <meta name="format-detection" content="telephone=yes">
+  <meta name="rating" content="general">
+
+  <!-- Google Search Console: descomenta y pega tu código de verificación -->
+  <!-- <meta name="google-site-verification" content="TU_CODIGO_AQUI"> -->
+
+  <link rel="alternate" hreflang="es-CL" href="https://monostudio.cl/">
+  <link rel="alternate" hreflang="x-default" href="https://monostudio.cl/">
+  <link rel="author" href="/humans.txt">
+  <link rel="help" href="/llms.txt">
+
+  <!-- Favicons y PWA -->
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" href="/assets/img/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/assets/img/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="/assets/img/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
+  <meta name="msapplication-config" content="/browserconfig.xml">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Mono Studio">
 
   <!-- Open Graph -->
   <meta property="og:type" content="website">
   <meta property="og:locale" content="es_CL">
+  <meta property="og:site_name" content="Mono Studio">
   <meta property="og:title" content="Mono Studio | Diseño Web Premium y Código Nativo en Chile">
   <meta property="og:description" content="Marcas que impactan y código nativo que escala. Sin plantillas, sin límites.">
   <meta property="og:url" content="https://monostudio.cl/">
+  <meta property="og:image" content="https://monostudio.cl/assets/img/og-default.png">
+  <meta property="og:image:secure_url" content="https://monostudio.cl/assets/img/og-default.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Mono Studio — Agencia de crecimiento digital en Chile">
+
+  <!-- Twitter / X Card -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Mono Studio | Diseño Web Premium y Código Nativo en Chile">
+  <meta name="twitter:description" content="Marcas que impactan y código nativo que escala. Sin plantillas, sin límites.">
+  <meta name="twitter:image" content="https://monostudio.cl/assets/img/og-default.png">
+  <meta name="twitter:image:alt" content="Mono Studio — Agencia de crecimiento digital en Chile">
 
   <!-- Performance: preconnect + fuentes -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -25,27 +65,89 @@
 
   <link rel="stylesheet" href="assets/css/style.css">
 
-  <!-- Schema: Organización local -->
+  <!-- Schema: Organización + WebSite + Catálogo de servicios -->
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
-    "@type": "ProfessionalService",
-    "name": "Mono Studio",
-    "description": "Agencia de crecimiento digital y desarrollo web premium en Chile.",
-    "url": "https://monostudio.cl/",
-    "telephone": "+56994284048",
-    "areaServed": "CL",
-    "priceRange": "$$",
-    "address": { "@type": "PostalAddress", "addressCountry": "CL" },
-    "founder": [
-      { "@type": "Person", "name": "Andrea", "jobTitle": "Especialista en Identidad de Marca y Diseño UI/UX" },
-      { "@type": "Person", "name": "Eduardo", "jobTitle": "Ingeniero de Software, Especialista en Código Nativo y SEO Técnico" }
-    ],
-    "sameAs": []
+    "@graph": [
+      {
+        "@type": "Organization",
+        "@id": "https://monostudio.cl/#organization",
+        "name": "Mono Studio",
+        "url": "https://monostudio.cl/",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://monostudio.cl/assets/img/logo.svg",
+          "width": 240,
+          "height": 60
+        },
+        "image": "https://monostudio.cl/assets/img/og-default.png",
+        "email": "hola@monostudio.cl",
+        "telephone": "+56994284048",
+        "areaServed": { "@type": "Country", "name": "Chile" },
+        "founder": [
+          { "@type": "Person", "name": "Andrea", "jobTitle": "Especialista en Identidad de Marca y Diseño UI/UX" },
+          { "@type": "Person", "name": "Eduardo", "jobTitle": "Ingeniero de Software, Especialista en Código Nativo y SEO Técnico" }
+        ],
+        "contactPoint": {
+          "@type": "ContactPoint",
+          "telephone": "+56994284048",
+          "contactType": "customer service",
+          "areaServed": "CL",
+          "availableLanguage": ["Spanish"],
+          "contactOption": "TollFree"
+        }
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://monostudio.cl/#website",
+        "url": "https://monostudio.cl/",
+        "name": "Mono Studio",
+        "description": "Agencia de crecimiento digital y desarrollo web premium en Chile.",
+        "publisher": { "@id": "https://monostudio.cl/#organization" },
+        "inLanguage": "es-CL"
+      },
+      {
+        "@type": "ProfessionalService",
+        "@id": "https://monostudio.cl/#business",
+        "name": "Mono Studio",
+        "description": "Agencia de crecimiento digital y desarrollo web premium en Chile.",
+        "url": "https://monostudio.cl/",
+        "image": "https://monostudio.cl/assets/img/og-default.png",
+        "telephone": "+56994284048",
+        "email": "hola@monostudio.cl",
+        "priceRange": "$$",
+        "address": { "@type": "PostalAddress", "addressCountry": "CL" },
+        "areaServed": { "@type": "Country", "name": "Chile" },
+        "parentOrganization": { "@id": "https://monostudio.cl/#organization" },
+        "hasOfferCatalog": {
+          "@type": "OfferCatalog",
+          "name": "Servicios Mono Studio",
+          "itemListElement": [
+            { "@type": "Offer", "itemOffered": { "@type": "Service", "name": "Diseño Web Profesional", "url": "https://monostudio.cl/diseno-web-profesional.html" } },
+            { "@type": "Offer", "itemOffered": { "@type": "Service", "name": "Posicionamiento SEO Chile", "url": "https://monostudio.cl/posicionamiento-seo-chile.html" } },
+            { "@type": "Offer", "itemOffered": { "@type": "Service", "name": "Identidad de Marca", "url": "https://monostudio.cl/identidad-de-marca-chile.html" } },
+            { "@type": "Offer", "itemOffered": { "@type": "Service", "name": "Desarrollo de Aplicaciones Web", "url": "https://monostudio.cl/desarrollo-aplicaciones-web.html" } },
+            { "@type": "Offer", "itemOffered": { "@type": "Service", "name": "Optimización de Velocidad WPO", "url": "https://monostudio.cl/optimizacion-velocidad-wpo.html" } }
+          ]
+        }
+      },
+      {
+        "@type": "WebPage",
+        "@id": "https://monostudio.cl/#webpage",
+        "url": "https://monostudio.cl/",
+        "name": "Mono Studio | Diseño Web Premium y Código Nativo en Chile",
+        "description": "Agencia de crecimiento digital en Chile. Creamos marcas que impactan y código nativo que escala.",
+        "isPartOf": { "@id": "https://monostudio.cl/#website" },
+        "about": { "@id": "https://monostudio.cl/#business" },
+        "inLanguage": "es-CL"
+      }
+    ]
   }
   </script>
 </head>
 <body>
+  <a class="skip-link" href="#contenido">Saltar al contenido</a>
 
   <!-- ================= HEADER ================= -->
   <header class="site-header">
@@ -77,7 +179,7 @@
     </div>
   </header>
 
-  <main>
+  <main id="contenido">
     <!-- ================= HERO ================= -->
     <section class="hero">
       <div class="container hero__inner">

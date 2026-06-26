@@ -114,6 +114,43 @@ button { font: inherit; cursor: pointer; border: none; background: none; color: 
 ul { list-style: none; }
 ::selection { background: var(--emerald); color: #04120c; }
 
+/* ---- Skip link (accesibilidad + SEO UX) ---- */
+.skip-link {
+  position: absolute;
+  top: -100%;
+  left: 1rem;
+  z-index: 200;
+  padding: 0.75rem 1.25rem;
+  border-radius: var(--radius-sm);
+  background: var(--emerald);
+  color: #04120c;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--step--1);
+  transition: top 0.3s var(--ease);
+}
+.skip-link:focus { top: 1rem; outline: 2px solid var(--violet-soft); outline-offset: 2px; }
+
+/* ---- Breadcrumbs ---- */
+.breadcrumb { padding-top: calc(var(--header-h) + 1rem); padding-bottom: 0.5rem; }
+.breadcrumb__list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+  font-size: var(--step--1);
+  color: var(--text-faint);
+}
+.breadcrumb__item { display: inline-flex; align-items: center; gap: 0.5rem; }
+.breadcrumb__item:not(:last-child)::after {
+  content: "/";
+  color: var(--text-faint);
+  opacity: 0.5;
+}
+.breadcrumb__item a { color: var(--text-dim); transition: color 0.3s var(--ease); }
+.breadcrumb__item a:hover { color: var(--emerald-soft); }
+.breadcrumb__item[aria-current="page"] { color: var(--text); font-weight: 500; }
+
 /* ---- Tipografía ---- */
 h1, h2, h3, h4 {
   font-family: var(--font-display);
@@ -292,7 +329,9 @@ strong { color: var(--text); font-weight: 600; }
 .nav.open .nav__toggle span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
 
 /* ---- Hero ---- */
+/* ---- Hero ---- */
 .hero { position: relative; padding-top: calc(var(--header-h) + clamp(3rem, 8vw, 7rem)); padding-bottom: clamp(3rem, 6vw, 6rem); }
+.hero--with-crumb { padding-top: clamp(1.5rem, 3vw, 2.5rem); }
 .hero__inner { max-width: 980px; }
 .hero h1 { margin: 1.6rem 0; }
 .hero__sub { font-size: var(--step-1); max-width: 60ch; color: var(--text-dim); }

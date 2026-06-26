@@ -1,0 +1,6 @@
+Contact: mailto:hola@monostudio.cl
+Preferred-Languages: es, en
+Canonical: https://monostudio.cl/
+
+# Mono Studio — Agencia digital Chile
+# Para reportes de seguridad: hola@monostudio.cl

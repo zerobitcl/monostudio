@@ -1,0 +1,23 @@
+# Mono Studio
+> Agencia de crecimiento digital y desarrollo web premium en Chile.
+
+## Quiénes somos
+Mono Studio integra diseño de autor (Andrea) e ingeniería web nativa (Eduardo). Construimos marcas, sitios y software a medida sin plantillas ni frameworks pesados. PageSpeed 95+, SEO técnico y conversión directa vía WhatsApp.
+
+## Servicios principales
+- Diseño Web Profesional: https://monostudio.cl/diseno-web-profesional.html
+- Posicionamiento SEO Chile: https://monostudio.cl/posicionamiento-seo-chile.html
+- Identidad de Marca y Branding: https://monostudio.cl/identidad-de-marca-chile.html
+- Desarrollo de Aplicaciones Web: https://monostudio.cl/desarrollo-aplicaciones-web.html
+- Optimización de Velocidad (WPO): https://monostudio.cl/optimizacion-velocidad-wpo.html
+
+## Contacto
+- WhatsApp: +56 9 9428 4048 — https://wa.me/56994284048
+- Email: hola@monostudio.cl
+- País: Chile (CL)
+
+## Tecnología
+HTML5, CSS3, JavaScript vanilla. Optimizado para Hostinger y Core Web Vitals.
+
+## Sitemap
+https://monostudio.cl/sitemap.xml

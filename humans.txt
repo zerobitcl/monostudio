@@ -1,0 +1,20 @@
+/* TEAM */
+Andrea — Identidad de Marca y Diseño UI/UX
+Eduardo — Ingeniero de Software, Código Nativo y SEO Técnico
+
+/* SITE */
+Agencia: Mono Studio
+País: Chile
+Idioma: Español (es-CL)
+Contacto: +56 9 9428 4048
+WhatsApp: https://wa.me/56994284048
+Email: hola@monostudio.cl
+Dominio: https://monostudio.cl
+
+/* STACK */
+HTML5 semántico, CSS3 nativo, Vanilla JavaScript
+Hosting: Hostinger
+Sin frameworks pesados
+
+/* THANKS */
+A nuestros clientes en Chile que confían en código nativo.

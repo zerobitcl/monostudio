@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 60" role="img" aria-label="Mono Studio">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="50%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="10" width="40" height="40" rx="10" fill="url(#grad)"/>
+  <text x="20" y="38" text-anchor="middle" font-family="system-ui,sans-serif" font-size="22" font-weight="700" fill="#04120c">M</text>
+  <text x="52" y="38" font-family="system-ui,sans-serif" font-size="28" font-weight="700" fill="#ffffff">Mono</text>
+  <text x="128" y="38" font-family="system-ui,sans-serif" font-size="28" font-weight="500" fill="#8b949e">Studio</text>
+</svg>
