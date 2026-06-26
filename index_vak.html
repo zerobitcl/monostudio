@@ -1,0 +1,1034 @@
+<!--
+  ╔══════════════════════════════════════════════╗
+  ║  MONO STUDIO — Full Page Block  v4.0         ║
+  ║  Pegar en: WordPress → Bloque HTML Puro      ║
+  ║  Namespace: .ms- (sin conflictos con WP)     ║
+  ╚══════════════════════════════════════════════╝
+-->
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<style>
+/* ═══════════════════════════════════════════════════════
+   MONO STUDIO — v3.0 Ultra-Premium
+   Namespace: .ms-  →  100% conflict-safe en WordPress
+═══════════════════════════════════════════════════════ */
+
+/* ── Curva spring unificada ── */
+.ms-root { --ms-ease: cubic-bezier(0.16, 1, 0.3, 1); }
+
+.ms-root *,
+.ms-root *::before,
+.ms-root *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ─────────────────────────────────────
+   OUTER WRAPPER — Full-Width breakout
+   Contiene el overflow-x para evitar
+   scroll horizontal por el 100vw.
+───────────────────────────────────── */
+
+.ms-outer-wrap {
+  overflow-x: hidden;
+  width: 100%;
+  position: relative;
+}
+
+/* ─────────────────────────────────────
+   ROOT — Full-Width + Fondo + Noise
+   Técnica: margin-left 50% + translateX(-50%)
+   Rompe el contenedor de WordPress/Astra
+   sin afectar el flujo del DOM.
+───────────────────────────────────── */
+
+.ms-root {
+  /* ── Full-Width breakout ── */
+  width: 100vw;
+  margin-left: 50%;
+  transform: translateX(-50%);
+
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: #080810;
+  background-image:
+    radial-gradient(ellipse 90% 60% at 50% 10%,  rgba(99, 102, 241, 0.14) 0%, transparent 65%),
+    radial-gradient(ellipse 50% 38% at 85% 88%,  rgba(124, 58, 237, 0.07) 0%, transparent 58%),
+    radial-gradient(ellipse 45% 35% at 12% 68%,  rgba(59, 130, 246, 0.05) 0%, transparent 55%);
+  padding: 88px 20px 108px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  position: relative;
+  isolation: isolate;
+}
+
+/* Grainy Noise — SVG feTurbulence tileado */
+.ms-root::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.78' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)' opacity='0.07'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 220px 220px;
+  mix-blend-mode: overlay;
+}
+
+.ms-container {
+  max-width: 1080px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 1;
+}
+
+/* ─────────────────────────────────────
+   SCROLL REVEAL — IntersectionObserver
+───────────────────────────────────── */
+
+.ms-reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition:
+    opacity   0.5s var(--ms-ease),
+    transform 0.5s var(--ms-ease);
+  will-change: opacity, transform;
+}
+
+.ms-reveal.ms-in {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Stagger: Bento cards */
+.ms-grid .ms-card:nth-child(1) { transition-delay:   0ms; }
+.ms-grid .ms-card:nth-child(2) { transition-delay:  90ms; }
+.ms-grid .ms-card:nth-child(3) { transition-delay: 180ms; }
+.ms-grid .ms-card:nth-child(4) { transition-delay: 270ms; }
+.ms-grid .ms-card:nth-child(5) { transition-delay: 360ms; }
+
+/* Stagger: Método columns */
+.ms-method-cols .ms-method-col:nth-child(1) { transition-delay:   0ms; }
+.ms-method-cols .ms-method-col:nth-child(2) { transition-delay: 110ms; }
+.ms-method-cols .ms-method-col:nth-child(3) { transition-delay: 220ms; }
+
+/* Stagger: FAQ items */
+.ms-faq-list .ms-faq-item:nth-child(1) { transition-delay:   0ms; }
+.ms-faq-list .ms-faq-item:nth-child(2) { transition-delay:  70ms; }
+.ms-faq-list .ms-faq-item:nth-child(3) { transition-delay: 140ms; }
+.ms-faq-list .ms-faq-item:nth-child(4) { transition-delay: 210ms; }
+
+/* ─────────────────────────────────────
+   HEADER — Bento
+───────────────────────────────────── */
+
+.ms-header {
+  text-align: center;
+  margin-bottom: 56px;
+}
+
+.ms-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: #818cf8;
+  border: 1px solid rgba(129, 140, 248, 0.28);
+  border-radius: 100px;
+  padding: 7px 18px;
+  background: rgba(129, 140, 248, 0.07);
+  margin-bottom: 22px;
+}
+
+.ms-pill svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 2.5;
+}
+
+.ms-h2 {
+  font-size: clamp(26px, 4.5vw, 46px);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1.08;
+  color: #f8fafc;
+}
+
+.ms-h2 .ms-grad {
+  background: linear-gradient(125deg, #a5b4fc 0%, #818cf8 40%, #c4b5fd 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ─────────────────────────────────────
+   BENTO GRID
+───────────────────────────────────── */
+
+.ms-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-areas:
+    "hero    hero    seo"
+    "medical uiux    rrss";
+  gap: 12px;
+}
+
+/* ─────────────────────────────────────
+   CARDS — Glassmorphism + Gradient Border
+───────────────────────────────────── */
+
+.ms-card {
+  position: relative;
+  background:
+    linear-gradient(rgba(11, 11, 20, 0.82), rgba(11, 11, 20, 0.82)) padding-box,
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.10) 0%,
+      rgba(255, 255, 255, 0.02) 45%,
+      rgba(129, 140, 248, 0.13) 100%
+    ) border-box;
+  border: 1px solid transparent;
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  border-radius: 22px;
+  padding: 32px;
+  overflow: hidden;
+  transition:
+    transform    0.5s var(--ms-ease),
+    box-shadow   0.5s var(--ms-ease),
+    background   0.5s var(--ms-ease);
+}
+
+.ms-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at 55% -8%, rgba(129, 140, 248, 0.12) 0%, transparent 62%);
+  opacity: 0;
+  transition: opacity 0.5s var(--ms-ease);
+  pointer-events: none;
+}
+
+.ms-card:hover {
+  transform: translateY(-5px) scale(1.013);
+  background:
+    linear-gradient(rgba(11, 11, 20, 0.82), rgba(11, 11, 20, 0.82)) padding-box,
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.22) 0%,
+      rgba(129, 140, 248, 0.20) 50%,
+      rgba(196, 181, 253, 0.28) 100%
+    ) border-box;
+  box-shadow:
+    0 0 0 1px rgba(129, 140, 248, 0.07),
+    0 32px 80px rgba(0, 0, 0, 0.65),
+    0 0  60px rgba(99, 102, 241, 0.10),
+    0 0 120px rgba(99, 102, 241, 0.04);
+}
+
+.ms-card:hover::after { opacity: 1; }
+
+.ms-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* ─────────────────────────────────────
+   GRID AREAS
+───────────────────────────────────── */
+
+.ms-card-hero    { grid-area: hero; min-height: 290px; }
+.ms-card-seo     { grid-area: seo; }
+.ms-card-medical { grid-area: medical; }
+.ms-card-uiux    { grid-area: uiux; }
+.ms-card-rrss    { grid-area: rrss; }
+
+.ms-orb {
+  position: absolute !important;
+  top: -80px;
+  right: -80px;
+  width: 310px;
+  height: 310px;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.18) 0%, transparent 68%);
+  pointer-events: none;
+  z-index: 0 !important;
+  border-radius: 50%;
+  transition: transform 0.8s var(--ms-ease);
+}
+
+.ms-card-hero:hover .ms-orb {
+  transform: scale(1.15) translate(10px, -10px);
+}
+
+/* ─────────────────────────────────────
+   ICON WRAPPER
+───────────────────────────────────── */
+
+.ms-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  background: rgba(129, 140, 248, 0.10);
+  border: 1px solid rgba(129, 140, 248, 0.20);
+  color: #818cf8;
+  margin-bottom: 20px;
+  transition:
+    background   0.5s var(--ms-ease),
+    border-color 0.5s var(--ms-ease),
+    box-shadow   0.5s var(--ms-ease);
+}
+
+.ms-card:hover .ms-icon {
+  background: rgba(129, 140, 248, 0.18);
+  border-color: rgba(129, 140, 248, 0.40);
+  box-shadow: 0 0 22px rgba(129, 140, 248, 0.22);
+}
+
+.ms-icon svg {
+  width: 21px;
+  height: 21px;
+  stroke-width: 1.75;
+}
+
+/* ─────────────────────────────────────
+   CARD TYPOGRAPHY
+───────────────────────────────────── */
+
+.ms-card-title {
+  font-size: 16.5px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: #f1f5f9;
+  line-height: 1.28;
+  margin-bottom: 10px;
+}
+
+.ms-card-hero .ms-card-title {
+  font-size: 22px;
+  margin-bottom: 14px;
+}
+
+.ms-card-desc {
+  font-size: 13.5px;
+  line-height: 1.68;
+  color: #64748b;
+}
+
+/* ─────────────────────────────────────
+   BADGE — SOLUCIÓN ESPECIALIZADA
+───────────────────────────────────── */
+
+.ms-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.07);
+  border: 1px solid rgba(52, 211, 153, 0.22);
+  border-radius: 100px;
+  padding: 5px 12px 5px 9px;
+  margin-bottom: 18px;
+}
+
+.ms-badge-dot {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #34d399;
+  flex-shrink: 0;
+  animation: ms-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes ms-pulse {
+  0%, 100% { opacity: 1;    transform: scale(1); }
+  50%       { opacity: 0.3; transform: scale(0.75); }
+}
+
+/* ─────────────────────────────────────
+   HERO CARD — STATS
+───────────────────────────────────── */
+
+.ms-stats {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  margin-top: 36px;
+  padding-top: 26px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.ms-stat { display: flex; flex-direction: column; gap: 4px; }
+
+.ms-stat-num {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.045em;
+  color: #e2e8f0;
+  line-height: 1;
+}
+
+.ms-stat-lbl {
+  font-size: 10px;
+  font-weight: 500;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* ═══════════════════════════════════════════════════════
+   SEPARADOR
+═══════════════════════════════════════════════════════ */
+
+.ms-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+  margin: 88px 0;
+}
+
+/* ═══════════════════════════════════════════════════════
+   SECTION HEADER — Reutilizable
+═══════════════════════════════════════════════════════ */
+
+.ms-section-head {
+  margin-bottom: 64px;
+}
+
+.ms-section-head--center {
+  text-align: center;
+}
+
+.ms-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.24);
+  margin-bottom: 18px;
+}
+
+.ms-label::before,
+.ms-label::after {
+  content: '';
+  display: block;
+  width: 24px;
+  height: 1px;
+  background: rgba(255,255,255,0.14);
+}
+
+.ms-section-title {
+  font-size: clamp(26px, 4vw, 42px);
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 1.1;
+  color: #f1f5f9;
+}
+
+/* ═══════════════════════════════════════════════════════
+   NUESTRO MÉTODO DE INGENIERÍA
+═══════════════════════════════════════════════════════ */
+
+.ms-method-cols {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  /* Líneas divisoras via 1px gap + background en el contenedor */
+  gap: 1px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 24px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.ms-method-col {
+  background: #080810;
+  padding: 52px 44px 48px;
+  position: relative;
+  transition: background 0.5s var(--ms-ease);
+}
+
+.ms-method-col:hover {
+  background: rgba(13, 13, 26, 1);
+}
+
+/* Número Display — el ancla visual de la columna */
+.ms-method-num {
+  display: block;
+  font-size: clamp(80px, 10vw, 120px);
+  font-weight: 800;
+  letter-spacing: -0.05em;
+  line-height: 0.82;
+  color: rgba(255, 255, 255, 0.05);
+  margin-bottom: 28px;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  transition: color 0.5s var(--ms-ease);
+}
+
+.ms-method-col:hover .ms-method-num {
+  color: rgba(129, 140, 248, 0.10);
+}
+
+.ms-method-name {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: #f1f5f9;
+  margin-bottom: 20px;
+  line-height: 1.25;
+}
+
+.ms-method-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ms-method-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: #475569;
+}
+
+.ms-method-list li::before {
+  content: '—';
+  color: rgba(129, 140, 248, 0.4);
+  flex-shrink: 0;
+  font-size: 12px;
+  margin-top: 1px;
+}
+
+/* ═══════════════════════════════════════════════════════
+   TECH STRIP — Logos en escala de grises
+═══════════════════════════════════════════════════════ */
+
+.ms-tech-strip {
+  margin-top: 56px;
+  padding: 32px 0;
+  position: relative;
+}
+
+.ms-tech-strip::before,
+.ms-tech-strip::after {
+  content: '';
+  display: block;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent);
+}
+
+.ms-tech-strip::before { margin-bottom: 32px; }
+.ms-tech-strip::after  { margin-top: 32px; }
+
+.ms-tech-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  flex-wrap: wrap;
+}
+
+.ms-tech-item {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.15);
+  padding: 8px 22px;
+  cursor: default;
+  transition: color 0.5s var(--ms-ease);
+  position: relative;
+}
+
+/* Separadores verticales entre items */
+.ms-tech-item + .ms-tech-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 12px;
+  width: 1px;
+  background: rgba(255,255,255,0.08);
+}
+
+.ms-tech-item:hover {
+  color: rgba(255, 255, 255, 0.42);
+}
+
+/* ═══════════════════════════════════════════════════════
+   FAQ — Acordeón Premium
+═══════════════════════════════════════════════════════ */
+
+.ms-faq-list {
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+/* Cuando un item está abierto, los demás se opacan */
+.ms-faq-list.ms-has-active .ms-faq-item {
+  opacity: 0.32;
+}
+
+.ms-faq-list.ms-has-active .ms-faq-item.ms-open {
+  opacity: 1;
+}
+
+.ms-faq-item {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  transition: opacity 0.5s var(--ms-ease);
+}
+
+.ms-faq-btn {
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 32px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+
+.ms-faq-q {
+  font-size: clamp(17px, 2.4vw, 21px);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+  color: #94a3b8;
+  transition: color 0.5s var(--ms-ease);
+}
+
+.ms-faq-item.ms-open .ms-faq-q {
+  color: #f1f5f9;
+}
+
+.ms-faq-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.10);
+  flex-shrink: 0;
+  color: rgba(255,255,255,0.35);
+  transition:
+    transform      0.5s var(--ms-ease),
+    border-color   0.5s var(--ms-ease),
+    color          0.5s var(--ms-ease),
+    background     0.5s var(--ms-ease);
+}
+
+.ms-faq-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2;
+}
+
+.ms-faq-item.ms-open .ms-faq-icon {
+  transform: rotate(45deg);
+  background: rgba(129, 140, 248, 0.12);
+  border-color: rgba(129, 140, 248, 0.30);
+  color: #818cf8;
+}
+
+/* Smooth collapse — grid-template-rows trick (sin max-height hack) */
+.ms-faq-answer {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.5s var(--ms-ease);
+}
+
+.ms-faq-item.ms-open .ms-faq-answer {
+  grid-template-rows: 1fr;
+}
+
+.ms-faq-answer-inner {
+  overflow: hidden;
+}
+
+.ms-faq-answer-text {
+  padding-bottom: 32px;
+  font-size: 15.5px;
+  line-height: 1.82;
+  color: #64748b;
+  max-width: 760px;
+}
+
+/* ─────────────────────────────────────
+   RESPONSIVE — TABLET
+───────────────────────────────────── */
+
+@media (max-width: 820px) {
+  .ms-root { padding: 64px 16px 80px; }
+
+  .ms-grid {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "hero    hero"
+      "seo     medical"
+      "uiux    rrss";
+    gap: 10px;
+  }
+
+  .ms-card-hero { min-height: 260px; }
+
+  .ms-method-cols {
+    grid-template-columns: 1fr;
+  }
+
+  .ms-method-col { padding: 40px 32px; }
+
+  .ms-divider { margin: 64px 0; }
+
+  .ms-section-head { margin-bottom: 48px; }
+}
+
+/* ─────────────────────────────────────
+   RESPONSIVE — MÓVIL
+───────────────────────────────────── */
+
+@media (max-width: 520px) {
+  .ms-root { padding: 56px 14px 72px; }
+
+  .ms-grid {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "hero"
+      "seo"
+      "medical"
+      "uiux"
+      "rrss";
+    gap: 10px;
+  }
+
+  .ms-card         { padding: 26px; }
+  .ms-card-hero    { min-height: auto; }
+  .ms-stats        { gap: 22px; margin-top: 28px; }
+  .ms-stat-num     { font-size: 22px; }
+
+  .ms-method-col   { padding: 32px 24px; }
+  .ms-divider      { margin: 52px 0; }
+
+  .ms-faq-btn      { padding: 26px 0; }
+  .ms-faq-answer-text { font-size: 14.5px; }
+
+  .ms-tech-item    { padding: 8px 14px; }
+}
+</style>
+
+<!-- ═══════════════════════════════════════════════════ -->
+
+<!--
+  .ms-outer-wrap: captura el overflow-x provocado por el
+  100vw del .ms-root y evita el scroll horizontal en móvil.
+-->
+<div class="ms-outer-wrap">
+<section class="ms-root">
+  <div class="ms-container">
+
+    <!-- ══════════════════════════════════
+         BENTO GRID
+    ══════════════════════════════════ -->
+
+    <header class="ms-header ms-reveal">
+      <div class="ms-pill">
+        <i data-lucide="zap"></i>
+        Mono Studio
+      </div>
+      <h2 class="ms-h2">
+        Soluciones Digitales de<br>
+        <span class="ms-grad">Alto Rendimiento</span>
+      </h2>
+    </header>
+
+    <div class="ms-grid">
+
+      <article class="ms-card ms-card-hero ms-reveal">
+        <div class="ms-orb"></div>
+        <div class="ms-icon"><i data-lucide="code-2"></i></div>
+        <h3 class="ms-card-title">Desarrollo de Sitios Web<br>y Aplicaciones a Medida</h3>
+        <p class="ms-card-desc">
+          Arquitectura limpia, escalable y preparada para el futuro. No usamos plantillas: cada línea de código está pensada para tu negocio y construida para crecer sin fricción ni límites técnicos.
+        </p>
+        <div class="ms-stats">
+          <div class="ms-stat">
+            <span class="ms-stat-num">100%</span>
+            <span class="ms-stat-lbl">A Medida</span>
+          </div>
+          <div class="ms-stat">
+            <span class="ms-stat-num">0</span>
+            <span class="ms-stat-lbl">Templates</span>
+          </div>
+          <div class="ms-stat">
+            <span class="ms-stat-num">∞</span>
+            <span class="ms-stat-lbl">Escalabilidad</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="ms-card ms-card-seo ms-reveal">
+        <div class="ms-icon"><i data-lucide="trending-up"></i></div>
+        <h3 class="ms-card-title">Posicionamiento en Google</h3>
+        <p class="ms-card-desc">
+          SEO Orgánico con foco en ROI real. Visibilidad que genera clientes concretos, no solo métricas de vanidad.
+        </p>
+      </article>
+
+      <article class="ms-card ms-card-medical ms-reveal">
+        <div class="ms-badge">
+          <span class="ms-badge-dot"></span>
+          Solución Especializada
+        </div>
+        <div class="ms-icon"><i data-lucide="calendar-check"></i></div>
+        <h3 class="ms-card-title">Sistemas de Agendas para Centros Médicos</h3>
+        <p class="ms-card-desc">
+          Gestión de turnos automatizada y sin roces. Tu equipo se enfoca en los pacientes; el sistema, en el resto.
+        </p>
+      </article>
+
+      <article class="ms-card ms-card-uiux ms-reveal">
+        <div class="ms-icon"><i data-lucide="layers"></i></div>
+        <h3 class="ms-card-title">Diseño UI/UX Profesional</h3>
+        <p class="ms-card-desc">
+          Interfaces que convierten. Cada decisión visual justificada por datos y comportamiento real del usuario.
+        </p>
+      </article>
+
+      <article class="ms-card ms-card-rrss ms-reveal">
+        <div class="ms-icon"><i data-lucide="send"></i></div>
+        <h3 class="ms-card-title">RRSS y Correos Corporativos</h3>
+        <p class="ms-card-desc">
+          Presencia digital coherente y estratégica. Comunicación que posiciona y genera confianza.
+        </p>
+      </article>
+
+    </div>
+
+    <!-- ══════════════════════════════════
+         NUESTRO MÉTODO DE INGENIERÍA
+    ══════════════════════════════════ -->
+
+    <div class="ms-divider"></div>
+
+    <div class="ms-section-head ms-section-head--center ms-reveal">
+      <div class="ms-label">Proceso</div>
+      <h2 class="ms-section-title">Nuestro Método de Ingeniería</h2>
+    </div>
+
+    <div class="ms-method-cols">
+
+      <div class="ms-method-col ms-reveal">
+        <span class="ms-method-num">01</span>
+        <h3 class="ms-method-name">Estrategia<br>& UX</h3>
+        <ul class="ms-method-list">
+          <li>Discovery de negocio y análisis de usuarios reales</li>
+          <li>Arquitectura de información y wireframes de alta fidelidad</li>
+          <li>Prototipos navegables antes de escribir una sola línea de código</li>
+        </ul>
+      </div>
+
+      <div class="ms-method-col ms-reveal">
+        <span class="ms-method-num">02</span>
+        <h3 class="ms-method-name">Arquitectura<br>de Código</h3>
+        <ul class="ms-method-list">
+          <li>Stack tecnológico elegido por el problema, no por moda</li>
+          <li>Código modular, testeable y documentado desde el día uno</li>
+          <li>Revisiones de seguridad integradas en cada entregable</li>
+        </ul>
+      </div>
+
+      <div class="ms-method-col ms-reveal">
+        <span class="ms-method-num">03</span>
+        <h3 class="ms-method-name">Despliegue<br>& Escalado</h3>
+        <ul class="ms-method-list">
+          <li>CI/CD automatizado desde el primer commit hasta producción</li>
+          <li>Infraestructura cloud con auto-scaling y redundancia</li>
+          <li>Monitoreo 24/7 y SLA de disponibilidad definido por contrato</li>
+        </ul>
+      </div>
+
+    </div>
+
+    <!-- Tech Strip -->
+    <div class="ms-tech-strip ms-reveal">
+      <div class="ms-tech-inner">
+        <span class="ms-tech-item">React</span>
+        <span class="ms-tech-item">Next.js</span>
+        <span class="ms-tech-item">Node.js</span>
+        <span class="ms-tech-item">TypeScript</span>
+        <span class="ms-tech-item">Python</span>
+        <span class="ms-tech-item">AWS</span>
+        <span class="ms-tech-item">PostgreSQL</span>
+        <span class="ms-tech-item">Docker</span>
+        <span class="ms-tech-item">GraphQL</span>
+        <span class="ms-tech-item">MongoDB</span>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════
+         PREGUNTAS FRECUENTES
+    ══════════════════════════════════ -->
+
+    <div class="ms-divider"></div>
+
+    <div class="ms-section-head ms-reveal">
+      <div class="ms-label">FAQ</div>
+      <h2 class="ms-section-title">Preguntas que todo<br>cliente serio hace</h2>
+    </div>
+
+    <div class="ms-faq-list" id="ms-faq">
+
+      <div class="ms-faq-item ms-reveal">
+        <button class="ms-faq-btn" aria-expanded="false">
+          <span class="ms-faq-q">¿Por qué el código a medida es mejor que una plantilla de WordPress o Elementor?</span>
+          <span class="ms-faq-icon" aria-hidden="true"><i data-lucide="plus"></i></span>
+        </button>
+        <div class="ms-faq-answer" role="region">
+          <div class="ms-faq-answer-inner">
+            <p class="ms-faq-answer-text">
+              Las plantillas de WordPress y Elementor cargan entre 40 y 120 scripts, plugins y hojas de estilo que tu sitio nunca usa. Eso se traduce directamente en Core Web Vitals bajos, un LCP lento y una penalización real en el ranking de Google. El código a medida solo carga lo que tu proyecto necesita: sin bloat, sin vulnerabilidades de terceros, sin techo de rendimiento. Un sitio construido desde cero puede ser entre 3 y 8 veces más rápido —y Google lo mide, lo compara y lo premia. El rendimiento no es una característica; es tu ventaja competitiva frente a competidores que usan plantillas genéricas.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="ms-faq-item ms-reveal">
+        <button class="ms-faq-btn" aria-expanded="false">
+          <span class="ms-faq-q">¿Quién es el dueño del código final?</span>
+          <span class="ms-faq-icon" aria-hidden="true"><i data-lucide="plus"></i></span>
+        </button>
+        <div class="ms-faq-answer" role="region">
+          <div class="ms-faq-answer-inner">
+            <p class="ms-faq-answer-text">
+              Tú. Desde el primer día. Todo el código fuente, los archivos de diseño y las credenciales de infraestructura son entregados al cliente al finalizar el proyecto, sin excepción y sin costo adicional. No usamos licencias propietarias que te encadenen a nosotros ni a ninguna plataforma. Puedes llevar el proyecto a cualquier otro equipo de desarrollo en cualquier momento. Nuestra relación se sostiene en la calidad de los resultados, nunca en la dependencia forzada. Si en algún momento decides no continuar trabajando con nosotros, te acompañamos en la transición con documentación completa.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="ms-faq-item ms-reveal">
+        <button class="ms-faq-btn" aria-expanded="false">
+          <span class="ms-faq-q">¿Cómo garantizan que la web atraiga clientes y no solo sea "bonita"?</span>
+          <span class="ms-faq-icon" aria-hidden="true"><i data-lucide="plus"></i></span>
+        </button>
+        <div class="ms-faq-answer" role="region">
+          <div class="ms-faq-answer-inner">
+            <p class="ms-faq-answer-text">
+              Porque diseño sin datos es decoración. Antes de escribir una sola línea de código, definimos contigo las metas de conversión, el perfil del usuario ideal y el recorrido exacto que debe seguir hasta convertirse en cliente. Cada decisión —desde la arquitectura de información hasta el color de un botón de acción— está respaldada por principios de UX probados y análisis de comportamiento. Medimos el ROI a través de métricas concretas: tasa de conversión, costo de adquisición y tiempo en página. La estética es siempre una consecuencia de la estrategia, nunca al revés.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="ms-faq-item ms-reveal">
+        <button class="ms-faq-btn" aria-expanded="false">
+          <span class="ms-faq-q">¿Tienen soporte para aplicaciones de misión crítica como los sistemas médicos?</span>
+          <span class="ms-faq-icon" aria-hidden="true"><i data-lucide="plus"></i></span>
+        </button>
+        <div class="ms-faq-answer" role="region">
+          <div class="ms-faq-answer-inner">
+            <p class="ms-faq-answer-text">
+              Sí, y es uno de nuestros diferenciales más sólidos. Los sistemas de agendas médicas que desarrollamos incluyen redundancia de datos, backups automáticos, cifrado en tránsito y en reposo, y monitoreo de disponibilidad 24/7. Trabajamos sobre infraestructura cloud con SLA de 99.9% de uptime garantizado contractualmente. Cuando un sistema falla en un entorno médico, el costo no es solo económico: impacta pacientes reales. Eso define el nivel de responsabilidad con el que asumimos cada proyecto crítico y los estándares de ingeniería que no negociamos.
+            </p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</section>
+</div><!-- /.ms-outer-wrap -->
+
+<!-- Lucide Icons CDN -->
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script>
+  (function () {
+
+    /* ── Lucide Icons ── */
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+
+    /* ── Scroll Reveal — IntersectionObserver ──
+       Una sola instancia observa todos los .ms-reveal del bloque.
+       threshold 0.1 → anima cuando el 10% del elemento es visible.
+       rootMargin → sube el trigger 40px antes del borde inferior.
+    */
+    var targets = document.querySelectorAll('.ms-reveal');
+
+    if ('IntersectionObserver' in window) {
+      var observer = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('ms-in');
+            observer.unobserve(entry.target);
+          }
+        });
+      }, {
+        threshold: 0.10,
+        rootMargin: '0px 0px -40px 0px'
+      });
+
+      targets.forEach(function (el) { observer.observe(el); });
+
+    } else {
+      targets.forEach(function (el) { el.classList.add('ms-in'); });
+    }
+
+    /* ── FAQ Accordion ──
+       - Click en el botón abre/cierra el item
+       - Al abrir uno se cierran los demás
+       - La lista recibe .ms-has-active para opacidad de los inactivos
+    */
+    var faqList = document.getElementById('ms-faq');
+    if (!faqList) return;
+
+    faqList.addEventListener('click', function (e) {
+      var btn = e.target.closest('.ms-faq-btn');
+      if (!btn) return;
+
+      var item    = btn.parentElement;
+      var isOpen  = item.classList.contains('ms-open');
+
+      /* Cierra todos los items abiertos */
+      faqList.querySelectorAll('.ms-faq-item.ms-open').forEach(function (el) {
+        el.classList.remove('ms-open');
+        el.querySelector('.ms-faq-btn').setAttribute('aria-expanded', 'false');
+      });
+
+      /* Abre el clickeado (si estaba cerrado) */
+      if (!isOpen) {
+        item.classList.add('ms-open');
+        btn.setAttribute('aria-expanded', 'true');
+        faqList.classList.add('ms-has-active');
+      } else {
+        /* Si cerramos el único abierto, quitamos el estado de la lista */
+        faqList.classList.remove('ms-has-active');
+      }
+    });
+
+  })();
+</script>
