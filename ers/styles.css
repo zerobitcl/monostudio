@@ -2082,6 +2082,13 @@ body {
   border-color: rgba(255, 204, 102, 0.28);
 }
 
+.seo-sites {
+  margin: 0 0 14px;
+  font-size: 0.78rem;
+  color: var(--txt-secondary);
+  line-height: 1.45;
+}
+
 .seo-form {
   display: grid;
   gap: 14px;

@@ -135,10 +135,11 @@
         <div class="seo-setup" id="seoSetup">
           <p class="seo-setup__lead">El backend autentica con la <strong>cuenta de servicio</strong> del servidor. No hay login de Google en el navegador.</p>
           <p class="seo-setup__status" id="seoSaStatus">Buscando JSON de servicio…</p>
+          <p class="seo-sites" id="seoSites" hidden></p>
           <ol class="seo-setup__steps">
             <li>Sube el JSON de Google Cloud a <code>ers/data/gsc-service-account.json</code> (FTP / administrador de archivos). No va a GitHub.</li>
-            <li>En Search Console → Usuarios: agrega el email del bot con permiso de <strong>lectura en cada sitio de cliente</strong> que quieras ver.</li>
-            <li>Pega las URLs de los clientes (máx. 12). No hace falta poner Mono Studio.</li>
+            <li>En Search Console → Usuarios: agrega el bot con permiso <strong>Completo</strong> (Restringido no sirve para la API) en cada sitio de cliente.</li>
+            <li>Pega las URLs de los clientes (máx. 12). Deja la propiedad vacía.</li>
           </ol>
 
           <form class="seo-form" id="gscConfigForm" autocomplete="off">

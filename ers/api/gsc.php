@@ -368,6 +368,42 @@ function gscMatchProperty(string $pageUrl, array $sites): string
     return $best;
 }
 
+function gscPropertyCandidates(string $pageUrl, array $sites): array
+{
+    $host = gscHost($pageUrl);
+    $matched = gscMatchProperty($pageUrl, $sites);
+    $candidates = [];
+    if ($matched !== '') {
+        $candidates[] = $matched;
+    }
+    if ($host !== '') {
+        $candidates[] = 'sc-domain:' . $host;
+        $candidates[] = 'https://' . $host . '/';
+        $candidates[] = 'https://www.' . $host . '/';
+        $candidates[] = 'http://' . $host . '/';
+        $candidates[] = 'http://www.' . $host . '/';
+    }
+    $unique = [];
+    foreach ($candidates as $item) {
+        if ($item !== '' && !in_array($item, $unique, true)) {
+            $unique[] = $item;
+        }
+    }
+    return $unique;
+}
+
+function gscProbeProperty(string $token, string $property): bool
+{
+    try {
+        $end = (new DateTimeImmutable('today', new DateTimeZone('UTC')))->modify('-3 days');
+        $start = $end->modify('-1 day');
+        gscQueryAnalytics($token, $property, $start->format('Y-m-d'), $end->format('Y-m-d'));
+        return true;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
 function gscIndexRows(array $payload): array
 {
     $map = [];
@@ -430,6 +466,19 @@ $serviceAccount = gscLoadServiceAccount($dataDir, $keyFilePreferred);
 $action = (string) ($_GET['action'] ?? $_POST['action'] ?? '');
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === '' || $action === 'status')) {
+    $sites = [];
+    $sitesError = '';
+    if ($serviceAccount !== []) {
+        try {
+            $token = gscAccessToken($serviceAccount, $tokenFile);
+            $sites = array_values(array_filter(array_map(
+                static fn ($e) => (string) ($e['siteUrl'] ?? ''),
+                gscListSites($token)
+            )));
+        } catch (Throwable $e) {
+            $sitesError = $e->getMessage();
+        }
+    }
     gscJson([
         'connected' => $serviceAccount !== [],
         'auth' => 'service_account',
@@ -437,6 +486,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === '' || $action === 'stat
         'keyFile' => (string) ($serviceAccount['_path'] ?? 'gsc-service-account.json'),
         'siteUrl' => (string) ($config['siteUrl'] ?? ''),
         'pages' => gscSanitizePages($config['pages'] ?? []),
+        'sites' => $sites,
+        'sitesError' => $sitesError,
     ]);
 }
 
@@ -490,6 +541,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
         $token = gscAccessToken($serviceAccount, $tokenFile);
         $botEmail = (string) ($serviceAccount['client_email'] ?? 'la cuenta de servicio');
         $sites = gscListSites($token);
+        $resolvedByHost = [];
 
         $end = (new DateTimeImmutable('today', new DateTimeZone('UTC')))->modify('-3 days');
         $start = $end->modify('-27 days');
@@ -504,15 +556,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
         $groups = [];
         $unmatched = [];
         foreach ($pages as $page) {
-            $property = gscMatchProperty($page['url'], $sites);
-            if ($property === '' && $fallbackSite !== '' && gscHost($page['url']) === gscHost($fallbackSite)) {
-                $property = $fallbackSite;
+            $host = gscHost($page['url']);
+            if (!array_key_exists($host, $resolvedByHost)) {
+                $resolvedByHost[$host] = '';
+                foreach (gscPropertyCandidates($page['url'], $sites) as $candidate) {
+                    if (gscProbeProperty($token, $candidate)) {
+                        $resolvedByHost[$host] = $candidate;
+                        break;
+                    }
+                }
             }
+            $property = $resolvedByHost[$host] ?? '';
             if ($property === '') {
-                $host = gscHost($page['url']);
                 $unmatched[] = [
                     'page' => $page,
-                    'error' => "Sin permiso en Search Console de {$host}. Agrega {$botEmail} como usuario (lectura) en esa propiedad.",
+                    'error' => "El bot no puede leer {$host}. En Search Console de ese sitio cambia el permiso del bot a Completo (no Restringido) y espera 1–2 min. La propiedad real suele ser sc-domain:{$host}.",
                 ];
                 continue;
             }

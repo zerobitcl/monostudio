@@ -474,6 +474,7 @@ class CRMController {
       notebookBody: document.getElementById("notebookBody"),
       seoSetup: document.getElementById("seoSetup"),
       seoSaStatus: document.getElementById("seoSaStatus"),
+      seoSites: document.getElementById("seoSites"),
       gscConfigForm: document.getElementById("gscConfigForm"),
       gscSiteUrl: document.getElementById("gscSiteUrl"),
       gscPages: document.getElementById("gscPages"),
@@ -895,6 +896,22 @@ class CRMController {
         this.dom.seoSaStatus.textContent =
           "No encuentro el JSON. Súbelo a ers/data/gsc-service-account.json y recarga.";
         this.dom.seoSaStatus.className = "seo-setup__status is-warn";
+      }
+    }
+    if (this.dom.seoSites) {
+      const sites = Array.isArray(data.sites) ? data.sites.filter(Boolean) : [];
+      if (data.sitesError) {
+        this.dom.seoSites.hidden = false;
+        this.dom.seoSites.textContent = `Google no listó propiedades: ${data.sitesError}`;
+      } else if (sites.length) {
+        this.dom.seoSites.hidden = false;
+        this.dom.seoSites.textContent = `El bot ve: ${sites.join(" · ")}`;
+      } else if (data.connected) {
+        this.dom.seoSites.hidden = false;
+        this.dom.seoSites.textContent =
+          "El bot aún no ve ninguna propiedad. En Legal Tamaya cambia el permiso a Completo (no Restringido).";
+      } else {
+        this.dom.seoSites.hidden = true;
       }
     }
     if (data.siteUrl && !this.dom.gscSiteUrl.value && !GscModule.isAgencyUrl(data.siteUrl)) {
