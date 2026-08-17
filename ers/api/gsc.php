@@ -303,6 +303,76 @@ function gscQueryAnalytics(string $token, string $siteUrl, string $start, string
     return is_array($res['data']) ? $res['data'] : [];
 }
 
+function gscListSites(string $token): array
+{
+    $res = gscHttp('GET', 'https://www.googleapis.com/webmasters/v3/sites', null, [
+        'Authorization: Bearer ' . $token,
+    ]);
+    if (!$res['ok']) {
+        $msg = $res['data']['error']['message'] ?? $res['error'] ?? 'No se pudieron listar las propiedades GSC';
+        throw new RuntimeException((string) $msg);
+    }
+    $entries = $res['data']['siteEntry'] ?? [];
+    return is_array($entries) ? $entries : [];
+}
+
+function gscHost(string $url): string
+{
+    if (stripos($url, 'sc-domain:') === 0) {
+        return strtolower(substr($url, strlen('sc-domain:')));
+    }
+    $host = strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+    return preg_replace('#^www\.#', '', $host) ?? $host;
+}
+
+function gscMatchProperty(string $pageUrl, array $sites): string
+{
+    $host = gscHost($pageUrl);
+    if ($host === '') {
+        return '';
+    }
+
+    foreach ($sites as $entry) {
+        $site = (string) ($entry['siteUrl'] ?? '');
+        if (stripos($site, 'sc-domain:') === 0) {
+            $domain = strtolower(substr($site, strlen('sc-domain:')));
+            if ($domain === $host) {
+                return $site;
+            }
+        }
+    }
+
+    $best = '';
+    $bestLen = 0;
+    foreach ($sites as $entry) {
+        $site = (string) ($entry['siteUrl'] ?? '');
+        if ($site === '' || stripos($site, 'sc-domain:') === 0) {
+            continue;
+        }
+        $prefix = rtrim($site, '/');
+        if (stripos($pageUrl, $prefix) === 0 && strlen($prefix) > $bestLen) {
+            $best = $site;
+            $bestLen = strlen($prefix);
+        }
+    }
+
+    return $best;
+}
+
+function gscIndexRows(array $payload): array
+{
+    $map = [];
+    foreach ($payload['rows'] ?? [] as $row) {
+        $keys = $row['keys'] ?? [];
+        $url = is_array($keys) ? (string) ($keys[0] ?? '') : '';
+        if ($url !== '') {
+            $map[rtrim($url, '/')] = $row;
+            $map[$url] = $row;
+        }
+    }
+    return $map;
+}
+
 function gscMetricRow(?array $row): array
 {
     $clicks = (float) ($row['clicks'] ?? 0);
@@ -351,11 +421,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'config') {
     }
 
     $siteUrl = gscSanitizeSiteUrl((string) ($input['siteUrl'] ?? ''));
-    if ($siteUrl === '') {
-        gscJson(['error' => 'Propiedad GSC inválida. Usa sc-domain:tudominio.cl o https://tudominio.cl/'], 400);
-    }
-
     $pages = gscSanitizePages(is_array($input['pages'] ?? null) ? $input['pages'] : []);
+    if ($pages === []) {
+        gscJson(['error' => 'Agrega al menos una URL https para monitorear'], 400);
+    }
     $config = ['siteUrl' => $siteUrl, 'pages' => $pages];
     if (!gscWriteJson($configFile, $config)) {
         gscJson(['error' => 'No se pudo guardar la configuración'], 500);
@@ -373,28 +442,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
             ], 400);
         }
 
-        $siteUrl = gscSanitizeSiteUrl((string) ($config['siteUrl'] ?? ''));
+        $fallbackSite = gscSanitizeSiteUrl((string) ($config['siteUrl'] ?? ''));
         $pages = gscSanitizePages($config['pages'] ?? []);
-        if ($siteUrl === '') {
-            gscJson(['error' => 'Falta la propiedad de Search Console'], 400);
-        }
         if ($pages === []) {
             gscJson(['error' => 'Agrega al menos una URL para monitorear'], 400);
         }
 
+        $pageSig = md5(json_encode([$fallbackSite, $pages], JSON_UNESCAPED_SLASHES));
         $cached = gscReadJson($cacheFile, []);
         $fresh = (string) ($_GET['fresh'] ?? '') === '1';
         if (
             !$fresh
             && isset($cached['fetchedAt'])
             && (time() - (int) $cached['fetchedAt']) < GSC_CACHE_TTL
-            && ($cached['siteUrl'] ?? '') === $siteUrl
+            && ($cached['pageSig'] ?? '') === $pageSig
         ) {
             $cached['cached'] = true;
             gscJson($cached);
         }
 
         $token = gscAccessToken($serviceAccount, $tokenFile);
+        $botEmail = (string) ($serviceAccount['client_email'] ?? 'la cuenta de servicio');
+        $sites = gscListSites($token);
+
         $end = (new DateTimeImmutable('today', new DateTimeZone('UTC')))->modify('-3 days');
         $start = $end->modify('-27 days');
         $prevEnd = $start->modify('-1 day');
@@ -405,28 +475,63 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
         $prevStartIso = $prevStart->format('Y-m-d');
         $prevEndIso = $prevEnd->format('Y-m-d');
 
-        $current = gscQueryAnalytics($token, $siteUrl, $startIso, $endIso, ['dimensions' => ['page']]);
-        $previous = gscQueryAnalytics($token, $siteUrl, $prevStartIso, $prevEndIso, ['dimensions' => ['page']]);
-        $totalsNow = gscQueryAnalytics($token, $siteUrl, $startIso, $endIso);
-        $totalsPrev = gscQueryAnalytics($token, $siteUrl, $prevStartIso, $prevEndIso);
-
-        $indexRows = static function (array $payload): array {
-            $map = [];
-            foreach ($payload['rows'] ?? [] as $row) {
-                $keys = $row['keys'] ?? [];
-                $url = is_array($keys) ? (string) ($keys[0] ?? '') : '';
-                if ($url !== '') {
-                    $map[rtrim($url, '/')] = $row;
-                    $map[$url] = $row;
-                }
+        $groups = [];
+        $unmatched = [];
+        foreach ($pages as $page) {
+            $property = gscMatchProperty($page['url'], $sites);
+            if ($property === '' && $fallbackSite !== '' && gscHost($page['url']) === gscHost($fallbackSite)) {
+                $property = $fallbackSite;
             }
-            return $map;
-        };
+            if ($property === '') {
+                $host = gscHost($page['url']);
+                $unmatched[] = [
+                    'page' => $page,
+                    'error' => "Sin permiso en Search Console de {$host}. Agrega {$botEmail} como usuario (lectura) en esa propiedad.",
+                ];
+                continue;
+            }
+            $groups[$property][] = $page;
+        }
 
-        $nowMap = $indexRows($current);
-        $prevMap = $indexRows($previous);
-        $totals = gscMetricRow($totalsNow['rows'][0] ?? null);
-        $totalsBefore = gscMetricRow($totalsPrev['rows'][0] ?? null);
+        $nowMap = [];
+        $prevMap = [];
+        $totals = ['clicks' => 0, 'impressions' => 0, 'ctr' => 0, 'position' => 0];
+        $totalsBefore = ['clicks' => 0, 'impressions' => 0, 'ctr' => 0, 'position' => 0];
+        $propertyErrors = [];
+        $weightNow = 0;
+        $weightPrev = 0;
+
+        foreach ($groups as $property => $groupPages) {
+            try {
+                $current = gscQueryAnalytics($token, $property, $startIso, $endIso, ['dimensions' => ['page']]);
+                $previous = gscQueryAnalytics($token, $property, $prevStartIso, $prevEndIso, ['dimensions' => ['page']]);
+                $totalsNow = gscQueryAnalytics($token, $property, $startIso, $endIso);
+                $totalsPrev = gscQueryAnalytics($token, $property, $prevStartIso, $prevEndIso);
+                $nowMap += gscIndexRows($current);
+                $prevMap += gscIndexRows($previous);
+                $tNow = gscMetricRow($totalsNow['rows'][0] ?? null);
+                $tPrev = gscMetricRow($totalsPrev['rows'][0] ?? null);
+                $totals['clicks'] += $tNow['clicks'];
+                $totals['impressions'] += $tNow['impressions'];
+                $totalsBefore['clicks'] += $tPrev['clicks'];
+                $totalsBefore['impressions'] += $tPrev['impressions'];
+                if ($tNow['impressions'] > 0) {
+                    $totals['position'] += $tNow['position'] * $tNow['impressions'];
+                    $weightNow += $tNow['impressions'];
+                }
+                if ($tPrev['impressions'] > 0) {
+                    $totalsBefore['position'] += $tPrev['position'] * $tPrev['impressions'];
+                    $weightPrev += $tPrev['impressions'];
+                }
+            } catch (Throwable $e) {
+                $propertyErrors[$property] = $e->getMessage();
+            }
+        }
+
+        $totals['ctr'] = $totals['impressions'] > 0 ? $totals['clicks'] / $totals['impressions'] : 0;
+        $totalsBefore['ctr'] = $totalsBefore['impressions'] > 0 ? $totalsBefore['clicks'] / $totalsBefore['impressions'] : 0;
+        $totals['position'] = $weightNow > 0 ? $totals['position'] / $weightNow : 0;
+        $totalsBefore['position'] = $weightPrev > 0 ? $totalsBefore['position'] / $weightPrev : 0;
 
         $pageRows = [];
         $seen = [];
@@ -436,11 +541,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
                 continue;
             }
             $seen[$key] = true;
+            $property = gscMatchProperty($page['url'], $sites);
+            $error = null;
+            foreach ($unmatched as $miss) {
+                if ($miss['page']['url'] === $page['url']) {
+                    $error = $miss['error'];
+                    break;
+                }
+            }
+            if ($error === null && $property !== '' && isset($propertyErrors[$property])) {
+                $error = $propertyErrors[$property];
+            }
             $now = gscMetricRow($nowMap[$page['url']] ?? $nowMap[$key] ?? null);
             $prev = gscMetricRow($prevMap[$page['url']] ?? $prevMap[$key] ?? null);
             $pageRows[] = [
                 'url' => $page['url'],
                 'label' => $page['label'] !== '' ? $page['label'] : $page['url'],
+                'property' => $property,
+                'error' => $error,
                 'current' => $now,
                 'previous' => $prev,
                 'delta' => gscDelta($now, $prev),
@@ -451,7 +569,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
             'connected' => true,
             'cached' => false,
             'fetchedAt' => time(),
-            'siteUrl' => $siteUrl,
+            'pageSig' => $pageSig,
+            'siteUrl' => $fallbackSite,
+            'sites' => array_values(array_map(static fn ($e) => $e['siteUrl'] ?? '', $sites)),
             'range' => [
                 'start' => $startIso,
                 'end' => $endIso,

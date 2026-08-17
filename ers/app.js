@@ -888,12 +888,12 @@ class CRMController {
       this.dom.gscPages.value = GscModule.serializePages(data.pages);
     }
 
-    const hasMetrics = Boolean(data.totals);
-    this.dom.seoKpis.hidden = !hasMetrics;
-    this.dom.seoTableWrap.hidden = !hasMetrics;
+    const hasRows = Array.isArray(data.pages) && data.pages.some((row) => row.current || row.error);
+    this.dom.seoKpis.hidden = !data.totals;
+    this.dom.seoTableWrap.hidden = !hasRows;
     this.dom.seoEmpty.hidden = true;
 
-    if (!hasMetrics) return;
+    if (!data.totals) return;
 
     if (data.range) {
       this.dom.seoRange.textContent = `${data.range.start} → ${data.range.end}`;
@@ -918,6 +918,13 @@ class CRMController {
       url.className = "seo-delta";
       url.textContent = row.url.replace(/^https?:\/\//, "");
       name.append(label, url);
+      if (row.error) {
+        const err = document.createElement("div");
+        err.className = "seo-row-error";
+        err.textContent = row.error;
+        name.appendChild(err);
+        tr.classList.add("is-blocked");
+      }
 
       const cell = (metric, opts) => {
         const td = document.createElement("td");

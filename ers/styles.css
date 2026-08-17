@@ -2173,6 +2173,18 @@ body {
 .seo-table .seo-delta.is-up { color: var(--neon-green); }
 .seo-table .seo-delta.is-down { color: var(--danger); }
 
+.seo-row-error {
+  margin-top: 6px;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--danger);
+  white-space: normal;
+}
+
+.seo-table tr.is-blocked td {
+  opacity: 0.85;
+}
+
 .seo-empty {
   color: var(--txt-secondary);
   font-size: 0.84rem;

@@ -137,18 +137,18 @@
           <p class="seo-setup__status" id="seoSaStatus">Buscando JSON de servicio…</p>
           <ol class="seo-setup__steps">
             <li>Sube el JSON de Google Cloud a <code>ers/data/gsc-service-account.json</code> (FTP / administrador de archivos). No va a GitHub.</li>
-            <li>En Search Console → Configuración → Usuarios: agrega el email del bot con permiso de <strong>lectura</strong>.</li>
-            <li>Indica la propiedad y las URLs a seguir (máx. 12).</li>
+            <li>En Search Console → Usuarios: agrega el email del bot con permiso de <strong>lectura en cada sitio de cliente</strong> que quieras ver.</li>
+            <li>Pega las URLs de los clientes (máx. 12). No hace falta poner Mono Studio.</li>
           </ol>
 
           <form class="seo-form" id="gscConfigForm" autocomplete="off">
             <label class="field">
-              <span>Propiedad GSC</span>
-              <input type="text" name="siteUrl" id="gscSiteUrl" required placeholder="sc-domain:monostudio.cl o https://monostudio.cl/" />
+              <span>Propiedad GSC <em class="field__optional">(opcional; si está vacío se detecta por cada URL)</em></span>
+              <input type="text" name="siteUrl" id="gscSiteUrl" placeholder="Déjalo vacío: se detecta por cada URL de cliente" />
             </label>
             <label class="field">
               <span>Páginas a monitorear <em class="field__optional">(una por línea · URL | etiqueta)</em></span>
-              <textarea name="pages" id="gscPages" rows="7" placeholder="https://monostudio.cl/ | Home"></textarea>
+              <textarea name="pages" id="gscPages" rows="7" placeholder="https://abogadoslegaltamaya.cl/ | Legal Tamaya"></textarea>
             </label>
             <div class="seo-form__actions">
               <button type="submit" class="btn btn--neon">Guardar y cargar métricas</button>
