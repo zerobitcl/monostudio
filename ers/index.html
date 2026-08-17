@@ -31,6 +31,10 @@
           <h1>Mono Studio <span>OS</span></h1>
           <p class="brand__tag">Internal Revenue Engine</p>
         </div>
+        <nav class="module-nav" aria-label="Módulos">
+          <button class="module-nav__btn is-active" id="btnModuleSwarm" type="button">Enjambre</button>
+          <button class="module-nav__btn" id="btnModuleSeo" type="button">Search Console</button>
+        </nav>
       </div>
 
       <div class="kpi-grid">
@@ -87,7 +91,7 @@
         <div class="cash-chart" id="cashChartWrap" hidden>
           <div class="cash-chart__head">
             <h3>Flujo de cobros</h3>
-            <span class="cash-chart__range">Próximos 30 días</span>
+            <span class="cash-chart__range" id="chartRangeLabel">Próximos 30 días</span>
             <strong class="cash-chart__total" id="chartPeriodTotal">$0</strong>
           </div>
           <div class="cash-chart__viewport">
@@ -118,6 +122,79 @@
           <div class="empty-state__icon" aria-hidden="true">⬡</div>
           <p>El enjambre está vacío.<br />Agrega tu primer cliente para encender la colmena.</p>
         </div>
+      </section>
+
+      <!-- ===== SEARCH CONSOLE ===== -->
+      <section class="seo-panel" id="seoPanel" aria-label="Google Search Console" hidden>
+        <div class="panel-head">
+          <h2>Search Console</h2>
+          <span class="seo-range" id="seoRange">Últimos 28 días</span>
+          <button class="btn btn--ghost" id="btnGscRefresh" type="button">Actualizar</button>
+        </div>
+
+        <div class="seo-setup" id="seoSetup">
+          <p class="seo-setup__lead">El backend autentica con la <strong>cuenta de servicio</strong> del servidor. No hay login de Google en el navegador.</p>
+          <p class="seo-setup__status" id="seoSaStatus">Buscando JSON de servicio…</p>
+          <ol class="seo-setup__steps">
+            <li>Sube el JSON de Google Cloud a <code>ers/data/gsc-service-account.json</code> (FTP / administrador de archivos). No va a GitHub.</li>
+            <li>En Search Console → Configuración → Usuarios: agrega el email del bot con permiso de <strong>lectura</strong>.</li>
+            <li>Indica la propiedad y las URLs a seguir (máx. 12).</li>
+          </ol>
+
+          <form class="seo-form" id="gscConfigForm" autocomplete="off">
+            <label class="field">
+              <span>Propiedad GSC</span>
+              <input type="text" name="siteUrl" id="gscSiteUrl" required placeholder="sc-domain:monostudio.cl o https://monostudio.cl/" />
+            </label>
+            <label class="field">
+              <span>Páginas a monitorear <em class="field__optional">(una por línea · URL | etiqueta)</em></span>
+              <textarea name="pages" id="gscPages" rows="7" placeholder="https://monostudio.cl/ | Home"></textarea>
+            </label>
+            <div class="seo-form__actions">
+              <button type="submit" class="btn btn--neon">Guardar y cargar métricas</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="seo-kpis" id="seoKpis" hidden>
+          <article class="seo-kpi">
+            <span>Clics</span>
+            <strong id="seoClicks">—</strong>
+            <em id="seoClicksDelta"></em>
+          </article>
+          <article class="seo-kpi">
+            <span>Impresiones</span>
+            <strong id="seoImpressions">—</strong>
+            <em id="seoImpressionsDelta"></em>
+          </article>
+          <article class="seo-kpi">
+            <span>CTR</span>
+            <strong id="seoCtr">—</strong>
+            <em id="seoCtrDelta"></em>
+          </article>
+          <article class="seo-kpi">
+            <span>Posición</span>
+            <strong id="seoPosition">—</strong>
+            <em id="seoPositionDelta"></em>
+          </article>
+        </div>
+
+        <div class="seo-table-wrap" id="seoTableWrap" hidden>
+          <table class="seo-table">
+            <thead>
+              <tr>
+                <th>Página</th>
+                <th>Clics</th>
+                <th>Imp.</th>
+                <th>CTR</th>
+                <th>Pos.</th>
+              </tr>
+            </thead>
+            <tbody id="seoTableBody"></tbody>
+          </table>
+        </div>
+
+        <p class="seo-empty" id="seoEmpty" hidden>Sin datos aún. Revisa la conexión o espera el delay de 2–3 días de GSC.</p>
       </section>
 
       <!-- ===== SOLICITUDES ===== -->
@@ -177,6 +254,11 @@
         <input type="tel" name="phone" id="clientPhone" maxlength="16" placeholder="Ej: +56 9 1234 5678" />
       </label>
 
+      <label class="field">
+        <span>Sitio web <em class="field__optional">(opcional)</em></span>
+        <input type="url" name="siteUrl" id="clientSiteUrl" maxlength="300" placeholder="https://cliente.cl" />
+      </label>
+
       <div class="contact-actions" id="contactActions" hidden>
         <a class="btn-contact btn-contact--wa" id="linkWhatsApp" href="#" target="_blank" rel="noopener">WhatsApp</a>
         <a class="btn-contact btn-contact--call" id="linkCall" href="#">Llamar</a>
@@ -230,6 +312,29 @@
 
       <button type="submit" class="btn btn--neon btn--block">Crear Solicitud</button>
     </form>
+  </div>
+
+  <!-- ============ CUADERNO DEL CLIENTE ============ -->
+  <div class="modal-backdrop" id="notebookModal" hidden>
+    <div class="modal modal--sheet glass" role="dialog" aria-labelledby="notebookTitle">
+      <header class="modal__head">
+        <div>
+          <p class="notebook__kicker">Cuaderno</p>
+          <h3 id="notebookTitle">Cliente</h3>
+        </div>
+        <button type="button" class="modal__close" data-close="notebookModal" aria-label="Cerrar">✕</button>
+      </header>
+      <p class="notebook__site" id="notebookSite" hidden></p>
+      <ol class="notebook__list" id="notebookList"></ol>
+      <p class="notebook__empty" id="notebookEmpty">Sin notas aún. Deja la primera para este cliente.</p>
+      <form class="notebook__composer" id="notebookForm">
+        <label class="field">
+          <span>Nueva nota</span>
+          <textarea name="body" id="notebookBody" required maxlength="4000" rows="3" placeholder="Qué estamos haciendo, acuerdos, pendientes…"></textarea>
+        </label>
+        <button type="submit" class="btn btn--neon btn--block">Guardar en el cuaderno</button>
+      </form>
+    </div>
   </div>
 
   <script src="app.js"></script>

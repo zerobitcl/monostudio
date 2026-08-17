@@ -1,0 +1,11 @@
+{
+    "siteUrl": "https://monostudio.cl/",
+    "pages": [
+        { "url": "https://monostudio.cl/", "label": "Home" },
+        { "url": "https://monostudio.cl/diseno-web-profesional.html", "label": "Diseño web" },
+        { "url": "https://monostudio.cl/desarrollo-aplicaciones-web.html", "label": "Desarrollo" },
+        { "url": "https://monostudio.cl/identidad-de-marca-chile.html", "label": "Identidad de marca" },
+        { "url": "https://monostudio.cl/optimizacion-velocidad-wpo.html", "label": "WPO" },
+        { "url": "https://monostudio.cl/posicionamiento-seo-chile.html", "label": "SEO" }
+    ]
+}

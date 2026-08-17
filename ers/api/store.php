@@ -18,6 +18,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
+function sanitizeNotes($notes): array
+{
+    if (!is_array($notes)) {
+        return [];
+    }
+
+    $out = [];
+    foreach (array_slice($notes, 0, 200) as $note) {
+        if (!is_array($note)) {
+            continue;
+        }
+        $body = trim((string) ($note['body'] ?? ''));
+        if ($body === '') {
+            continue;
+        }
+        $out[] = [
+            'id' => mb_substr((string) ($note['id'] ?? ''), 0, 64),
+            'body' => mb_substr($body, 0, 4000),
+            'createdAt' => (int) ($note['createdAt'] ?? 0),
+        ];
+    }
+    return $out;
+}
+
+function sanitizeClients($clients): array
+{
+    if (!is_array($clients)) {
+        return [];
+    }
+
+    $out = [];
+    foreach ($clients as $client) {
+        if (!is_array($client)) {
+            continue;
+        }
+        $client['notes'] = sanitizeNotes($client['notes'] ?? []);
+        $client['siteUrl'] = mb_substr(trim((string) ($client['siteUrl'] ?? '')), 0, 300);
+        $out[] = $client;
+    }
+    return $out;
+}
+
 function readStore(string $path): array
 {
     if (!file_exists($path)) {
@@ -35,7 +77,7 @@ function readStore(string $path): array
     }
 
     return [
-        'clients' => is_array($data['clients'] ?? null) ? $data['clients'] : [],
+        'clients' => sanitizeClients($data['clients'] ?? null),
         'requests' => is_array($data['requests'] ?? null) ? $data['requests'] : [],
     ];
 }
@@ -83,7 +125,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     $store = [
-        'clients' => is_array($input['clients'] ?? null) ? $input['clients'] : [],
+        'clients' => sanitizeClients($input['clients'] ?? null),
         'requests' => is_array($input['requests'] ?? null) ? $input['requests'] : [],
     ];
 

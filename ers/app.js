@@ -27,6 +27,7 @@ class Store {
     legacyRequests: "monoStudio.requests",
     view: "monoStudio.view",
     expanded: "monoStudio.expanded",
+    module: "monoStudio.module",
   };
 
   static API = "./api/store.php";
@@ -206,6 +207,8 @@ class BillingModule {
       d.setMonth(d.getMonth() + 1, 1);
       client.nextBillingDate = BillingModule.toISODate(d);
     }
+    if (!Array.isArray(client.notes)) client.notes = [];
+    if (typeof client.siteUrl !== "string") client.siteUrl = "";
     return client;
   }
 
@@ -296,19 +299,102 @@ class ContactModule {
 }
 
 /* ------------------------------------------------------------
+   Google Search Console (proxy PHP, sin SDK)
+   ------------------------------------------------------------ */
+class GscModule {
+  static API = "./api/gsc.php";
+
+  static parsePages(raw) {
+    return String(raw || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, 12)
+      .map((line) => {
+        const [url, ...rest] = line.split("|");
+        return { url: url.trim(), label: rest.join("|").trim() };
+      })
+      .filter((p) => /^https?:\/\//i.test(p.url));
+  }
+
+  static serializePages(pages) {
+    return (pages || [])
+      .map((p) => (p.label ? `${p.url} | ${p.label}` : p.url))
+      .join("\n");
+  }
+
+  static fmt(n) {
+    return new Intl.NumberFormat("es-CL").format(Math.round(n || 0));
+  }
+
+  static pct(n) {
+    return `${((n || 0) * 100).toFixed(1)}%`;
+  }
+
+  static pos(n) {
+    return (n || 0).toFixed(1);
+  }
+
+  static deltaLabel(value, { invert = false, percent = false, position = false } = {}) {
+    if (!value) return { text: "igual vs 28d prev.", cls: "" };
+    const up = invert ? value < 0 : value > 0;
+    const sign = value > 0 ? "+" : "";
+    let text;
+    if (percent) text = `${sign}${(value * 100).toFixed(1)} pp`;
+    else if (position) text = `${value > 0 ? "↑" : "↓"} ${Math.abs(value).toFixed(1)}`;
+    else text = `${sign}${GscModule.fmt(value)}`;
+    return { text: `${text} vs 28d prev.`, cls: up ? "is-up" : "is-down" };
+  }
+
+  static async status() {
+    const res = await fetch(`${GscModule.API}?action=status`, { headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error("No se pudo leer el estado de Search Console");
+    return res.json();
+  }
+
+  static async saveConfig(payload) {
+    const res = await fetch(`${GscModule.API}?action=config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "No se pudo guardar la config GSC");
+    return data;
+  }
+
+  static async query(fresh = false) {
+    const qs = fresh ? "&fresh=1" : "";
+    const res = await fetch(`${GscModule.API}?action=query${qs}`, { headers: { Accept: "application/json" } });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "No se pudieron cargar las métricas");
+    return data;
+  }
+}
+
+/* ------------------------------------------------------------
    Controlador principal
    ------------------------------------------------------------ */
 class CRMController {
+  static isLiteDevice() {
+    return window.matchMedia("(max-width: 760px), (pointer: coarse)").matches;
+  }
+
   constructor(clients, requests) {
     this.clients = clients.map(BillingModule.migrateClient);
     this.requests = requests;
     this.timerId = null;
     this.toastTimer = null;
     this.editingClientId = null;
+    this.notebookClientId = null;
     this.highlightDate = null;
     this.isSaving = false;
-    this.view = localStorage.getItem(Store.KEYS.view) || "orbit";
-    this.expanded = localStorage.getItem(Store.KEYS.expanded) === "1";
+    this.isLite = CRMController.isLiteDevice();
+    this.module = localStorage.getItem(Store.KEYS.module) || "swarm";
+    this.view = this.isLite ? "list" : (localStorage.getItem(Store.KEYS.view) || "orbit");
+    this.expanded = !this.isLite && localStorage.getItem(Store.KEYS.expanded) === "1";
+    this.chartDays = this.isLite ? 14 : CHART_WINDOW_DAYS;
+    document.documentElement.classList.toggle("is-lite", this.isLite);
 
     this.dom = {
       kpiPortfolio: document.getElementById("kpiPortfolio"),
@@ -328,6 +414,7 @@ class CRMController {
       chartBars: document.getElementById("chartBars"),
       chartAxis: document.getElementById("chartAxis"),
       chartPeriodTotal: document.getElementById("chartPeriodTotal"),
+      chartRangeLabel: document.getElementById("chartRangeLabel"),
       nextBilling: document.getElementById("nextBilling"),
       nextBillingName: document.getElementById("nextBillingName"),
       nextBillingAmount: document.getElementById("nextBillingAmount"),
@@ -337,6 +424,7 @@ class CRMController {
       tooltip: document.getElementById("nodeTooltip"),
       clientModal: document.getElementById("clientModal"),
       requestModal: document.getElementById("requestModal"),
+      notebookModal: document.getElementById("notebookModal"),
       clientForm: document.getElementById("clientForm"),
       clientModalTitle: document.getElementById("clientModalTitle"),
       clientSubmitBtn: document.getElementById("clientSubmitBtn"),
@@ -352,6 +440,7 @@ class CRMController {
       requestClientSelect: document.getElementById("requestClientSelect"),
       clientBillingDate: document.getElementById("clientBillingDate"),
       clientPhone: document.getElementById("clientPhone"),
+      clientSiteUrl: document.getElementById("clientSiteUrl"),
       contactActions: document.getElementById("contactActions"),
       linkWhatsApp: document.getElementById("linkWhatsApp"),
       linkCall: document.getElementById("linkCall"),
@@ -362,15 +451,46 @@ class CRMController {
       btnViewOrbit: document.getElementById("btnViewOrbit"),
       btnViewList: document.getElementById("btnViewList"),
       toast: document.getElementById("toast"),
+      btnModuleSwarm: document.getElementById("btnModuleSwarm"),
+      btnModuleSeo: document.getElementById("btnModuleSeo"),
+      swarmPanel: document.querySelector(".swarm-panel"),
+      seoPanel: document.getElementById("seoPanel"),
+      notebookTitle: document.getElementById("notebookTitle"),
+      notebookSite: document.getElementById("notebookSite"),
+      notebookList: document.getElementById("notebookList"),
+      notebookEmpty: document.getElementById("notebookEmpty"),
+      notebookForm: document.getElementById("notebookForm"),
+      notebookBody: document.getElementById("notebookBody"),
+      seoSetup: document.getElementById("seoSetup"),
+      seoSaStatus: document.getElementById("seoSaStatus"),
+      gscConfigForm: document.getElementById("gscConfigForm"),
+      gscSiteUrl: document.getElementById("gscSiteUrl"),
+      gscPages: document.getElementById("gscPages"),
+      btnGscRefresh: document.getElementById("btnGscRefresh"),
+      seoKpis: document.getElementById("seoKpis"),
+      seoTableWrap: document.getElementById("seoTableWrap"),
+      seoTableBody: document.getElementById("seoTableBody"),
+      seoEmpty: document.getElementById("seoEmpty"),
+      seoRange: document.getElementById("seoRange"),
+      seoClicks: document.getElementById("seoClicks"),
+      seoImpressions: document.getElementById("seoImpressions"),
+      seoCtr: document.getElementById("seoCtr"),
+      seoPosition: document.getElementById("seoPosition"),
+      seoClicksDelta: document.getElementById("seoClicksDelta"),
+      seoImpressionsDelta: document.getElementById("seoImpressionsDelta"),
+      seoCtrDelta: document.getElementById("seoCtrDelta"),
+      seoPositionDelta: document.getElementById("seoPositionDelta"),
     };
   }
 
   async init() {
     this.closeModal("clientModal");
     this.closeModal("requestModal");
+    this.closeModal("notebookModal");
     this.dom.btnViewOrbit.classList.toggle("is-active", this.view === "orbit");
     this.dom.btnViewList.classList.toggle("is-active", this.view === "list");
     this.applyExpanded();
+    this.setModule(this.module, { persist: false, silent: true });
     this.bindEvents();
 
     if (this.clients.some((c) => !c.nextBillingDate)) {
@@ -379,6 +499,7 @@ class CRMController {
 
     this.renderAll();
     this.startTimerLoop();
+    if (this.module === "seo") this.loadGsc();
   }
 
   async persistState() {
@@ -406,7 +527,7 @@ class CRMController {
     document.querySelectorAll("[data-close]").forEach((btn) =>
       btn.addEventListener("click", () => this.closeModal(btn.dataset.close))
     );
-    [this.dom.clientModal, this.dom.requestModal].forEach((backdrop) =>
+    [this.dom.clientModal, this.dom.requestModal, this.dom.notebookModal].forEach((backdrop) =>
       backdrop.addEventListener("click", (e) => {
         if (e.target === backdrop) this.closeModal(backdrop.id);
       })
@@ -415,6 +536,7 @@ class CRMController {
       if (e.key === "Escape") {
         this.closeModal("clientModal");
         this.closeModal("requestModal");
+        this.closeModal("notebookModal");
       }
     });
 
@@ -424,43 +546,52 @@ class CRMController {
       if (e.target.name === "planType") this.updateValueFieldHint();
     });
     this.dom.requestForm.addEventListener("submit", (e) => this.handleAddRequest(e));
+    this.dom.notebookForm.addEventListener("submit", (e) => this.handleAddNote(e));
+    this.dom.notebookList.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-delete-note]");
+      if (btn) this.deleteNote(btn.dataset.deleteNote);
+    });
 
-    // Delegación: tooltip y highlight en timeline del enjambre.
-    this.dom.swarmGrid.addEventListener("mouseover", (e) => this.handleNodeHover(e));
-    this.dom.swarmGrid.addEventListener("mouseout", (e) => {
-      const inside = e.target.closest(".node, .timeline-row");
-      const stillInside = e.relatedTarget?.closest?.("#swarmGrid");
-      if (inside && !stillInside) {
+    this.dom.btnModuleSwarm.addEventListener("click", () => this.setModule("swarm"));
+    this.dom.btnModuleSeo.addEventListener("click", () => this.setModule("seo"));
+    this.dom.gscConfigForm.addEventListener("submit", (e) => this.handleGscConfig(e));
+    this.dom.btnGscRefresh.addEventListener("click", () => this.loadGsc(true));
+
+    if (!this.isLite) {
+      this.dom.swarmGrid.addEventListener("mouseover", (e) => this.handleNodeHover(e));
+      this.dom.swarmGrid.addEventListener("mouseout", (e) => {
+        const inside = e.target.closest(".node, .timeline-row");
+        const stillInside = e.relatedTarget?.closest?.("#swarmGrid");
+        if (inside && !stillInside) {
+          this.hideTooltip();
+          this.setChartHighlight(null);
+        }
+      });
+      this.dom.swarmGrid.addEventListener("mousemove", (e) => this.moveTooltip(e));
+      this.dom.chartBars.addEventListener("mouseover", (e) => {
+        const bar = e.target.closest(".chart-bar");
+        if (!bar) return;
+        this.setChartHighlight(bar.dataset.date);
+      });
+      this.dom.chartBars.addEventListener("mouseleave", () => this.setChartHighlight(null));
+      this.dom.orbitNodes.addEventListener("mouseover", (e) => this.handleNodeHover(e));
+      this.dom.orbitNodes.addEventListener("mousemove", (e) => this.moveTooltip(e));
+      this.dom.orbitView.addEventListener("mouseleave", () => {
         this.hideTooltip();
         this.setChartHighlight(null);
-      }
-    });
-    this.dom.swarmGrid.addEventListener("mousemove", (e) => this.moveTooltip(e));
-
-    this.dom.chartBars.addEventListener("mouseover", (e) => {
-      const bar = e.target.closest(".chart-bar");
-      if (!bar) return;
-      this.setChartHighlight(bar.dataset.date);
-    });
-    this.dom.chartBars.addEventListener("mouseleave", () => this.setChartHighlight(null));
+      });
+    }
 
     // Toggle de vistas Órbita / Lista.
     this.dom.btnViewOrbit.addEventListener("click", () => this.setView("orbit"));
     this.dom.btnViewList.addEventListener("click", () => this.setView("list"));
     this.dom.btnOrbitExpand.addEventListener("click", () => this.toggleExpanded());
 
-    // Órbita: tooltip por hover, edición por clic.
-    this.dom.orbitNodes.addEventListener("mouseover", (e) => this.handleNodeHover(e));
-    this.dom.orbitNodes.addEventListener("mousemove", (e) => this.moveTooltip(e));
-    this.dom.orbitView.addEventListener("mouseleave", () => {
-      this.hideTooltip();
-      this.setChartHighlight(null);
-    });
     this.dom.orbitNodes.addEventListener("click", (e) => {
       const node = e.target.closest(".orbit-node");
       if (node) {
         this.hideTooltip();
-        this.openEditClient(node.dataset.id);
+        this.openNotebook(node.dataset.id);
       }
     });
 
@@ -471,6 +602,7 @@ class CRMController {
       const paidBtn = e.target.closest("[data-mark-paid]");
       const liveBtn = e.target.closest("[data-mark-live]");
       const editBtn = e.target.closest("[data-edit-client]");
+      const noteBtn = e.target.closest("[data-notebook]");
       const deleteBtn = e.target.closest("[data-delete-client]");
       if (liveBtn) {
         e.stopPropagation();
@@ -478,6 +610,9 @@ class CRMController {
       } else if (paidBtn) {
         e.stopPropagation();
         this.markClientPaid(paidBtn.dataset.markPaid);
+      } else if (noteBtn) {
+        e.stopPropagation();
+        this.openNotebook(noteBtn.dataset.notebook);
       } else if (editBtn) {
         e.stopPropagation();
         this.openEditClient(editBtn.dataset.editClient);
@@ -554,6 +689,7 @@ class CRMController {
     this.dom.clientValue.value = client.valueCLP;
     this.dom.clientBillingDate.value = client.nextBillingDate;
     this.dom.clientPhone.value = client.phone ?? "";
+    this.dom.clientSiteUrl.value = client.siteUrl ?? "";
     this.dom.clientDev.checked = Boolean(client.inDevelopment);
     (client.planType === "anual" ? this.dom.planAnual : this.dom.planMensual).checked = true;
 
@@ -620,6 +756,218 @@ class CRMController {
     this.dom[id].hidden = true;
   }
 
+  setModule(module, { persist = true, silent = false } = {}) {
+    this.module = module === "seo" ? "seo" : "swarm";
+    if (persist) localStorage.setItem(Store.KEYS.module, this.module);
+    this.dom.btnModuleSwarm.classList.toggle("is-active", this.module === "swarm");
+    this.dom.btnModuleSeo.classList.toggle("is-active", this.module === "seo");
+    this.dom.swarmPanel.hidden = this.module !== "swarm";
+    this.dom.seoPanel.hidden = this.module !== "seo";
+    if (this.module === "seo" && !silent) this.loadGsc();
+  }
+
+  openNotebook(id) {
+    const client = this.clients.find((c) => c.id === id);
+    if (!client) return;
+    this.notebookClientId = id;
+    this.dom.notebookTitle.textContent = client.name;
+    const site = (client.siteUrl || "").trim();
+    this.dom.notebookSite.hidden = !site;
+    this.dom.notebookSite.textContent = site;
+    this.renderNotebook();
+    this.dom.notebookForm.reset();
+    this.openModal("notebookModal");
+  }
+
+  renderNotebook() {
+    const client = this.clients.find((c) => c.id === this.notebookClientId);
+    const notes = [...(client?.notes || [])].sort((a, b) => b.createdAt - a.createdAt);
+    this.dom.notebookEmpty.hidden = notes.length > 0;
+    this.dom.notebookList.innerHTML = "";
+    const stamp = new Intl.DateTimeFormat("es-CL", {
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const fragment = document.createDocumentFragment();
+    notes.forEach((note) => {
+      const li = document.createElement("li");
+      li.className = "notebook__item";
+      const head = document.createElement("div");
+      head.className = "notebook__item-head";
+      const time = document.createElement("time");
+      time.dateTime = new Date(note.createdAt).toISOString();
+      time.textContent = stamp.format(note.createdAt);
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "notebook__delete";
+      del.dataset.deleteNote = note.id;
+      del.setAttribute("aria-label", "Eliminar nota");
+      del.textContent = "✕";
+      head.append(time, del);
+      const p = document.createElement("p");
+      p.textContent = note.body;
+      li.append(head, p);
+      fragment.appendChild(li);
+    });
+    this.dom.notebookList.appendChild(fragment);
+  }
+
+  async handleAddNote(e) {
+    e.preventDefault();
+    const client = this.clients.find((c) => c.id === this.notebookClientId);
+    if (!client) return;
+    const body = this.dom.notebookBody.value.trim();
+    if (!body) return;
+    client.notes = Array.isArray(client.notes) ? client.notes : [];
+    client.notes.push({ id: crypto.randomUUID(), body, createdAt: Date.now() });
+    try {
+      await this.persistState();
+      this.dom.notebookForm.reset();
+      this.renderNotebook();
+      this.renderSwarm();
+      this.showToast("Nota guardada");
+    } catch {
+      client.notes.pop();
+    }
+  }
+
+  async deleteNote(noteId) {
+    const client = this.clients.find((c) => c.id === this.notebookClientId);
+    if (!client) return;
+    const prev = client.notes;
+    client.notes = (client.notes || []).filter((n) => n.id !== noteId);
+    try {
+      await this.persistState();
+      this.renderNotebook();
+      this.renderSwarm();
+    } catch {
+      client.notes = prev;
+    }
+  }
+
+  async handleGscConfig(e) {
+    e.preventDefault();
+    const pages = GscModule.parsePages(this.dom.gscPages.value);
+    if (pages.length === 0) {
+      this.showToast("Agrega al menos una URL https");
+      return;
+    }
+    try {
+      await GscModule.saveConfig({
+        siteUrl: this.dom.gscSiteUrl.value.trim(),
+        pages,
+      });
+      this.showToast("Configuración GSC guardada");
+      await this.loadGsc(true);
+    } catch (err) {
+      this.showToast(err.message);
+    }
+  }
+
+  applyGscDelta(el, value, opts) {
+    const { text, cls } = GscModule.deltaLabel(value, opts);
+    el.textContent = text;
+    el.className = cls;
+  }
+
+  renderGsc(data) {
+    if (this.dom.seoSaStatus) {
+      if (data.connected && data.serviceEmail) {
+        this.dom.seoSaStatus.textContent = `Cuenta de servicio lista · ${data.serviceEmail}`;
+        this.dom.seoSaStatus.className = "seo-setup__status is-ok";
+      } else {
+        this.dom.seoSaStatus.textContent =
+          "No encuentro el JSON. Súbelo a ers/data/gsc-service-account.json y recarga.";
+        this.dom.seoSaStatus.className = "seo-setup__status is-warn";
+      }
+    }
+    if (data.siteUrl && !this.dom.gscSiteUrl.value) this.dom.gscSiteUrl.value = data.siteUrl;
+    if (Array.isArray(data.pages) && !data.totals) {
+      this.dom.gscPages.value = GscModule.serializePages(data.pages);
+    }
+
+    const hasMetrics = Boolean(data.totals);
+    this.dom.seoKpis.hidden = !hasMetrics;
+    this.dom.seoTableWrap.hidden = !hasMetrics;
+    this.dom.seoEmpty.hidden = true;
+
+    if (!hasMetrics) return;
+
+    if (data.range) {
+      this.dom.seoRange.textContent = `${data.range.start} → ${data.range.end}`;
+    }
+    this.dom.seoClicks.textContent = GscModule.fmt(data.totals.clicks);
+    this.dom.seoImpressions.textContent = GscModule.fmt(data.totals.impressions);
+    this.dom.seoCtr.textContent = GscModule.pct(data.totals.ctr);
+    this.dom.seoPosition.textContent = GscModule.pos(data.totals.position);
+    this.applyGscDelta(this.dom.seoClicksDelta, data.totalsDelta?.clicks);
+    this.applyGscDelta(this.dom.seoImpressionsDelta, data.totalsDelta?.impressions);
+    this.applyGscDelta(this.dom.seoCtrDelta, data.totalsDelta?.ctr, { percent: true });
+    this.applyGscDelta(this.dom.seoPositionDelta, data.totalsDelta?.position, { invert: true, position: true });
+
+    this.dom.seoTableBody.innerHTML = "";
+    const fragment = document.createDocumentFragment();
+    (data.pages || []).forEach((row) => {
+      const tr = document.createElement("tr");
+      const name = document.createElement("td");
+      const label = document.createElement("strong");
+      label.textContent = row.label || row.url;
+      const url = document.createElement("div");
+      url.className = "seo-delta";
+      url.textContent = row.url.replace(/^https?:\/\//, "");
+      name.append(label, url);
+
+      const cell = (metric, opts) => {
+        const td = document.createElement("td");
+        td.textContent = opts.pct
+          ? GscModule.pct(row.current[metric])
+          : opts.pos
+            ? GscModule.pos(row.current[metric])
+            : GscModule.fmt(row.current[metric]);
+        const delta = document.createElement("span");
+        const d = GscModule.deltaLabel(row.delta?.[metric], opts);
+        delta.className = `seo-delta ${d.cls}`;
+        delta.textContent = d.text;
+        td.appendChild(delta);
+        return td;
+      };
+
+      tr.append(
+        name,
+        cell("clicks", {}),
+        cell("impressions", {}),
+        cell("ctr", { percent: true, pct: true }),
+        cell("position", { invert: true, position: true, pos: true })
+      );
+      fragment.appendChild(tr);
+    });
+    this.dom.seoTableBody.appendChild(fragment);
+  }
+
+  async loadGsc(fresh = false) {
+    try {
+      const status = await GscModule.status();
+      this.renderGsc(status);
+      if (!status.connected) {
+        this.dom.seoKpis.hidden = true;
+        this.dom.seoTableWrap.hidden = true;
+        this.dom.seoEmpty.hidden = false;
+        this.dom.seoEmpty.textContent =
+          "Sube el JSON de la cuenta de servicio a ers/data/gsc-service-account.json y recarga.";
+        return;
+      }
+      const data = await GscModule.query(fresh);
+      this.renderGsc({ ...status, ...data, connected: true });
+    } catch (err) {
+      this.dom.seoEmpty.hidden = false;
+      this.dom.seoEmpty.textContent = err.message;
+      this.dom.seoKpis.hidden = true;
+      this.dom.seoTableWrap.hidden = true;
+    }
+  }
+
   openRequestModal() {
     if (this.clients.length === 0) {
       this.openCreateClient();
@@ -651,6 +999,7 @@ class CRMController {
       valueCLP: Number(data.get("valueCLP")),
       nextBillingDate: data.get("nextBillingDate"),
       phone: data.get("phone").trim(),
+      siteUrl: (data.get("siteUrl") || "").trim(),
       inDevelopment: data.get("inDevelopment") === "on",
     };
 
@@ -661,7 +1010,7 @@ class CRMController {
       if (idx === -1) return;
       this.clients[idx] = { ...this.clients[idx], ...payload };
     } else {
-      this.clients.push({ id: crypto.randomUUID(), ...payload });
+      this.clients.push({ id: crypto.randomUUID(), notes: [], ...payload });
     }
 
     try {
@@ -917,9 +1266,13 @@ class CRMController {
   }
 
   renderChart() {
-    const series = BillingModule.buildCashFlowSeries(this.activeClients());
+    const series = BillingModule.buildCashFlowSeries(this.activeClients(), this.chartDays);
     const maxTotal = Math.max(...series.map((b) => b.total), 1);
     const periodTotal = series.reduce((sum, b) => sum + b.total, 0);
+
+    if (this.dom.chartRangeLabel) {
+      this.dom.chartRangeLabel.textContent = `Próximos ${this.chartDays} días`;
+    }
 
     this.dom.chartPeriodTotal.textContent = FinanceModule.formatCLP(periodTotal);
     this.dom.chartBars.innerHTML = "";
@@ -1051,7 +1404,7 @@ class CRMController {
           ? `${client.name}, en desarrollo`
           : `${client.name}, cobro ${BillingModule.relativeLabel(days)}`
       );
-      node.title = `${client.name} · clic para editar`;
+      node.title = `${client.name} · clic para abrir el cuaderno`;
 
       const initials = document.createElement("span");
       initials.className = "orbit-node__initials";
@@ -1072,13 +1425,14 @@ class CRMController {
         const badge = document.createElement("span");
         badge.className = "orbit-node__badge";
         badge.textContent = "MRR";
-
-        const satA = document.createElement("span");
-        satA.className = "orbit-node__satellite orbit-node__satellite--a";
-        const satB = document.createElement("span");
-        satB.className = "orbit-node__satellite orbit-node__satellite--b";
-
-        node.append(badge, satA, satB);
+        node.appendChild(badge);
+        if (!this.isLite) {
+          const satA = document.createElement("span");
+          satA.className = "orbit-node__satellite orbit-node__satellite--a";
+          const satB = document.createElement("span");
+          satB.className = "orbit-node__satellite orbit-node__satellite--b";
+          node.append(satA, satB);
+        }
       }
 
       fragment.appendChild(node);
@@ -1198,6 +1552,13 @@ class CRMController {
         actions.appendChild(callLink);
       }
 
+      const noteBtn = document.createElement("button");
+      noteBtn.type = "button";
+      noteBtn.className = "btn-row btn-row--edit";
+      noteBtn.dataset.notebook = client.id;
+      const noteCount = (client.notes || []).length;
+      noteBtn.textContent = noteCount ? `Cuaderno (${noteCount})` : "Cuaderno";
+
       const editBtn = document.createElement("button");
       editBtn.type = "button";
       editBtn.className = "btn-row btn-row--edit";
@@ -1210,7 +1571,7 @@ class CRMController {
       deleteBtn.dataset.deleteClient = client.id;
       deleteBtn.textContent = "Eliminar";
 
-      actions.append(editBtn, deleteBtn);
+      actions.append(noteBtn, editBtn, deleteBtn);
       row.append(rail, node, meta, actions);
       fragment.appendChild(row);
     });
