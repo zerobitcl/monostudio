@@ -1,0 +1,177 @@
+{
+    "clients": [
+        {
+            "id": "49caf200-a81e-4d67-a1e3-041835687019",
+            "name": "Guayacán Constructora",
+            "planType": "anual",
+            "valueCLP": 125000,
+            "nextBillingDate": "2026-07-11",
+            "phone": "",
+            "inDevelopment": false
+        },
+        {
+            "id": "c0e75743-d0b1-4dcd-8f57-ef376f0a7ed0",
+            "name": "Legal Tamaya",
+            "planType": "mensual",
+            "valueCLP": 100000,
+            "nextBillingDate": "2026-07-25",
+            "phone": "",
+            "inDevelopment": false
+        },
+        {
+            "id": "e0be614e-d3e6-477a-9e08-ccb613ce1b44",
+            "name": "Abogado Contreras",
+            "planType": "anual",
+            "valueCLP": 100000,
+            "nextBillingDate": "2026-07-14",
+            "phone": "",
+            "inDevelopment": true
+        },
+        {
+            "id": "3f0c8ff6-6dad-4149-a70b-7ff134ab4d9e",
+            "name": "Yuyo Burger",
+            "planType": "anual",
+            "valueCLP": 60000,
+            "nextBillingDate": "2026-09-08",
+            "phone": "",
+            "inDevelopment": false
+        },
+        {
+            "id": "580eec13-b574-4b38-b995-ee1ee018458f",
+            "name": "Frescora",
+            "planType": "mensual",
+            "valueCLP": 150000,
+            "nextBillingDate": "2026-07-25",
+            "phone": "",
+            "inDevelopment": false
+        },
+        {
+            "id": "5386db25-d848-4d80-aeb2-59aaf6c39db3",
+            "name": "Avícola Arrayán",
+            "planType": "anual",
+            "valueCLP": 119000,
+            "nextBillingDate": "2027-02-23",
+            "phone": "",
+            "inDevelopment": false
+        },
+        {
+            "id": "49e3088f-a85e-4296-a568-ec2aa65484b6",
+            "name": "Mountain Advisors",
+            "planType": "anual",
+            "valueCLP": 190400,
+            "nextBillingDate": "2027-03-13",
+            "phone": "",
+            "inDevelopment": false
+        },
+        {
+            "id": "fa60946f-e2c1-4708-9c41-f8302c68a68c",
+            "name": "CEIA LIMARI OVALLE",
+            "planType": "anual",
+            "valueCLP": 60000,
+            "nextBillingDate": "2026-08-01",
+            "phone": "",
+            "inDevelopment": true
+        },
+        {
+            "id": "85751724-856b-4476-b5f8-a83c6a0a99e0",
+            "name": "Kinor Ovalle",
+            "planType": "anual",
+            "valueCLP": 300000,
+            "nextBillingDate": "2027-04-01",
+            "phone": "",
+            "inDevelopment": false
+        },
+        {
+            "id": "d9b419ce-0713-489a-86a5-d369107209e7",
+            "name": "Dsorpresa",
+            "planType": "anual",
+            "valueCLP": 100000,
+            "nextBillingDate": "2027-04-22",
+            "phone": "",
+            "inDevelopment": false
+        },
+        {
+            "id": "7d7d67c6-cbd2-4105-965d-2d8a7e5fa074",
+            "name": "Marcela Barraza",
+            "planType": "anual",
+            "valueCLP": 120000,
+            "nextBillingDate": "2027-03-17",
+            "phone": "",
+            "inDevelopment": false
+        },
+        {
+            "id": "17fb3003-6b75-4aa5-9b74-6f40853622fc",
+            "name": "Manteca La Unión",
+            "planType": "anual",
+            "valueCLP": 238000,
+            "nextBillingDate": "2027-06-17",
+            "phone": "",
+            "inDevelopment": false
+        },
+        {
+            "id": "ac71e482-a8c6-4378-b4c8-479b7bbc2673",
+            "name": "DDG del Valle",
+            "planType": "anual",
+            "valueCLP": 250000,
+            "nextBillingDate": "2027-03-01",
+            "phone": "",
+            "inDevelopment": true
+        },
+        {
+            "id": "56eef148-846f-4602-b66d-d499c992adb4",
+            "name": "Hostal Infante",
+            "planType": "anual",
+            "valueCLP": 238000,
+            "nextBillingDate": "2027-09-01",
+            "phone": "",
+            "inDevelopment": true
+        },
+        {
+            "id": "ac32423e-0350-4749-90ca-616d3ea3c658",
+            "name": "Callegari",
+            "planType": "mensual",
+            "valueCLP": 1,
+            "nextBillingDate": "2026-09-01",
+            "phone": "",
+            "inDevelopment": true
+        },
+        {
+            "id": "217cb122-6c8d-4edf-a09c-f38c01615154",
+            "name": "Rivera y Asociados",
+            "planType": "anual",
+            "valueCLP": 150000,
+            "nextBillingDate": "2027-03-01",
+            "phone": "",
+            "inDevelopment": true
+        },
+        {
+            "id": "86a216ac-ab54-439d-929b-983cf3dd3446",
+            "name": "AB Asesorías legales",
+            "planType": "anual",
+            "valueCLP": 238000,
+            "nextBillingDate": "2027-03-01",
+            "phone": "",
+            "inDevelopment": false
+        },
+        {
+            "id": "79b6ac6f-e019-4dd5-9751-e987b25b9e7f",
+            "name": "Consilio",
+            "planType": "mensual",
+            "valueCLP": 100000,
+            "nextBillingDate": "2026-09-01",
+            "phone": "",
+            "inDevelopment": true
+        },
+        {
+            "id": "87aabb00-0dab-48d4-8bb4-7dbf5403b92d",
+            "name": "Ricardo H",
+            "planType": "mensual",
+            "valueCLP": 100000,
+            "nextBillingDate": "2026-09-01",
+            "phone": "",
+            "inDevelopment": true
+        }
+    ],
+    "requests": [],
+    "updatedAt": "2026-07-08T00:00:01+00:00"
+}

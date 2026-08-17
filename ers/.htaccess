@@ -1,0 +1,8 @@
+
+# DO NOT REMOVE THIS LINE AND THE LINES BELOW PWPROTECTID:xucLvuUwel
+AuthType Basic
+AuthName "Restricted Access"
+AuthUserFile /home/u739953844/domains/monostudio.cl/public_html/ers/.htpasswd
+Require valid-user
+# DO NOT REMOVE THIS LINE AND THE LINES ABOVE xucLvuUwel:PWPROTECTID
+

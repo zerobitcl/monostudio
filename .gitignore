@@ -1,0 +1,5 @@
+# Credenciales de acceso HTTP Basic (nunca subir a GitHub)
+ers/.htpasswd
+
+# Opcional: descomenta si no quieres publicar datos de clientes
+# ers/data/store.json

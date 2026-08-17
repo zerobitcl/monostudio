@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Mono Studio OS — CRM visual y dashboard financiero interno" />
+  <title>Mono Studio OS</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <div class="boot-screen" id="bootScreen">
+    <div class="boot-screen__core" aria-hidden="true">◮</div>
+    <p>Sincronizando con el servidor…</p>
+  </div>
+
+  <div class="boot-error" id="bootError" hidden>
+    <strong>No se pudo cargar Mono Studio OS</strong>
+    <p>Revisa la conexión con el servidor.</p>
+    <button type="button" class="btn btn--neon" onclick="location.reload()">Reintentar</button>
+  </div>
+
+  <div class="app-shell">
+
+    <!-- ============ HEADER / MÓDULO FINANCIERO ============ -->
+    <header class="finance-bar" aria-label="Panel financiero">
+      <div class="brand">
+        <div class="brand__logo" aria-hidden="true">◮</div>
+        <div class="brand__text">
+          <h1>Mono Studio <span>OS</span></h1>
+          <p class="brand__tag">Internal Revenue Engine</p>
+        </div>
+      </div>
+
+      <div class="kpi-grid">
+        <article class="kpi-card kpi-card--primary">
+          <span class="kpi-card__label">Compromiso en contratos</span>
+          <strong class="kpi-card__value" id="kpiPortfolio">$0</strong>
+          <span class="kpi-card__meta" id="kpiPortfolioMeta">Suma nominal de planes</span>
+          <span class="kpi-card__meta" id="kpiClientCount">0 clientes activos</span>
+          <span class="kpi-card__meta kpi-card__meta--dev" id="kpiDevCount" hidden>0 en desarrollo</span>
+        </article>
+
+        <article class="kpi-card">
+          <span class="kpi-card__label">MRR <em>· Ingreso Mensual Recurrente</em></span>
+          <strong class="kpi-card__value kpi-card__value--mrr" id="kpiMRR">$0</strong>
+          <span class="kpi-card__meta" id="kpiMRRMeta">mensuales + anuales ÷ 12</span>
+        </article>
+
+        <article class="kpi-card">
+          <span class="kpi-card__label">ARR <em>· Ingreso Anual Recurrente</em></span>
+          <strong class="kpi-card__value kpi-card__value--arr" id="kpiARR">$0</strong>
+          <span class="kpi-card__meta" id="kpiARRMeta">anuales + mensuales × 12</span>
+        </article>
+      </div>
+    </header>
+
+    <!-- ============ MAIN: ENJAMBRE + PANEL LATERAL ============ -->
+    <main class="workspace">
+
+      <!-- ===== EL ENJAMBRE ===== -->
+      <section class="swarm-panel" aria-label="Enjambre de clientes">
+        <div class="panel-head">
+          <h2>El Enjambre</h2>
+          <div class="legend">
+            <span class="legend__item legend__item--annual">Anual</span>
+            <span class="legend__item legend__item--monthly">Mensual</span>
+            <span class="legend__item legend__item--urgent">Urgente</span>
+            <span class="legend__item legend__item--dev">En desarrollo</span>
+          </div>
+          <div class="view-toggle" role="tablist" aria-label="Vista de clientes">
+            <button class="view-toggle__btn is-active" id="btnViewOrbit" type="button" role="tab">Órbita</button>
+            <button class="view-toggle__btn" id="btnViewList" type="button" role="tab">Lista</button>
+          </div>
+          <button class="icon-btn" id="btnOrbitExpand" type="button" aria-pressed="false" title="Expandir la órbita" aria-label="Expandir la órbita">⤢</button>
+          <button class="btn btn--neon" id="btnOpenClientModal" type="button">+ Cliente</button>
+        </div>
+
+        <div class="next-billing" id="nextBilling" hidden>
+          <span class="next-billing__label">Próximo cobro</span>
+          <strong class="next-billing__name" id="nextBillingName">—</strong>
+          <span class="next-billing__amount" id="nextBillingAmount">$0</span>
+          <span class="next-billing__when" id="nextBillingWhen">—</span>
+        </div>
+
+        <div class="cash-chart" id="cashChartWrap" hidden>
+          <div class="cash-chart__head">
+            <h3>Flujo de cobros</h3>
+            <span class="cash-chart__range">Próximos 30 días</span>
+            <strong class="cash-chart__total" id="chartPeriodTotal">$0</strong>
+          </div>
+          <div class="cash-chart__viewport">
+            <div class="cash-chart__bars" id="chartBars" role="img" aria-label="Gráfico de cobros próximos 30 días"></div>
+          </div>
+          <div class="cash-chart__axis" id="chartAxis"></div>
+        </div>
+
+        <!-- Vista orbital: distancia al núcleo = días hasta el cobro -->
+        <div class="orbit" id="orbitView" hidden>
+          <div class="orbit__ring orbit__ring--1"><span class="orbit__ring-label">7d</span></div>
+          <div class="orbit__ring orbit__ring--2"><span class="orbit__ring-label">14d</span></div>
+          <div class="orbit__ring orbit__ring--3"><span class="orbit__ring-label">30d</span></div>
+          <div class="orbit__ring orbit__ring--4"><span class="orbit__ring-label">+30d</span></div>
+          <svg class="orbit__web" id="orbitWeb" viewBox="0 0 100 100" aria-hidden="true" preserveAspectRatio="none"></svg>
+          <div class="orbit__core">
+            <span class="orbit__core-label">MRR</span>
+            <strong class="orbit__core-value" id="orbitCoreValue">$0</strong>
+          </div>
+          <div class="orbit__nodes" id="orbitNodes"></div>
+        </div>
+
+        <div class="timeline" id="swarmGrid" role="list">
+          <!-- Filas temporales renderizadas por JS -->
+        </div>
+
+        <div class="empty-state" id="swarmEmpty">
+          <div class="empty-state__icon" aria-hidden="true">⬡</div>
+          <p>El enjambre está vacío.<br />Agrega tu primer cliente para encender la colmena.</p>
+        </div>
+      </section>
+
+      <!-- ===== SOLICITUDES ===== -->
+      <aside class="requests-panel" aria-label="Solicitudes activas">
+        <div class="panel-head">
+          <h2>Solicitudes</h2>
+          <button class="btn btn--ghost" id="btnOpenRequestModal" type="button">+ Nueva</button>
+        </div>
+
+        <ul class="request-list" id="requestList">
+          <!-- Solicitudes renderizadas por JS -->
+        </ul>
+
+        <div class="empty-state empty-state--sm" id="requestsEmpty">
+          <p>Sin solicitudes activas.</p>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <!-- Tooltip flotante del enjambre -->
+  <div class="node-tooltip" id="nodeTooltip" role="tooltip" hidden>
+    <strong class="node-tooltip__name"></strong>
+    <span class="node-tooltip__plan"></span>
+    <span class="node-tooltip__date"></span>
+    <span class="node-tooltip__value"></span>
+  </div>
+
+  <!-- ============ MODAL: CLIENTE (crear / editar) ============ -->
+  <div class="modal-backdrop" id="clientModal" hidden>
+    <form class="modal glass" id="clientForm" autocomplete="off">
+      <input type="hidden" name="clientId" id="clientIdField" value="" />
+
+      <header class="modal__head">
+        <h3 id="clientModalTitle">Nuevo Cliente</h3>
+        <button type="button" class="modal__close" data-close="clientModal" aria-label="Cerrar">✕</button>
+      </header>
+
+      <label class="field">
+        <span>Nombre del cliente</span>
+        <input type="text" name="name" id="clientName" required maxlength="40" placeholder="Ej: Clínica Andes" />
+      </label>
+
+      <label class="field">
+        <span id="clientValueLabel">Valor del plan (CLP)</span>
+        <input type="number" name="valueCLP" id="clientValue" required min="1" step="1" placeholder="Ej: 250000" />
+        <small class="field__hint" id="clientValueHint">Selecciona el tipo de plan para ver qué monto ingresar.</small>
+      </label>
+
+      <label class="field">
+        <span>Fecha próximo cobro</span>
+        <input type="date" name="nextBillingDate" id="clientBillingDate" required />
+      </label>
+
+      <label class="field">
+        <span>Teléfono <em class="field__optional">(opcional, para WhatsApp y llamadas)</em></span>
+        <input type="tel" name="phone" id="clientPhone" maxlength="16" placeholder="Ej: +56 9 1234 5678" />
+      </label>
+
+      <div class="contact-actions" id="contactActions" hidden>
+        <a class="btn-contact btn-contact--wa" id="linkWhatsApp" href="#" target="_blank" rel="noopener">WhatsApp</a>
+        <a class="btn-contact btn-contact--call" id="linkCall" href="#">Llamar</a>
+      </div>
+
+      <fieldset class="field field--radio">
+        <legend>Tipo de plan</legend>
+        <label class="radio-pill radio-pill--annual">
+          <input type="radio" name="planType" id="planAnual" value="anual" required />
+          <span>Anual</span>
+        </label>
+        <label class="radio-pill radio-pill--monthly">
+          <input type="radio" name="planType" id="planMensual" value="mensual" />
+          <span>Mensual</span>
+        </label>
+      </fieldset>
+
+      <label class="dev-switch" for="clientDev">
+        <input type="checkbox" name="inDevelopment" id="clientDev" />
+        <span class="dev-switch__track" aria-hidden="true"><span class="dev-switch__thumb"></span></span>
+        <span class="dev-switch__text">
+          <strong>Proyecto en desarrollo</strong>
+          <small>No suma a MRR/ARR ni a los cobros hasta que lo actives.</small>
+        </span>
+      </label>
+
+      <button type="submit" class="btn btn--neon btn--block" id="clientSubmitBtn">Agregar al Enjambre</button>
+      <button type="button" class="btn btn--danger btn--block" id="btnDeleteClient" hidden>Eliminar cliente</button>
+    </form>
+  </div>
+
+  <!-- ============ MODAL: NUEVA SOLICITUD ============ -->
+  <div class="modal-backdrop" id="requestModal" hidden>
+    <form class="modal glass" id="requestForm" autocomplete="off">
+      <header class="modal__head">
+        <h3>Nueva Solicitud</h3>
+        <button type="button" class="modal__close" data-close="requestModal" aria-label="Cerrar">✕</button>
+      </header>
+
+      <label class="field">
+        <span>Cliente</span>
+        <select name="clientId" id="requestClientSelect" required>
+          <option value="" disabled selected>Selecciona un cliente…</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Descripción</span>
+        <textarea name="description" required maxlength="200" rows="3" placeholder="Ej: Cambio de banner en home"></textarea>
+      </label>
+
+      <button type="submit" class="btn btn--neon btn--block">Crear Solicitud</button>
+    </form>
+  </div>
+
+  <script src="app.js"></script>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>
