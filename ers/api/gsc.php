@@ -174,6 +174,9 @@ function gscSanitizePages(array $pages): array
         if ($url === '' || !preg_match('#^https?://#i', $url)) {
             continue;
         }
+        if (gscIsAgencyHost($url)) {
+            continue;
+        }
         $clip = static fn (string $s, int $n): string => function_exists('mb_substr') ? mb_substr($s, 0, $n) : substr($s, 0, $n);
         $out[] = ['url' => $clip($url, 500), 'label' => $clip($label, 80)];
     }
@@ -184,12 +187,18 @@ function gscSanitizeSiteUrl(string $siteUrl): string
 {
     $siteUrl = trim($siteUrl);
     if (preg_match('#^sc-domain:[a-z0-9.-]+$#i', $siteUrl)) {
-        return $siteUrl;
+        return gscIsAgencyHost($siteUrl) ? '' : $siteUrl;
     }
     if (preg_match('#^https?://#i', $siteUrl)) {
-        return function_exists('mb_substr') ? mb_substr($siteUrl, 0, 300) : substr($siteUrl, 0, 300);
+        $clean = function_exists('mb_substr') ? mb_substr($siteUrl, 0, 300) : substr($siteUrl, 0, 300);
+        return gscIsAgencyHost($clean) ? '' : $clean;
     }
     return '';
+}
+
+function gscIsAgencyHost(string $url): bool
+{
+    return gscHost($url) === 'monostudio.cl';
 }
 
 function gscIsServiceAccount(array $data): bool
@@ -400,6 +409,23 @@ function gscDelta(array $now, array $prev): array
 }
 
 $config = gscReadJson($configFile, ['siteUrl' => '', 'pages' => []]);
+$cleaned = [
+    'siteUrl' => gscSanitizeSiteUrl((string) ($config['siteUrl'] ?? '')),
+    'pages' => gscSanitizePages($config['pages'] ?? []),
+];
+if (
+    $cleaned['pages'] === []
+    && $cleaned['siteUrl'] !== ''
+    && preg_match('#^https?://#i', $cleaned['siteUrl'])
+) {
+    $origin = rtrim($cleaned['siteUrl'], '/') . '/';
+    $cleaned['pages'] = [['url' => $origin, 'label' => '']];
+}
+if ($cleaned['siteUrl'] !== (string) ($config['siteUrl'] ?? '') || $cleaned['pages'] !== ($config['pages'] ?? [])) {
+    gscWriteJson($configFile, $cleaned);
+    @unlink($cacheFile);
+}
+$config = $cleaned;
 $serviceAccount = gscLoadServiceAccount($dataDir, $keyFilePreferred);
 $action = (string) ($_GET['action'] ?? $_POST['action'] ?? '');
 

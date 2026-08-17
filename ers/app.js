@@ -314,11 +314,21 @@ class GscModule {
         const [url, ...rest] = line.split("|");
         return { url: url.trim(), label: rest.join("|").trim() };
       })
-      .filter((p) => /^https?:\/\//i.test(p.url));
+      .filter((p) => /^https?:\/\//i.test(p.url) && !GscModule.isAgencyUrl(p.url));
+  }
+
+  static isAgencyUrl(url) {
+    try {
+      const host = new URL(url).hostname.replace(/^www\./i, "").toLowerCase();
+      return host === "monostudio.cl";
+    } catch {
+      return /monostudio\.cl/i.test(String(url || ""));
+    }
   }
 
   static serializePages(pages) {
     return (pages || [])
+      .filter((p) => p.url && !GscModule.isAgencyUrl(p.url))
       .map((p) => (p.label ? `${p.url} | ${p.label}` : p.url))
       .join("\n");
   }
@@ -387,6 +397,7 @@ class CRMController {
     this.toastTimer = null;
     this.editingClientId = null;
     this.notebookClientId = null;
+    this.gscPagesDirty = false;
     this.highlightDate = null;
     this.isSaving = false;
     this.isLite = CRMController.isLiteDevice();
@@ -555,6 +566,9 @@ class CRMController {
     this.dom.btnModuleSwarm.addEventListener("click", () => this.setModule("swarm"));
     this.dom.btnModuleSeo.addEventListener("click", () => this.setModule("seo"));
     this.dom.gscConfigForm.addEventListener("submit", (e) => this.handleGscConfig(e));
+    this.dom.gscPages.addEventListener("input", () => {
+      this.gscPagesDirty = true;
+    });
     this.dom.btnGscRefresh.addEventListener("click", () => this.loadGsc(true));
 
     if (!this.isLite) {
@@ -883,8 +897,11 @@ class CRMController {
         this.dom.seoSaStatus.className = "seo-setup__status is-warn";
       }
     }
-    if (data.siteUrl && !this.dom.gscSiteUrl.value) this.dom.gscSiteUrl.value = data.siteUrl;
-    if (Array.isArray(data.pages) && !data.totals) {
+    if (data.siteUrl && !this.dom.gscSiteUrl.value && !GscModule.isAgencyUrl(data.siteUrl)) {
+      this.dom.gscSiteUrl.value = data.siteUrl;
+    }
+    if (GscModule.isAgencyUrl(this.dom.gscSiteUrl.value)) this.dom.gscSiteUrl.value = "";
+    if (Array.isArray(data.pages) && !data.totals && !this.gscPagesDirty) {
       this.dom.gscPages.value = GscModule.serializePages(data.pages);
     }
 
