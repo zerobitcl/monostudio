@@ -34,6 +34,9 @@ function gscJson(array $payload, int $code = 200): void
 {
     http_response_code($code);
     header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate');
+    header('Pragma: no-cache');
+    header('Expires: 0');
     echo json_encode($payload, JSON_UNESCAPED_UNICODE);
     exit;
 }

@@ -303,6 +303,13 @@ class ContactModule {
    ------------------------------------------------------------ */
 class GscModule {
   static API = "./api/gsc.php";
+  static NO_CACHE = { cache: "no-store" };
+
+  static apiUrl(action, extra = "") {
+    const bust = `_=${Date.now()}`;
+    const qs = extra ? `${extra}&${bust}` : bust;
+    return `${GscModule.API}?action=${action}&${qs}`;
+  }
 
   static parsePages(raw) {
     return String(raw || "")
@@ -361,14 +368,18 @@ class GscModule {
   }
 
   static async status() {
-    const res = await fetch(`${GscModule.API}?action=status`, { headers: { Accept: "application/json" } });
+    const res = await fetch(GscModule.apiUrl("status"), {
+      ...GscModule.NO_CACHE,
+      headers: { Accept: "application/json" },
+    });
     if (!res.ok) throw new Error("No se pudo leer el estado de Search Console");
     return res.json();
   }
 
   static async saveConfig(payload) {
-    const res = await fetch(`${GscModule.API}?action=config`, {
+    const res = await fetch(GscModule.apiUrl("config"), {
       method: "POST",
+      ...GscModule.NO_CACHE,
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(payload),
     });
@@ -378,8 +389,10 @@ class GscModule {
   }
 
   static async query(fresh = false) {
-    const qs = fresh ? "&fresh=1" : "";
-    const res = await fetch(`${GscModule.API}?action=query${qs}`, { headers: { Accept: "application/json" } });
+    const res = await fetch(GscModule.apiUrl("query", fresh ? "fresh=1" : ""), {
+      ...GscModule.NO_CACHE,
+      headers: { Accept: "application/json" },
+    });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "No se pudieron cargar las métricas");
     return data;
