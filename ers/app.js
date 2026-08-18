@@ -316,7 +316,7 @@ class GscModule {
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean)
-      .slice(0, 12)
+      .slice(0, 40)
       .map((line) => {
         const [url, ...rest] = line.split("|");
         return { url: url.trim(), label: rest.join("|").trim() };
@@ -354,6 +354,13 @@ class GscModule {
 
   static pos(n) {
     return (n || 0).toFixed(1);
+  }
+
+  static monthLabel(value) {
+    const [year, month] = String(value || "").split("-");
+    if (!year || !month) return value || "—";
+    const date = new Date(Number(year), Number(month) - 1, 1);
+    return new Intl.DateTimeFormat("es-CL", { month: "short", year: "numeric" }).format(date);
   }
 
   static deltaLabel(value, { invert = false, percent = false, position = false } = {}) {
@@ -494,9 +501,20 @@ class CRMController {
       seoSites: document.getElementById("seoSites"),
       gscConfigForm: document.getElementById("gscConfigForm"),
       gscSiteUrl: document.getElementById("gscSiteUrl"),
+      gscSitemapUrl: document.getElementById("gscSitemapUrl"),
       gscPages: document.getElementById("gscPages"),
       btnGscRefresh: document.getElementById("btnGscRefresh"),
+      seoDiscovery: document.getElementById("seoDiscovery"),
       seoKpis: document.getElementById("seoKpis"),
+      seoInsightsCard: document.getElementById("seoInsightsCard"),
+      seoInsights: document.getElementById("seoInsights"),
+      seoPropertiesCard: document.getElementById("seoPropertiesCard"),
+      seoProperties: document.getElementById("seoProperties"),
+      seoSitemapsCard: document.getElementById("seoSitemapsCard"),
+      seoSitemaps: document.getElementById("seoSitemaps"),
+      seoTrendCard: document.getElementById("seoTrendCard"),
+      seoTrendWeekdays: document.getElementById("seoTrendWeekdays"),
+      seoTrendMonths: document.getElementById("seoTrendMonths"),
       seoTableWrap: document.getElementById("seoTableWrap"),
       seoTableBody: document.getElementById("seoTableBody"),
       seoEmpty: document.getElementById("seoEmpty"),
@@ -882,15 +900,19 @@ class CRMController {
   async handleGscConfig(e) {
     e.preventDefault();
     const pages = GscModule.parsePages(this.dom.gscPages.value);
-    if (pages.length === 0) {
-      this.showToast("Agrega al menos una URL https");
+    const siteUrl = this.dom.gscSiteUrl.value.trim();
+    const sitemapUrl = this.dom.gscSitemapUrl.value.trim();
+    if (!siteUrl && !sitemapUrl && pages.length === 0) {
+      this.showToast("Indica propiedad, sitemap o al menos una URL");
       return;
     }
     try {
       await GscModule.saveConfig({
-        siteUrl: this.dom.gscSiteUrl.value.trim(),
+        siteUrl,
+        sitemapUrl,
         pages,
       });
+      this.gscPagesDirty = false;
       this.showToast("Configuración GSC guardada");
       await this.loadGsc(true);
     } catch (err) {
@@ -903,6 +925,120 @@ class CRMController {
     const { text, cls } = GscModule.deltaLabel(value, opts);
     el.textContent = text;
     el.className = cls;
+  }
+
+  renderSeoList(target, items, mapItem) {
+    if (!target) return;
+    target.innerHTML = "";
+    const fragment = document.createDocumentFragment();
+    items.forEach((item) => {
+      const row = mapItem(item);
+      if (!row) return;
+      const li = document.createElement("li");
+      const copy = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = row.title;
+      copy.appendChild(title);
+      if (row.detail) {
+        const detail = document.createElement("small");
+        detail.textContent = row.detail;
+        copy.appendChild(detail);
+      }
+      li.appendChild(copy);
+      if (row.meta) {
+        const meta = document.createElement("em");
+        meta.textContent = row.meta;
+        li.appendChild(meta);
+      }
+      fragment.appendChild(li);
+    });
+    target.appendChild(fragment);
+  }
+
+  renderSeoInsights(data) {
+    const items = Array.isArray(data.insights) ? data.insights : [];
+    this.dom.seoInsightsCard.hidden = items.length === 0;
+    if (items.length === 0) return;
+    this.renderSeoList(this.dom.seoInsights, items, (item) => ({
+      title: item.title || "Sin titulo",
+      detail: item.detail || "",
+      meta: item.meta || "",
+    }));
+  }
+
+  renderSeoProperties(data) {
+    const items = Array.isArray(data.siteDetails) ? data.siteDetails.filter((item) => item?.siteUrl) : [];
+    this.dom.seoPropertiesCard.hidden = items.length === 0;
+    if (items.length === 0) return;
+    this.renderSeoList(this.dom.seoProperties, items, (item) => ({
+      title: item.siteUrl,
+      detail: item.permission ? `Permiso ${item.permission}` : "Propiedad visible",
+      meta: item.permission?.includes("siteOwner") ? "Owner" : item.permission || "",
+    }));
+  }
+
+  renderSeoSitemaps(data) {
+    const apiItems = Array.isArray(data.sitemaps?.items) ? data.sitemaps.items : [];
+    const discovery = data.discovery || {};
+    const rows = [...apiItems];
+    if (!rows.length && discovery.source) {
+      rows.push({
+        path: discovery.source,
+        lastSubmitted: "",
+        warnings: 0,
+        errors: 0,
+        isPending: false,
+        isSitemapsIndex: false,
+      });
+    }
+    this.dom.seoSitemapsCard.hidden = rows.length === 0 && !data.sitemaps?.error;
+    if (rows.length === 0 && !data.sitemaps?.error) return;
+    this.renderSeoList(this.dom.seoSitemaps, rows, (item) => ({
+      title: item.path || "Sitemap",
+      detail: item.lastSubmitted
+        ? `Ultimo submit ${String(item.lastSubmitted).slice(0, 10)}`
+        : (discovery.source && item.path === discovery.source ? "Detectado por lectura directa" : "Sin fecha reportada"),
+      meta: item.isPending
+        ? "Pendiente"
+        : `${item.errors || 0} err / ${item.warnings || 0} warn`,
+    }));
+    if (data.sitemaps?.error) {
+      const li = document.createElement("li");
+      const copy = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = "Estado API";
+      const detail = document.createElement("small");
+      detail.textContent = data.sitemaps.error;
+      copy.append(title, detail);
+      li.appendChild(copy);
+      this.dom.seoSitemaps.appendChild(li);
+    }
+  }
+
+  renderSeoTrend(data) {
+    const weekdays = Array.isArray(data.trend?.weekdays) ? data.trend.weekdays : [];
+    const months = Array.isArray(data.trend?.months) ? data.trend.months : [];
+    this.dom.seoTrendCard.hidden = weekdays.length === 0 && months.length === 0;
+    if (!this.dom.seoTrendCard.hidden) {
+      this.renderSeoList(this.dom.seoTrendWeekdays, weekdays.slice(0, 7), (item) => ({
+        title: item.label || "—",
+        detail: `${GscModule.fmt(item.clicks)} clics prom.`,
+        meta: `${GscModule.fmt(item.impressions)} imp.`,
+      }));
+      this.renderSeoList(this.dom.seoTrendMonths, months, (item) => ({
+        title: GscModule.monthLabel(item.label),
+        detail: `${GscModule.fmt(item.clicks)} clics`,
+        meta: `${GscModule.fmt(item.impressions)} imp.`,
+      }));
+    }
+  }
+
+  resetSeoPremium() {
+    this.dom.seoInsightsCard.hidden = true;
+    this.dom.seoPropertiesCard.hidden = true;
+    this.dom.seoSitemapsCard.hidden = true;
+    this.dom.seoTrendCard.hidden = true;
+    this.dom.seoDiscovery.hidden = true;
   }
 
   renderGsc(data) {
@@ -937,10 +1073,33 @@ class CRMController {
     if (data.siteUrl && !this.dom.gscSiteUrl.value && !GscModule.isAgencyUrl(data.siteUrl)) {
       this.dom.gscSiteUrl.value = data.siteUrl;
     }
+    if (data.sitemapUrl && !this.dom.gscSitemapUrl.value && !GscModule.isAgencyUrl(data.sitemapUrl)) {
+      this.dom.gscSitemapUrl.value = data.sitemapUrl;
+    }
     if (GscModule.isAgencyUrl(this.dom.gscSiteUrl.value)) this.dom.gscSiteUrl.value = "";
     if (Array.isArray(data.pages) && !data.totals && !this.gscPagesDirty) {
       this.dom.gscPages.value = GscModule.serializePages(data.pages);
     }
+
+    if (this.dom.seoDiscovery) {
+      const discovery = data.discovery || {};
+      const bits = [];
+      if (discovery.source) bits.push(`Sitemap fuente: ${discovery.source}`);
+      if (discovery.combinedCount) {
+        bits.push(`${discovery.combinedCount} URLs en termometro (${discovery.detectedCount || 0} auto + ${discovery.manualCount || 0} manual)`);
+      }
+      if (discovery.indexSummary?.checked) {
+        bits.push(`Indexacion muestreada: ${discovery.indexSummary.indexed}/${discovery.indexSummary.checked} indexadas`);
+      }
+      if (discovery.error) bits.push(`Sitemap: ${discovery.error}`);
+      this.dom.seoDiscovery.hidden = bits.length === 0;
+      this.dom.seoDiscovery.textContent = bits.join(" · ");
+    }
+
+    this.renderSeoInsights(data);
+    this.renderSeoProperties(data);
+    this.renderSeoSitemaps(data);
+    this.renderSeoTrend(data);
 
     const metricPages = (data.pages || []).filter((row) => row && (row.current || row.error));
     const totals = data.totals && typeof data.totals === "object"
@@ -979,12 +1138,36 @@ class CRMController {
       url.className = "seo-delta";
       url.textContent = String(row.url || "").replace(/^https?:\/\//, "");
       name.append(label, url);
+      if (row.thermometer?.label) {
+        const thermo = document.createElement("span");
+        thermo.className = `seo-tag ${row.thermometer.tone ? `is-${row.thermometer.tone}` : ""}`.trim();
+        thermo.textContent = row.thermometer.label;
+        name.appendChild(thermo);
+      }
+      if (row.property) {
+        const property = document.createElement("span");
+        property.className = "seo-tag";
+        property.textContent = row.property;
+        name.appendChild(property);
+      }
       if (row.error) {
         const err = document.createElement("div");
         err.className = "seo-row-error";
         err.textContent = row.error;
         name.appendChild(err);
         tr.classList.add("is-blocked");
+      } else if (Array.isArray(row.queries) && row.queries.length) {
+        const queries = document.createElement("div");
+        queries.className = "seo-query-list";
+        row.queries.slice(0, 3).forEach((item) => {
+          const chip = document.createElement("span");
+          chip.className = "seo-query";
+          const q = document.createElement("strong");
+          q.textContent = item.query;
+          chip.append(q, document.createTextNode(` ${GscModule.fmt(item.clicks)}c`));
+          queries.appendChild(chip);
+        });
+        name.appendChild(queries);
       }
 
       const current = { ...GscModule.emptyMetrics(), ...(row.current || {}) };
@@ -1007,12 +1190,31 @@ class CRMController {
         return td;
       };
 
+      const state = document.createElement("td");
+      if (row.error) {
+        state.textContent = "—";
+      } else if (row.indexStatus?.label) {
+        const badge = document.createElement("span");
+        badge.className = `seo-index ${row.indexStatus.tone ? `is-${row.indexStatus.tone}` : ""}`.trim();
+        badge.textContent = row.indexStatus.label;
+        state.appendChild(badge);
+        if (row.indexStatus.coverage && row.indexStatus.coverage !== row.indexStatus.label) {
+          const note = document.createElement("span");
+          note.className = "seo-delta";
+          note.textContent = row.indexStatus.coverage;
+          state.appendChild(note);
+        }
+      } else {
+        state.textContent = "Pendiente";
+      }
+
       tr.append(
         name,
         cell("clicks", {}),
         cell("impressions", {}),
         cell("ctr", { percent: true, pct: true }),
-        cell("position", { invert: true, position: true, pos: true })
+        cell("position", { invert: true, position: true, pos: true }),
+        state
       );
       fragment.appendChild(tr);
     });
@@ -1024,6 +1226,7 @@ class CRMController {
       const status = await GscModule.status();
       this.renderGsc(status);
       if (!status.connected) {
+        this.resetSeoPremium();
         this.dom.seoKpis.hidden = true;
         this.dom.seoTableWrap.hidden = true;
         this.dom.seoEmpty.hidden = false;
@@ -1034,6 +1237,7 @@ class CRMController {
       const data = await GscModule.query(fresh);
       this.renderGsc({ ...status, ...data, connected: true });
     } catch (err) {
+      this.resetSeoPremium();
       this.dom.seoEmpty.hidden = false;
       this.dom.seoEmpty.textContent = err.message;
       this.dom.seoKpis.hidden = true;

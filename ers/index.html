@@ -139,7 +139,7 @@
           <ol class="seo-setup__steps">
             <li>Sube el JSON de Google Cloud a <code>ers/data/gsc-service-account.json</code> (FTP / administrador de archivos). No va a GitHub.</li>
             <li>En Search Console → Usuarios: agrega el bot con permiso <strong>Completo</strong> (Restringido no sirve para la API) en cada sitio de cliente.</li>
-            <li>Pega las URLs de los clientes (máx. 12). Deja la propiedad vacía.</li>
+            <li>Deja que el sistema descubra las URLs desde el sitemap. Solo pega URLs manuales si quieres forzar páginas críticas.</li>
           </ol>
 
           <form class="seo-form" id="gscConfigForm" autocomplete="off">
@@ -148,13 +148,18 @@
               <input type="text" name="siteUrl" id="gscSiteUrl" placeholder="sc-domain:abogadoslegaltamaya.cl" />
             </label>
             <label class="field">
-              <span>Páginas a monitorear <em class="field__optional">(una por línea · URL | etiqueta)</em></span>
+              <span>Sitemap XML <em class="field__optional">(opcional; si lo omites se intenta detectar solo)</em></span>
+              <input type="url" name="sitemapUrl" id="gscSitemapUrl" placeholder="https://abogadoslegaltamaya.cl/sitemap_index.xml" />
+            </label>
+            <label class="field">
+              <span>URLs manuales <em class="field__optional">(opcional · una por línea · URL | etiqueta)</em></span>
               <textarea name="pages" id="gscPages" rows="7" placeholder="https://abogadoslegaltamaya.cl/ | Legal Tamaya"></textarea>
             </label>
             <div class="seo-form__actions">
               <button type="submit" class="btn btn--neon">Guardar y cargar métricas</button>
             </div>
           </form>
+          <p class="seo-discovery" id="seoDiscovery" hidden></p>
         </div>
 
         <div class="seo-kpis" id="seoKpis" hidden>
@@ -180,6 +185,49 @@
           </article>
         </div>
 
+        <div class="seo-grid">
+          <article class="seo-card" id="seoInsightsCard" hidden>
+            <div class="seo-card__head">
+              <h3>Oportunidades</h3>
+              <span>Qué empujar primero</span>
+            </div>
+            <ul class="seo-list" id="seoInsights"></ul>
+          </article>
+
+          <article class="seo-card" id="seoPropertiesCard" hidden>
+            <div class="seo-card__head">
+              <h3>Propiedades</h3>
+              <span>Lo que el bot realmente ve</span>
+            </div>
+            <ul class="seo-list" id="seoProperties"></ul>
+          </article>
+
+          <article class="seo-card" id="seoSitemapsCard" hidden>
+            <div class="seo-card__head">
+              <h3>Sitemaps</h3>
+              <span>Fuente y estado</span>
+            </div>
+            <ul class="seo-list" id="seoSitemaps"></ul>
+          </article>
+
+          <article class="seo-card seo-card--wide" id="seoTrendCard" hidden>
+            <div class="seo-card__head">
+              <h3>Tendencias</h3>
+              <span>Días fuertes y lectura mensual</span>
+            </div>
+            <div class="seo-trend-grid">
+              <div>
+                <h4>Día de semana</h4>
+                <ul class="seo-list" id="seoTrendWeekdays"></ul>
+              </div>
+              <div>
+                <h4>Mes</h4>
+                <ul class="seo-list" id="seoTrendMonths"></ul>
+              </div>
+            </div>
+          </article>
+        </div>
+
         <div class="seo-table-wrap" id="seoTableWrap" hidden>
           <table class="seo-table">
             <thead>
@@ -189,6 +237,7 @@
                 <th>Imp.</th>
                 <th>CTR</th>
                 <th>Pos.</th>
+                <th>Estado</th>
               </tr>
             </thead>
             <tbody id="seoTableBody"></tbody>
