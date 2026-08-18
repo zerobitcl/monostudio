@@ -922,24 +922,27 @@ class CRMController {
       this.dom.gscPages.value = GscModule.serializePages(data.pages);
     }
 
-    const hasRows = Array.isArray(data.pages) && data.pages.some((row) => row.current || row.error);
+    const hasRows = Array.isArray(data.pages) && data.pages.length > 0;
     this.dom.seoKpis.hidden = !data.totals;
     this.dom.seoTableWrap.hidden = !hasRows;
-    this.dom.seoEmpty.hidden = true;
+    this.dom.seoEmpty.hidden = !data.error;
+    if (data.error) this.dom.seoEmpty.textContent = data.error;
 
-    if (!data.totals) return;
-
-    if (data.range) {
-      this.dom.seoRange.textContent = `${data.range.start} → ${data.range.end}`;
+    if (data.totals) {
+      if (data.range) {
+        this.dom.seoRange.textContent = `${data.range.start} → ${data.range.end}`;
+      }
+      this.dom.seoClicks.textContent = GscModule.fmt(data.totals.clicks);
+      this.dom.seoImpressions.textContent = GscModule.fmt(data.totals.impressions);
+      this.dom.seoCtr.textContent = GscModule.pct(data.totals.ctr);
+      this.dom.seoPosition.textContent = GscModule.pos(data.totals.position);
+      this.applyGscDelta(this.dom.seoClicksDelta, data.totalsDelta?.clicks);
+      this.applyGscDelta(this.dom.seoImpressionsDelta, data.totalsDelta?.impressions);
+      this.applyGscDelta(this.dom.seoCtrDelta, data.totalsDelta?.ctr, { percent: true });
+      this.applyGscDelta(this.dom.seoPositionDelta, data.totalsDelta?.position, { invert: true, position: true });
     }
-    this.dom.seoClicks.textContent = GscModule.fmt(data.totals.clicks);
-    this.dom.seoImpressions.textContent = GscModule.fmt(data.totals.impressions);
-    this.dom.seoCtr.textContent = GscModule.pct(data.totals.ctr);
-    this.dom.seoPosition.textContent = GscModule.pos(data.totals.position);
-    this.applyGscDelta(this.dom.seoClicksDelta, data.totalsDelta?.clicks);
-    this.applyGscDelta(this.dom.seoImpressionsDelta, data.totalsDelta?.impressions);
-    this.applyGscDelta(this.dom.seoCtrDelta, data.totalsDelta?.ctr, { percent: true });
-    this.applyGscDelta(this.dom.seoPositionDelta, data.totalsDelta?.position, { invert: true, position: true });
+
+    if (!hasRows) return;
 
     this.dom.seoTableBody.innerHTML = "";
     const fragment = document.createDocumentFragment();
@@ -962,6 +965,10 @@ class CRMController {
 
       const cell = (metric, opts) => {
         const td = document.createElement("td");
+        if (row.error) {
+          td.textContent = "—";
+          return td;
+        }
         td.textContent = opts.pct
           ? GscModule.pct(row.current[metric])
           : opts.pos

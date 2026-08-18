@@ -371,18 +371,30 @@ function gscMatchProperty(string $pageUrl, array $sites): string
 function gscPropertyCandidates(string $pageUrl, array $sites): array
 {
     $host = gscHost($pageUrl);
-    $matched = gscMatchProperty($pageUrl, $sites);
     $candidates = [];
-    if ($matched !== '') {
-        $candidates[] = $matched;
-    }
+
+    // sc-domain primero: es el formato más común en propiedades de dominio.
     if ($host !== '') {
         $candidates[] = 'sc-domain:' . $host;
+    }
+
+    foreach ($sites as $entry) {
+        $site = (string) ($entry['siteUrl'] ?? '');
+        if ($site === '') {
+            continue;
+        }
+        if (gscHost($site) === $host) {
+            $candidates[] = $site;
+        }
+    }
+
+    if ($host !== '') {
         $candidates[] = 'https://' . $host . '/';
         $candidates[] = 'https://www.' . $host . '/';
         $candidates[] = 'http://' . $host . '/';
         $candidates[] = 'http://www.' . $host . '/';
     }
+
     $unique = [];
     foreach ($candidates as $item) {
         if ($item !== '' && !in_array($item, $unique, true)) {
@@ -392,16 +404,43 @@ function gscPropertyCandidates(string $pageUrl, array $sites): array
     return $unique;
 }
 
-function gscProbeProperty(string $token, string $property): bool
+function gscProbeProperty(string $token, string $property): array
 {
     try {
         $end = (new DateTimeImmutable('today', new DateTimeZone('UTC')))->modify('-3 days');
         $start = $end->modify('-1 day');
         gscQueryAnalytics($token, $property, $start->format('Y-m-d'), $end->format('Y-m-d'));
-        return true;
+        return ['ok' => true, 'error' => ''];
     } catch (Throwable $e) {
-        return false;
+        return ['ok' => false, 'error' => $e->getMessage()];
     }
+}
+
+function gscResolveProperty(string $token, string $pageUrl, array $sites): array
+{
+    $host = gscHost($pageUrl);
+    $lastError = '';
+    foreach (gscPropertyCandidates($pageUrl, $sites) as $candidate) {
+        $probe = gscProbeProperty($token, $candidate);
+        if ($probe['ok']) {
+            return ['property' => $candidate, 'error' => ''];
+        }
+        $lastError = $probe['error'] ?: $lastError;
+    }
+
+    $listed = array_values(array_filter(array_map(
+        static fn ($e) => (string) ($e['siteUrl'] ?? ''),
+        $sites
+    ), static fn ($s) => gscHost($s) === $host));
+
+    $hint = $listed !== []
+        ? ' Propiedades que el bot ve: ' . implode(', ', $listed) . '.'
+        : ' El bot no ve ninguna propiedad de ' . $host . ' — revisa que el email del bot esté en Usuarios de Search Console de ese sitio.';
+
+    return [
+        'property' => '',
+        'error' => ($lastError ?: 'Sin acceso a ' . $host) . $hint,
+    ];
 }
 
 function gscIndexRows(array $payload): array
@@ -449,14 +488,6 @@ $cleaned = [
     'siteUrl' => gscSanitizeSiteUrl((string) ($config['siteUrl'] ?? '')),
     'pages' => gscSanitizePages($config['pages'] ?? []),
 ];
-if (
-    $cleaned['pages'] === []
-    && $cleaned['siteUrl'] !== ''
-    && preg_match('#^https?://#i', $cleaned['siteUrl'])
-) {
-    $origin = rtrim($cleaned['siteUrl'], '/') . '/';
-    $cleaned['pages'] = [['url' => $origin, 'label' => '']];
-}
 if ($cleaned['siteUrl'] !== (string) ($config['siteUrl'] ?? '') || $cleaned['pages'] !== ($config['pages'] ?? [])) {
     gscWriteJson($configFile, $cleaned);
     @unlink($cacheFile);
@@ -472,9 +503,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === '' || $action === 'stat
         try {
             $token = gscAccessToken($serviceAccount, $tokenFile);
             $sites = array_values(array_filter(array_map(
-                static fn ($e) => (string) ($e['siteUrl'] ?? ''),
+                static fn ($e) => [
+                    'siteUrl' => (string) ($e['siteUrl'] ?? ''),
+                    'permission' => (string) ($e['permissionLevel'] ?? ''),
+                ],
                 gscListSites($token)
-            )));
+            ), static fn ($e) => $e['siteUrl'] !== ''));
         } catch (Throwable $e) {
             $sitesError = $e->getMessage();
         }
@@ -486,7 +520,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === '' || $action === 'stat
         'keyFile' => (string) ($serviceAccount['_path'] ?? 'gsc-service-account.json'),
         'siteUrl' => (string) ($config['siteUrl'] ?? ''),
         'pages' => gscSanitizePages($config['pages'] ?? []),
-        'sites' => $sites,
+        'sites' => array_column($sites, 'siteUrl'),
+        'siteDetails' => $sites,
         'sitesError' => $sitesError,
     ]);
 }
@@ -539,8 +574,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
         }
 
         $token = gscAccessToken($serviceAccount, $tokenFile);
-        $botEmail = (string) ($serviceAccount['client_email'] ?? 'la cuenta de servicio');
-        $sites = gscListSites($token);
+        $sites = [];
+        try {
+            $sites = gscListSites($token);
+        } catch (Throwable $e) {
+            // Seguimos: gscResolveProperty prueba candidatos aunque list sites falle.
+        }
         $resolvedByHost = [];
 
         $end = (new DateTimeImmutable('today', new DateTimeZone('UTC')))->modify('-3 days');
@@ -558,19 +597,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
         foreach ($pages as $page) {
             $host = gscHost($page['url']);
             if (!array_key_exists($host, $resolvedByHost)) {
-                $resolvedByHost[$host] = '';
-                foreach (gscPropertyCandidates($page['url'], $sites) as $candidate) {
-                    if (gscProbeProperty($token, $candidate)) {
-                        $resolvedByHost[$host] = $candidate;
-                        break;
-                    }
-                }
+                $resolvedByHost[$host] = gscResolveProperty($token, $page['url'], $sites);
             }
-            $property = $resolvedByHost[$host] ?? '';
+            $resolved = $resolvedByHost[$host];
+            $property = (string) ($resolved['property'] ?? '');
             if ($property === '') {
                 $unmatched[] = [
                     'page' => $page,
-                    'error' => "El bot no puede leer {$host}. En Search Console de ese sitio cambia el permiso del bot a Completo (no Restringido) y espera 1–2 min. La propiedad real suele ser sc-domain:{$host}.",
+                    'error' => (string) ($resolved['error'] ?? 'Sin acceso'),
                 ];
                 continue;
             }
@@ -625,7 +659,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
                 continue;
             }
             $seen[$key] = true;
-            $property = gscMatchProperty($page['url'], $sites);
+            $host = gscHost($page['url']);
+            $property = (string) ($resolvedByHost[$host]['property'] ?? '');
             $error = null;
             foreach ($unmatched as $miss) {
                 if ($miss['page']['url'] === $page['url']) {
@@ -647,6 +682,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
                 'previous' => $prev,
                 'delta' => gscDelta($now, $prev),
             ];
+        }
+
+        if ($groups === [] && $unmatched !== []) {
+            gscJson([
+                'connected' => true,
+                'error' => $unmatched[0]['error'],
+                'sites' => array_values(array_map(static fn ($e) => $e['siteUrl'] ?? '', $sites)),
+                'pages' => array_map(static fn ($miss) => [
+                    'url' => $miss['page']['url'],
+                    'label' => $miss['page']['label'] ?: $miss['page']['url'],
+                    'error' => $miss['error'],
+                    'current' => gscMetricRow(null),
+                    'previous' => gscMetricRow(null),
+                    'delta' => gscDelta(gscMetricRow(null), gscMetricRow(null)),
+                ], $unmatched),
+            ], 200);
         }
 
         $payload = [
