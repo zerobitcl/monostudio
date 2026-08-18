@@ -19,7 +19,7 @@ $keyFilePreferred = $dataDir . '/gsc-service-account.json';
 $cacheFile = $dataDir . '/gsc-cache.json';
 $tokenFile = $dataDir . '/gsc-token.json';
 
-const GSC_SCOPE = 'https://www.googleapis.com/auth/webmasters.readonly';
+const GSC_SCOPE = 'https://www.googleapis.com/auth/webmasters';
 const GSC_CACHE_TTL = 900;
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
@@ -80,6 +80,8 @@ function gscHttp(string $method, string $url, ?array $body = null, array $header
         ]);
         if ($payload !== null) {
             curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+        } elseif ($method === 'PUT') {
+            curl_setopt($ch, CURLOPT_POSTFIELDS, '');
         }
         $raw = curl_exec($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -187,11 +189,15 @@ function gscSanitizeSiteUrl(string $siteUrl): string
 {
     $siteUrl = trim($siteUrl);
     if (preg_match('#^sc-domain:[a-z0-9.-]+$#i', $siteUrl)) {
-        return gscIsAgencyHost($siteUrl) ? '' : $siteUrl;
+        return gscIsAgencyHost($siteUrl) ? '' : strtolower($siteUrl);
     }
     if (preg_match('#^https?://#i', $siteUrl)) {
-        $clean = function_exists('mb_substr') ? mb_substr($siteUrl, 0, 300) : substr($siteUrl, 0, 300);
-        return gscIsAgencyHost($clean) ? '' : $clean;
+        $host = gscHost($siteUrl);
+        if ($host === '' || $host === 'monostudio.cl') {
+            return '';
+        }
+        // Prefijo URL y propiedad de dominio son cosas distintas en GSC.
+        return 'sc-domain:' . $host;
     }
     return '';
 }
@@ -238,7 +244,8 @@ function gscAccessToken(array $sa, string $tokenFile): string
     $cached = gscReadJson($tokenFile, []);
     $token = (string) ($cached['access_token'] ?? '');
     $exp = (int) ($cached['expires_at'] ?? 0);
-    if ($token !== '' && $exp > time() + 60) {
+    $cachedScope = (string) ($cached['scope'] ?? '');
+    if ($token !== '' && $exp > time() + 60 && $cachedScope === GSC_SCOPE) {
         return $token;
     }
 
@@ -289,6 +296,7 @@ function gscAccessToken(array $sa, string $tokenFile): string
         'access_token' => $access,
         'expires_at' => time() + (int) ($res['data']['expires_in'] ?? 3500),
         'email' => $email,
+        'scope' => GSC_SCOPE,
     ]);
 
     return $access;
@@ -323,6 +331,13 @@ function gscListSites(string $token): array
     }
     $entries = $res['data']['siteEntry'] ?? [];
     return is_array($entries) ? $entries : [];
+}
+
+function gscAddSite(string $token, string $property): bool
+{
+    $endpoint = 'https://www.googleapis.com/webmasters/v3/sites/' . rawurlencode($property);
+    $res = gscHttp('PUT', $endpoint, null, ['Authorization: Bearer ' . $token]);
+    return $res['ok'] || (int) ($res['status'] ?? 0) === 204;
 }
 
 function gscHost(string $url): string
@@ -372,27 +387,16 @@ function gscPropertyCandidates(string $pageUrl, array $sites): array
 {
     $host = gscHost($pageUrl);
     $candidates = [];
-
-    // sc-domain primero: es el formato más común en propiedades de dominio.
     if ($host !== '') {
         $candidates[] = 'sc-domain:' . $host;
     }
 
     foreach ($sites as $entry) {
         $site = (string) ($entry['siteUrl'] ?? '');
-        if ($site === '') {
+        if ($site === '' || gscHost($site) !== $host) {
             continue;
         }
-        if (gscHost($site) === $host) {
-            $candidates[] = $site;
-        }
-    }
-
-    if ($host !== '') {
-        $candidates[] = 'https://' . $host . '/';
-        $candidates[] = 'https://www.' . $host . '/';
-        $candidates[] = 'http://' . $host . '/';
-        $candidates[] = 'http://www.' . $host . '/';
+        $candidates[] = $site;
     }
 
     $unique = [];
@@ -416,9 +420,27 @@ function gscProbeProperty(string $token, string $property): array
     }
 }
 
-function gscResolveProperty(string $token, string $pageUrl, array $sites): array
+function gscHumanizeError(string $message, string $host): string
+{
+    if (stripos($message, 'sufficient permission') !== false) {
+        return "Google rechazó la propiedad URL https://{$host}/. En Search Console el bot debe estar en la propiedad de dominio y la API consulta sc-domain:{$host}. Quita y vuelve a agregar gsc-reader-bot con permiso Completo en esa propiedad de dominio.";
+    }
+    return $message;
+}
+
+function gscResolveProperty(string $token, string $pageUrl, array &$sites): array
 {
     $host = gscHost($pageUrl);
+    $domainProp = $host !== '' ? 'sc-domain:' . $host : '';
+    if ($domainProp !== '') {
+        gscAddSite($token, $domainProp);
+        try {
+            $sites = gscListSites($token);
+        } catch (Throwable $e) {
+            // seguimos con la lista previa
+        }
+    }
+
     $lastError = '';
     foreach (gscPropertyCandidates($pageUrl, $sites) as $candidate) {
         $probe = gscProbeProperty($token, $candidate);
@@ -434,12 +456,12 @@ function gscResolveProperty(string $token, string $pageUrl, array $sites): array
     ), static fn ($s) => gscHost($s) === $host));
 
     $hint = $listed !== []
-        ? ' Propiedades que el bot ve: ' . implode(', ', $listed) . '.'
-        : ' El bot no ve ninguna propiedad de ' . $host . ' — revisa que el email del bot esté en Usuarios de Search Console de ese sitio.';
+        ? ' El bot ve: ' . implode(', ', $listed) . '.'
+        : ' El bot no ve sc-domain:' . $host . ' ni ninguna URL de ese host.';
 
     return [
         'property' => '',
-        'error' => ($lastError ?: 'Sin acceso a ' . $host) . $hint,
+        'error' => gscHumanizeError($lastError ?: 'Sin acceso a ' . $host, $host) . $hint,
     ];
 }
 
@@ -566,6 +588,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
         if (
             !$fresh
             && isset($cached['fetchedAt'])
+            && empty($cached['error'])
             && (time() - (int) $cached['fetchedAt']) < GSC_CACHE_TTL
             && ($cached['pageSig'] ?? '') === $pageSig
         ) {
