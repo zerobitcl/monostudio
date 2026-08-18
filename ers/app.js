@@ -333,6 +333,10 @@ class GscModule {
       .join("\n");
   }
 
+  static emptyMetrics() {
+    return { clicks: 0, impressions: 0, ctr: 0, position: 0 };
+  }
+
   static fmt(n) {
     return new Intl.NumberFormat("es-CL").format(Math.round(n || 0));
   }
@@ -882,12 +886,14 @@ class CRMController {
   }
 
   applyGscDelta(el, value, opts) {
+    if (!el) return;
     const { text, cls } = GscModule.deltaLabel(value, opts);
     el.textContent = text;
     el.className = cls;
   }
 
   renderGsc(data) {
+    if (!data) return;
     if (this.dom.seoSaStatus) {
       if (data.connected && data.serviceEmail) {
         this.dom.seoSaStatus.textContent = `Cuenta de servicio lista · ${data.serviceEmail}`;
@@ -922,38 +928,42 @@ class CRMController {
       this.dom.gscPages.value = GscModule.serializePages(data.pages);
     }
 
-    const hasRows = Array.isArray(data.pages) && data.pages.length > 0;
-    this.dom.seoKpis.hidden = !data.totals;
-    this.dom.seoTableWrap.hidden = !hasRows;
+    const metricPages = (data.pages || []).filter((row) => row && (row.current || row.error));
+    const totals = data.totals && typeof data.totals === "object"
+      ? { ...GscModule.emptyMetrics(), ...data.totals }
+      : null;
+
+    this.dom.seoKpis.hidden = !totals;
+    this.dom.seoTableWrap.hidden = metricPages.length === 0;
     this.dom.seoEmpty.hidden = !data.error;
     if (data.error) this.dom.seoEmpty.textContent = data.error;
 
-    if (data.totals) {
+    if (totals) {
       if (data.range) {
         this.dom.seoRange.textContent = `${data.range.start} → ${data.range.end}`;
       }
-      this.dom.seoClicks.textContent = GscModule.fmt(data.totals.clicks);
-      this.dom.seoImpressions.textContent = GscModule.fmt(data.totals.impressions);
-      this.dom.seoCtr.textContent = GscModule.pct(data.totals.ctr);
-      this.dom.seoPosition.textContent = GscModule.pos(data.totals.position);
+      this.dom.seoClicks.textContent = GscModule.fmt(totals.clicks);
+      this.dom.seoImpressions.textContent = GscModule.fmt(totals.impressions);
+      this.dom.seoCtr.textContent = GscModule.pct(totals.ctr);
+      this.dom.seoPosition.textContent = GscModule.pos(totals.position);
       this.applyGscDelta(this.dom.seoClicksDelta, data.totalsDelta?.clicks);
       this.applyGscDelta(this.dom.seoImpressionsDelta, data.totalsDelta?.impressions);
       this.applyGscDelta(this.dom.seoCtrDelta, data.totalsDelta?.ctr, { percent: true });
       this.applyGscDelta(this.dom.seoPositionDelta, data.totalsDelta?.position, { invert: true, position: true });
     }
 
-    if (!hasRows) return;
+    if (metricPages.length === 0) return;
 
     this.dom.seoTableBody.innerHTML = "";
     const fragment = document.createDocumentFragment();
-    (data.pages || []).forEach((row) => {
+    metricPages.forEach((row) => {
       const tr = document.createElement("tr");
       const name = document.createElement("td");
       const label = document.createElement("strong");
       label.textContent = row.label || row.url;
       const url = document.createElement("div");
       url.className = "seo-delta";
-      url.textContent = row.url.replace(/^https?:\/\//, "");
+      url.textContent = String(row.url || "").replace(/^https?:\/\//, "");
       name.append(label, url);
       if (row.error) {
         const err = document.createElement("div");
@@ -963,6 +973,7 @@ class CRMController {
         tr.classList.add("is-blocked");
       }
 
+      const current = { ...GscModule.emptyMetrics(), ...(row.current || {}) };
       const cell = (metric, opts) => {
         const td = document.createElement("td");
         if (row.error) {
@@ -970,10 +981,10 @@ class CRMController {
           return td;
         }
         td.textContent = opts.pct
-          ? GscModule.pct(row.current[metric])
+          ? GscModule.pct(current[metric])
           : opts.pos
-            ? GscModule.pos(row.current[metric])
-            : GscModule.fmt(row.current[metric]);
+            ? GscModule.pos(current[metric])
+            : GscModule.fmt(current[metric]);
         const delta = document.createElement("span");
         const d = GscModule.deltaLabel(row.delta?.[metric], opts);
         delta.className = `seo-delta ${d.cls}`;
