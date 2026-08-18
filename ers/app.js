@@ -523,6 +523,10 @@ class CRMController {
       seoImpressions: document.getElementById("seoImpressions"),
       seoCtr: document.getElementById("seoCtr"),
       seoPosition: document.getElementById("seoPosition"),
+      seoSummaryCard: document.getElementById("seoSummaryCard"),
+      seoSummaryTitle: document.getElementById("seoSummaryTitle"),
+      seoSummaryDetail: document.getElementById("seoSummaryDetail"),
+      seoSummaryMeta: document.getElementById("seoSummaryMeta"),
       seoClicksDelta: document.getElementById("seoClicksDelta"),
       seoImpressionsDelta: document.getElementById("seoImpressionsDelta"),
       seoCtrDelta: document.getElementById("seoCtrDelta"),
@@ -927,6 +931,23 @@ class CRMController {
     el.className = cls;
   }
 
+  async applyGscPreset({ siteUrl, sitemapUrl }) {
+    if (siteUrl) this.dom.gscSiteUrl.value = siteUrl;
+    if (sitemapUrl) this.dom.gscSitemapUrl.value = sitemapUrl;
+    try {
+      await GscModule.saveConfig({
+        siteUrl: this.dom.gscSiteUrl.value.trim(),
+        sitemapUrl: this.dom.gscSitemapUrl.value.trim(),
+        pages: GscModule.parsePages(this.dom.gscPages.value),
+      });
+      this.gscPagesDirty = false;
+      this.showToast("Configuración SEO aplicada");
+      await this.loadGsc(true);
+    } catch (err) {
+      this.showToast(err.message);
+    }
+  }
+
   renderSeoList(target, items, mapItem) {
     if (!target) return;
     target.innerHTML = "";
@@ -936,6 +957,7 @@ class CRMController {
       if (!row) return;
       const li = document.createElement("li");
       const copy = document.createElement("div");
+      copy.className = "seo-list__main";
       const title = document.createElement("strong");
       title.textContent = row.title;
       copy.appendChild(title);
@@ -950,9 +972,54 @@ class CRMController {
         meta.textContent = row.meta;
         li.appendChild(meta);
       }
+      if (row.actionLabel && typeof row.onAction === "function") {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "seo-list__action";
+        button.textContent = row.actionLabel;
+        button.addEventListener("click", row.onAction);
+        li.appendChild(button);
+      }
       fragment.appendChild(li);
     });
     target.appendChild(fragment);
+  }
+
+  renderSeoSummary(data) {
+    if (!this.dom.seoSummaryCard) return;
+    let title = "Conecta una propiedad o sitemap para empezar.";
+    let detail = "Cuando Search Console devuelva señales útiles, aquí verás el resumen operativo.";
+    let meta = "Esperando consulta";
+
+    if (!data?.connected) {
+      title = "Falta la cuenta de servicio.";
+      detail = "Sube el JSON al servidor y vuelve a cargar el módulo.";
+      meta = "Sin conexión";
+    } else if (data.error) {
+      title = "Conexión OK, pero el análisis quedó bloqueado.";
+      detail = data.error;
+      meta = "Requiere revisión";
+    } else if (data.totals) {
+      const count = data.discovery?.combinedCount || data.pages?.length || 0;
+      const indexed = data.discovery?.indexSummary?.checked
+        ? `${data.discovery.indexSummary.indexed}/${data.discovery.indexSummary.checked} indexadas`
+        : "Indexación pendiente";
+      title = "Termómetro SEO listo.";
+      detail = `${count} URLs consideradas. Ya puedes leer páginas, queries y señales de empuje. ${indexed}.`;
+      meta = data.cached ? "Cache 15m" : "Datos frescos";
+    } else if (data.discovery?.combinedCount) {
+      title = "Conexión OK, pero Google no devolvió señales útiles todavía.";
+      detail = `Detecté ${data.discovery.combinedCount} URLs, pero aún no llegaron métricas suficientes para poblar el termómetro.`;
+      meta = data.discovery.source ? "Sitemap leído" : "Sin señales";
+    } else if (Array.isArray(data.siteDetails) && data.siteDetails.length) {
+      title = "El bot ya ve tus propiedades.";
+      detail = "Estás en la fase de diagnóstico. Usa una propiedad o sitemap desde las tarjetas inferiores para forzar el análisis.";
+      meta = "Diagnóstico listo";
+    }
+
+    this.dom.seoSummaryTitle.textContent = title;
+    this.dom.seoSummaryDetail.textContent = detail;
+    this.dom.seoSummaryMeta.textContent = meta;
   }
 
   renderSeoInsights(data) {
@@ -974,6 +1041,10 @@ class CRMController {
       title: item.siteUrl,
       detail: item.permission ? `Permiso ${item.permission}` : "Propiedad visible",
       meta: item.permission?.includes("siteOwner") ? "Owner" : item.permission || "",
+      actionLabel: item.siteUrl?.startsWith("sc-domain:") ? "Usar" : "",
+      onAction: item.siteUrl?.startsWith("sc-domain:")
+        ? () => this.applyGscPreset({ siteUrl: item.siteUrl })
+        : null,
     }));
   }
 
@@ -1001,6 +1072,8 @@ class CRMController {
       meta: item.isPending
         ? "Pendiente"
         : `${item.errors || 0} err / ${item.warnings || 0} warn`,
+      actionLabel: item.path ? "Usar" : "",
+      onAction: item.path ? () => this.applyGscPreset({ sitemapUrl: item.path }) : null,
     }));
     if (data.sitemaps?.error) {
       const li = document.createElement("li");
@@ -1043,6 +1116,7 @@ class CRMController {
 
   renderGsc(data) {
     if (!data) return;
+    this.renderSeoSummary(data);
     if (this.dom.seoSaStatus) {
       if (data.connected && data.serviceEmail) {
         this.dom.seoSaStatus.textContent = `Cuenta de servicio lista · ${data.serviceEmail}`;
@@ -1223,6 +1297,14 @@ class CRMController {
 
   async loadGsc(fresh = false) {
     try {
+      this.renderSeoSummary({
+        connected: true,
+        siteDetails: [],
+        discovery: null,
+      });
+      this.dom.seoSummaryTitle.textContent = "Analizando Search Console...";
+      this.dom.seoSummaryDetail.textContent = "Leyendo propiedades, sitemap, queries e indexación. Puede tardar unos segundos.";
+      this.dom.seoSummaryMeta.textContent = fresh ? "Consulta fresca" : "Cargando";
       const status = await GscModule.status();
       this.renderGsc(status);
       if (!status.connected) {

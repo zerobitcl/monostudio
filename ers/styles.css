@@ -2183,6 +2183,18 @@ body {
   color: var(--txt-dim);
 }
 
+.seo-summary__title {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.seo-summary__detail {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--txt-secondary);
+}
+
 .seo-trend-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2228,6 +2240,28 @@ body {
   color: var(--txt-dim);
   font-size: 0.72rem;
   white-space: nowrap;
+}
+
+.seo-list__main {
+  flex: 1;
+}
+
+.seo-list__action {
+  align-self: center;
+  border: 1px solid var(--glass-border);
+  background: rgba(46, 123, 255, 0.08);
+  color: var(--txt-primary);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 0.7rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.seo-list__action:hover {
+  border-color: rgba(46, 123, 255, 0.25);
+  background: rgba(46, 123, 255, 0.14);
 }
 
 .seo-tag {
