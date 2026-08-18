@@ -22,6 +22,9 @@ $tokenFile = $dataDir . '/gsc-token.json';
 const GSC_SCOPE = 'https://www.googleapis.com/auth/webmasters';
 const GSC_CACHE_TTL = 900;
 
+/** Sube al cambiar la lógica de resolución de propiedad; sirve para saber qué versión está viva en el server. */
+const GSC_VERSION = '2026.08.18-sc-domain';
+
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
     exit;
@@ -442,7 +445,9 @@ function gscResolveProperty(string $token, string $pageUrl, array &$sites): arra
     }
 
     $lastError = '';
+    $tried = [];
     foreach (gscPropertyCandidates($pageUrl, $sites) as $candidate) {
+        $tried[] = $candidate;
         $probe = gscProbeProperty($token, $candidate);
         if ($probe['ok']) {
             return ['property' => $candidate, 'error' => ''];
@@ -461,7 +466,10 @@ function gscResolveProperty(string $token, string $pageUrl, array &$sites): arra
 
     return [
         'property' => '',
-        'error' => gscHumanizeError($lastError ?: 'Sin acceso a ' . $host, $host) . $hint,
+        'error' => gscHumanizeError($lastError ?: 'Sin acceso a ' . $host, $host)
+            . $hint
+            . ' Probé: ' . ($tried !== [] ? implode(', ', $tried) : '—')
+            . ' [v' . GSC_VERSION . ']',
     ];
 }
 
@@ -537,6 +545,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === '' || $action === 'stat
     }
     gscJson([
         'connected' => $serviceAccount !== [],
+        'version' => GSC_VERSION,
         'auth' => 'service_account',
         'serviceEmail' => (string) ($serviceAccount['client_email'] ?? ''),
         'keyFile' => (string) ($serviceAccount['_path'] ?? 'gsc-service-account.json'),

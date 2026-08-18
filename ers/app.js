@@ -906,16 +906,17 @@ class CRMController {
     }
     if (this.dom.seoSites) {
       const sites = Array.isArray(data.sites) ? data.sites.filter(Boolean) : [];
+      const version = data.version ? ` · API v${data.version}` : " · API sin versión (server desactualizado)";
       if (data.sitesError) {
         this.dom.seoSites.hidden = false;
-        this.dom.seoSites.textContent = `Google no listó propiedades: ${data.sitesError}`;
+        this.dom.seoSites.textContent = `Google no listó propiedades: ${data.sitesError}${version}`;
       } else if (sites.length) {
         this.dom.seoSites.hidden = false;
-        this.dom.seoSites.textContent = `El bot ve: ${sites.join(" · ")}`;
+        this.dom.seoSites.textContent = `El bot ve: ${sites.join(" · ")}${version}`;
       } else if (data.connected) {
         this.dom.seoSites.hidden = false;
         this.dom.seoSites.textContent =
-          "El bot aún no ve ninguna propiedad. En Legal Tamaya cambia el permiso a Completo (no Restringido).";
+          `El bot no ve ninguna propiedad todavía.${version}`;
       } else {
         this.dom.seoSites.hidden = true;
       }
