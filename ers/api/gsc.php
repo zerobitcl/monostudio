@@ -3,8 +3,9 @@
  * Mono Studio OS — Google Search Console
  * Autenticación: cuenta de servicio (JWT). Sin OAuth de usuario.
  *
- * GET  action=status|query
- * POST action=config → guarda siteUrl + pages
+ * GET  action=sites            → propiedades que ve el bot
+ * GET  action=site&host=x.cl   → métricas, señales e inventario de un cliente
+ * POST action=config           → override de sitemap/URLs para un host
  *
  * Credenciales: data/gsc-service-account.json (el JSON que baja Google Cloud)
  */
@@ -16,7 +17,6 @@ header('X-Content-Type-Options: nosniff');
 $dataDir = dirname(__DIR__) . '/data';
 $configFile = $dataDir . '/gsc.json';
 $keyFilePreferred = $dataDir . '/gsc-service-account.json';
-$cacheFile = $dataDir . '/gsc-cache.json';
 $tokenFile = $dataDir . '/gsc-token.json';
 
 const GSC_SCOPE = 'https://www.googleapis.com/auth/webmasters';
@@ -28,7 +28,7 @@ const GSC_MAX_URL_INSPECTIONS = 18;
 const GSC_TREND_DAYS = 90;
 
 /** Sube al cambiar la lógica de resolución de propiedad; sirve para saber qué versión está viva en el server. */
-const GSC_VERSION = '2026.08.18-premium-layer';
+const GSC_VERSION = '2026.08.20-ops';
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
@@ -197,23 +197,6 @@ function gscSanitizePages(array $pages): array
     return gscMergePages($out);
 }
 
-function gscSanitizeSiteUrl(string $siteUrl): string
-{
-    $siteUrl = trim($siteUrl);
-    if (preg_match('#^sc-domain:[a-z0-9.-]+$#i', $siteUrl)) {
-        return gscIsAgencyHost($siteUrl) ? '' : strtolower($siteUrl);
-    }
-    if (preg_match('#^https?://#i', $siteUrl)) {
-        $host = gscHost($siteUrl);
-        if ($host === '' || $host === 'monostudio.cl') {
-            return '';
-        }
-        // Prefijo URL y propiedad de dominio son cosas distintas en GSC.
-        return 'sc-domain:' . $host;
-    }
-    return '';
-}
-
 function gscSanitizeSitemapUrl(string $url): string
 {
     $url = trim($url);
@@ -239,7 +222,8 @@ function gscLoadServiceAccount(string $dataDir, string $preferred): array
 {
     $candidates = [$preferred];
     foreach (glob($dataDir . '/*.json') ?: [] as $file) {
-        if ($file !== $preferred) {
+        // El .example.json tiene forma de cuenta de servicio pero no sirve para firmar.
+        if ($file !== $preferred && !str_contains(basename($file), '.example.')) {
             $candidates[] = $file;
         }
     }
@@ -368,40 +352,6 @@ function gscHost(string $url): string
     }
     $host = strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
     return preg_replace('#^www\.#', '', $host) ?? $host;
-}
-
-function gscMatchProperty(string $pageUrl, array $sites): string
-{
-    $host = gscHost($pageUrl);
-    if ($host === '') {
-        return '';
-    }
-
-    foreach ($sites as $entry) {
-        $site = (string) ($entry['siteUrl'] ?? '');
-        if (stripos($site, 'sc-domain:') === 0) {
-            $domain = strtolower(substr($site, strlen('sc-domain:')));
-            if ($domain === $host) {
-                return $site;
-            }
-        }
-    }
-
-    $best = '';
-    $bestLen = 0;
-    foreach ($sites as $entry) {
-        $site = (string) ($entry['siteUrl'] ?? '');
-        if ($site === '' || stripos($site, 'sc-domain:') === 0) {
-            continue;
-        }
-        $prefix = rtrim($site, '/');
-        if (stripos($pageUrl, $prefix) === 0 && strlen($prefix) > $bestLen) {
-            $best = $site;
-            $bestLen = strlen($prefix);
-        }
-    }
-
-    return $best;
 }
 
 function gscPropertyCandidates(string $pageUrl, array $sites): array
@@ -890,67 +840,232 @@ function gscIndexLabel(array $status): array
 
 function gscThermometer(array $now, array $delta, float $siteCtr): array
 {
-    $label = 'Fria';
-    $tone = 'neutral';
-
     if ($now['impressions'] >= 80 && $now['position'] > 0 && $now['position'] <= 15 && $now['ctr'] < max($siteCtr * 0.7, 0.012)) {
-        $label = 'Pide empujon';
-        $tone = 'push';
-    } elseif ($delta['clicks'] <= -5 || ($delta['position'] ?? 0) < -1.5) {
-        $label = 'Cayendo';
-        $tone = 'down';
-    } elseif ($now['clicks'] > 0 || $now['impressions'] >= 40) {
-        $label = 'Activa';
-        $tone = 'up';
+        return ['label' => 'Pide empujón', 'tone' => 'push'];
     }
-
-    return ['label' => $label, 'tone' => $tone];
+    if ($delta['clicks'] <= -5 || ($delta['position'] ?? 0) < -1.5) {
+        return ['label' => 'Cayendo', 'tone' => 'down'];
+    }
+    if ($now['clicks'] > 0 || $now['impressions'] >= 40) {
+        return ['label' => 'Activa', 'tone' => 'up'];
+    }
+    return ['label' => 'Sin tracción', 'tone' => 'neutral'];
 }
 
-function gscBuildInsights(array $rows): array
+/** Nombre corto y legible de una URL: "/servicios/seo" → "servicios/seo". */
+function gscPageTitle(array $row): string
 {
-    $opportunities = array_values(array_filter($rows, static fn ($row) => ($row['thermometer']['tone'] ?? '') === 'push'));
-    usort($opportunities, static fn ($a, $b) => ($b['current']['impressions'] <=> $a['current']['impressions']));
-    $decliners = array_values(array_filter($rows, static fn ($row) => ($row['thermometer']['tone'] ?? '') === 'down'));
-    usort($decliners, static fn ($a, $b) => ($a['delta']['clicks'] <=> $b['delta']['clicks']));
-
-    $items = [];
-    foreach (array_slice($opportunities, 0, 3) as $row) {
-        $items[] = [
-            'title' => (string) $row['label'],
-            'detail' => 'Muchas impresiones, CTR bajo y posicion rescatable.',
-            'meta' => 'CTR ' . round(((float) ($row['current']['ctr'] ?? 0)) * 100, 1) . '% · Pos. ' . round((float) ($row['current']['position'] ?? 0), 1),
-        ];
+    $label = trim((string) ($row['label'] ?? ''));
+    if ($label !== '' && !preg_match('#^https?://#i', $label)) {
+        return $label;
     }
-    foreach (array_slice($decliners, 0, 2) as $row) {
-        $items[] = [
-            'title' => (string) $row['label'],
-            'detail' => 'Viene cayendo frente al periodo anterior.',
-            'meta' => (string) ($row['delta']['clicks'] ?? 0) . ' clics · Pos. ' . round((float) ($row['current']['position'] ?? 0), 1),
-        ];
-    }
-    return array_slice($items, 0, 5);
+    $path = trim((string) (parse_url((string) ($row['url'] ?? ''), PHP_URL_PATH) ?? ''), '/');
+    return $path === '' ? 'Home' : $path;
 }
 
-$config = gscReadJson($configFile, ['siteUrl' => '', 'sitemapUrl' => '', 'pages' => []]);
-$cleaned = [
-    'siteUrl' => gscSanitizeSiteUrl((string) ($config['siteUrl'] ?? '')),
-    'sitemapUrl' => gscSanitizeSitemapUrl((string) ($config['sitemapUrl'] ?? '')),
-    'pages' => gscSanitizePages($config['pages'] ?? []),
-];
-if (
-    $cleaned['siteUrl'] !== (string) ($config['siteUrl'] ?? '')
-    || $cleaned['sitemapUrl'] !== (string) ($config['sitemapUrl'] ?? '')
-    || $cleaned['pages'] !== ($config['pages'] ?? [])
-) {
-    gscWriteJson($configFile, $cleaned);
-    @unlink($cacheFile);
+/**
+ * Convierte métricas en acciones. La severidad (3 alta → 1 baja) es lo único que
+ * el front necesita para priorizar; así el orden vive en un solo lugar.
+ */
+function gscBuildSignals(array $rows): array
+{
+    $signals = [];
+
+    foreach ($rows as $row) {
+        $url = (string) ($row['url'] ?? '');
+        $title = gscPageTitle($row);
+        $now = is_array($row['current'] ?? null) ? $row['current'] : [];
+        $delta = is_array($row['delta'] ?? null) ? $row['delta'] : [];
+        $tone = (string) ($row['thermometer']['tone'] ?? '');
+        $indexTone = (string) ($row['indexStatus']['tone'] ?? '');
+
+        if (!empty($row['error'])) {
+            $signals[] = [
+                'kind' => 'blocked',
+                'severity' => 3,
+                'title' => 'Sin acceso a ' . $title,
+                'detail' => 'Search Console rechazó esta URL. Revisa permisos del bot en la propiedad.',
+                'metric' => 'Bloqueada',
+                'url' => $url,
+            ];
+            continue;
+        }
+
+        if ($indexTone === 'issue') {
+            $signals[] = [
+                'kind' => 'noindex',
+                'severity' => 3,
+                'title' => $title . ' no está indexada',
+                'detail' => (string) ($row['indexStatus']['coverage'] ?? 'Google no la tiene en el índice.'),
+                'metric' => 'Pedir indexación',
+                'url' => $url,
+            ];
+        }
+
+        if ($tone === 'down') {
+            $lost = (int) ($delta['clicks'] ?? 0);
+            $posMove = round((float) ($delta['position'] ?? 0), 1);
+            $signals[] = [
+                'kind' => 'falling',
+                'severity' => abs($lost) >= 15 ? 3 : 2,
+                'title' => $title . ' está perdiendo clics',
+                'detail' => $posMove < 0
+                    ? 'Bajó ' . abs($posMove) . ' puestos frente a los 28 días previos.'
+                    : 'Menos clics que en los 28 días previos con posición estable.',
+                'metric' => ($lost > 0 ? '+' : '') . $lost . ' clics',
+                'url' => $url,
+            ];
+        }
+
+        if ($tone === 'push') {
+            $signals[] = [
+                'kind' => 'push',
+                'severity' => 2,
+                'title' => $title . ' pide un empujón',
+                'detail' => 'Aparece mucho pero casi nadie entra: reescribe title y meta description.',
+                'metric' => 'CTR ' . round(((float) ($now['ctr'] ?? 0)) * 100, 1)
+                    . '% · Pos. ' . round((float) ($now['position'] ?? 0), 1),
+                'url' => $url,
+            ];
+        }
+
+        if ((int) ($now['impressions'] ?? 0) === 0 && $indexTone !== 'issue') {
+            $signals[] = [
+                'kind' => 'zombie',
+                'severity' => 1,
+                'title' => $title . ' no aparece en búsquedas',
+                'detail' => 'Cero impresiones en 28 días: falta contenido, enlaces internos o intención de búsqueda.',
+                'metric' => '0 impresiones',
+                'url' => $url,
+            ];
+        }
+    }
+
+    usort($signals, static fn ($a, $b) => ($b['severity'] <=> $a['severity']));
+    $signals = array_slice($signals, 0, 24);
+
+    foreach ($signals as $i => $signal) {
+        $signals[$i]['id'] = $signal['kind'] . '|' . $signal['url'];
+    }
+    return $signals;
 }
-$config = $cleaned;
+
+/** Inventario: cuántas páginas existen, cuántas rinden y cuántas están indexadas. */
+function gscBuildInventory(array $rows): array
+{
+    $inventory = [
+        'total' => count($rows),
+        'withData' => 0,
+        'noData' => 0,
+        'checked' => 0,
+        'indexed' => 0,
+        'notIndexed' => 0,
+        'blocked' => 0,
+    ];
+
+    foreach ($rows as $row) {
+        if (!empty($row['error'])) {
+            $inventory['blocked']++;
+            continue;
+        }
+        if ((int) ($row['current']['impressions'] ?? 0) > 0) {
+            $inventory['withData']++;
+        } else {
+            $inventory['noData']++;
+        }
+        $tone = (string) ($row['indexStatus']['tone'] ?? '');
+        if ($tone === '') {
+            continue;
+        }
+        $inventory['checked']++;
+        if ($tone === 'indexed') {
+            $inventory['indexed']++;
+        } elseif ($tone === 'issue') {
+            $inventory['notIndexed']++;
+        }
+    }
+
+    return $inventory;
+}
+
+/** Un archivo de caché por host: refrescar un cliente no invalida a los demás. */
+function gscHostCacheFile(string $dataDir, string $host): string
+{
+    return $dataDir . '/gsc-cache-' . md5($host) . '.json';
+}
+
+function gscSanitizeHost(string $value): string
+{
+    $host = gscHost(preg_match('#^[a-z]+:#i', $value) ? $value : 'https://' . ltrim($value, '/'));
+    if ($host === '' || $host === 'monostudio.cl' || !preg_match('#^[a-z0-9.-]+\.[a-z]{2,}$#i', $host)) {
+        return '';
+    }
+    return strtolower($host);
+}
+
+/**
+ * El config pasó de un único sitio a un mapa por host: un ERS con varios clientes
+ * necesita overrides independientes. Migra el formato antiguo al vuelo.
+ */
+function gscNormalizeConfig(array $config): array
+{
+    $hosts = [];
+
+    if (is_array($config['hosts'] ?? null)) {
+        foreach ($config['hosts'] as $rawHost => $entry) {
+            $host = gscSanitizeHost((string) $rawHost);
+            if ($host === '' || !is_array($entry)) {
+                continue;
+            }
+            $hosts[$host] = [
+                'sitemapUrl' => gscSanitizeSitemapUrl((string) ($entry['sitemapUrl'] ?? '')),
+                'pages' => gscSanitizePages($entry['pages'] ?? []),
+            ];
+        }
+        return ['hosts' => $hosts];
+    }
+
+    $ensure = static function (array &$hosts, string $host): void {
+        if ($host !== '' && !isset($hosts[$host])) {
+            $hosts[$host] = ['sitemapUrl' => '', 'pages' => []];
+        }
+    };
+
+    foreach (gscSanitizePages($config['pages'] ?? []) as $page) {
+        $host = gscSanitizeHost((string) $page['url']);
+        $ensure($hosts, $host);
+        if ($host !== '') {
+            $hosts[$host]['pages'][] = $page;
+        }
+    }
+
+    $legacySitemap = gscSanitizeSitemapUrl((string) ($config['sitemapUrl'] ?? ''));
+    if ($legacySitemap !== '') {
+        $host = gscSanitizeHost($legacySitemap);
+        $ensure($hosts, $host);
+        if ($host !== '') {
+            $hosts[$host]['sitemapUrl'] = $legacySitemap;
+        }
+    }
+
+    $ensure($hosts, gscSanitizeHost((string) ($config['siteUrl'] ?? '')));
+
+    return ['hosts' => $hosts];
+}
+
+$rawConfig = gscReadJson($configFile, []);
+$config = gscNormalizeConfig($rawConfig);
+if (!array_key_exists('hosts', $rawConfig) || $rawConfig['hosts'] !== $config['hosts']) {
+    gscWriteJson($configFile, $config);
+    foreach (glob($dataDir . '/gsc-cache*.json') ?: [] as $stale) {
+        @unlink($stale);
+    }
+}
+
 $serviceAccount = gscLoadServiceAccount($dataDir, $keyFilePreferred);
 $action = (string) ($_GET['action'] ?? $_POST['action'] ?? '');
 
-if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === '' || $action === 'status')) {
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === '' || $action === 'sites' || $action === 'status')) {
     $sites = [];
     $sitesError = '';
     if ($serviceAccount !== []) {
@@ -958,27 +1073,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === '' || $action === 'stat
             $token = gscAccessToken($serviceAccount, $tokenFile);
             $sites = array_values(array_filter(array_map(
                 static fn ($e) => [
-                    'siteUrl' => (string) ($e['siteUrl'] ?? ''),
+                    'property' => (string) ($e['siteUrl'] ?? ''),
+                    'host' => gscHost((string) ($e['siteUrl'] ?? '')),
                     'permission' => (string) ($e['permissionLevel'] ?? ''),
                 ],
                 gscListSites($token)
-            ), static fn ($e) => $e['siteUrl'] !== ''));
+            ), static fn ($e) => $e['property'] !== '' && $e['host'] !== 'monostudio.cl'));
         } catch (Throwable $e) {
             $sitesError = $e->getMessage();
         }
     }
+
     gscJson([
         'connected' => $serviceAccount !== [],
         'version' => GSC_VERSION,
-        'auth' => 'service_account',
         'serviceEmail' => (string) ($serviceAccount['client_email'] ?? ''),
-        'keyFile' => (string) ($serviceAccount['_path'] ?? 'gsc-service-account.json'),
-        'siteUrl' => (string) ($config['siteUrl'] ?? ''),
-        'sitemapUrl' => (string) ($config['sitemapUrl'] ?? ''),
-        'pages' => gscSanitizePages($config['pages'] ?? []),
-        'sites' => array_column($sites, 'siteUrl'),
-        'siteDetails' => $sites,
-        'sitesError' => $sitesError,
+        'hosts' => array_keys($config['hosts']),
+        'properties' => $sites,
+        'error' => $sitesError,
     ]);
 }
 
@@ -988,22 +1100,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'config') {
         gscJson(['error' => 'JSON inválido'], 400);
     }
 
-    $siteUrl = gscSanitizeSiteUrl((string) ($input['siteUrl'] ?? ''));
-    $sitemapUrl = gscSanitizeSitemapUrl((string) ($input['sitemapUrl'] ?? ''));
-    $pages = gscSanitizePages(is_array($input['pages'] ?? null) ? $input['pages'] : []);
-    if ($siteUrl === '' && $sitemapUrl === '' && $pages === []) {
-        gscJson(['error' => 'Indica una propiedad, un sitemap o al menos una URL manual'], 400);
+    $host = gscSanitizeHost((string) ($input['host'] ?? ''));
+    if ($host === '') {
+        gscJson(['error' => 'Indica un dominio válido'], 400);
     }
-    $config = ['siteUrl' => $siteUrl, 'sitemapUrl' => $sitemapUrl, 'pages' => $pages];
+
+    $config['hosts'][$host] = [
+        'sitemapUrl' => gscSanitizeSitemapUrl((string) ($input['sitemapUrl'] ?? '')),
+        'pages' => gscSanitizePages(is_array($input['pages'] ?? null) ? $input['pages'] : []),
+    ];
+
     if (!gscWriteJson($configFile, $config)) {
         gscJson(['error' => 'No se pudo guardar la configuración'], 500);
     }
 
-    @unlink($cacheFile);
-    gscJson(['ok' => true, 'pages' => $pages, 'siteUrl' => $siteUrl, 'sitemapUrl' => $sitemapUrl]);
+    @unlink(gscHostCacheFile($dataDir, $host));
+    gscJson(['ok' => true, 'host' => $host] + $config['hosts'][$host]);
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === 'query')) {
     try {
         if ($serviceAccount === []) {
             gscJson([
@@ -1011,15 +1126,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
             ], 400);
         }
 
-        $fallbackSite = gscSanitizeSiteUrl((string) ($config['siteUrl'] ?? ''));
-        $sitemapUrl = gscSanitizeSitemapUrl((string) ($config['sitemapUrl'] ?? ''));
-        $manualPages = gscSanitizePages($config['pages'] ?? []);
-        if ($fallbackSite === '' && $sitemapUrl === '' && $manualPages === []) {
-            gscJson(['error' => 'Configura una propiedad, un sitemap o una URL manual'], 400);
+        $host = gscSanitizeHost((string) ($_GET['host'] ?? ''));
+        if ($host === '' && $config['hosts'] !== []) {
+            $host = (string) array_key_first($config['hosts']);
+        }
+        if ($host === '') {
+            gscJson(['error' => 'Indica el dominio del cliente que quieres analizar'], 400);
         }
 
-        $pageSig = md5(json_encode([$fallbackSite, $sitemapUrl, $manualPages, GSC_VERSION], JSON_UNESCAPED_SLASHES));
-        $cached = gscReadJson($cacheFile, []);
+        $override = is_array($config['hosts'][$host] ?? null) ? $config['hosts'][$host] : [];
+        $sitemapUrl = gscSanitizeSitemapUrl((string) ($override['sitemapUrl'] ?? ''));
+        $manualPages = gscSanitizePages($override['pages'] ?? []);
+        $fallbackSite = 'sc-domain:' . $host;
+        $seedUrl = 'https://' . $host . '/';
+
+        $hostCacheFile = gscHostCacheFile($dataDir, $host);
+        $pageSig = md5(json_encode([$host, $sitemapUrl, $manualPages, GSC_VERSION], JSON_UNESCAPED_SLASHES));
+        $cached = gscReadJson($hostCacheFile, []);
         $fresh = (string) ($_GET['fresh'] ?? '') === '1';
         if (
             !$fresh
@@ -1040,11 +1163,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
             // Seguimos: gscResolveProperty prueba candidatos aunque list sites falle.
         }
 
-        $seedUrl = gscSiteHomeUrl($fallbackSite, $manualPages, $sitemapUrl);
-        if ($seedUrl === '') {
-            gscJson(['error' => 'No pude inferir el sitio base para consultar Search Console'], 400);
-        }
-
         $primary = gscResolveProperty($token, $seedUrl, $sites);
         $primaryProperty = (string) ($primary['property'] ?? '');
         $sitemapItems = [];
@@ -1057,13 +1175,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
             }
         }
 
+        // El sitemap declarado en GSC es más fiable que adivinar /sitemap.xml.
+        if ($sitemapUrl === '') {
+            foreach ($sitemapItems as $item) {
+                $candidate = gscSanitizeSitemapUrl((string) ($item['path'] ?? ''));
+                if ($candidate !== '' && gscHost($candidate) === $host) {
+                    $sitemapUrl = $candidate;
+                    break;
+                }
+            }
+        }
+
         $sitemapDiscovery = gscDiscoverPagesFromSitemap(gscSitemapCandidates($fallbackSite, $manualPages, $sitemapUrl));
         $pages = gscMergePages($manualPages, $sitemapDiscovery['pages']);
         if ($pages === []) {
             $pages = [['url' => $seedUrl, 'label' => 'Home']];
         }
 
-        $resolvedByHost = [];
+        $resolvedByHost = [$host => $primary];
 
         $end = (new DateTimeImmutable('today', new DateTimeZone('UTC')))->modify('-3 days');
         $start = $end->modify('-27 days');
@@ -1219,19 +1348,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
             }
         }
 
-        $indexSummary = ['checked' => 0, 'indexed' => 0, 'issues' => 0];
-        foreach ($pageRows as $row) {
-            if (!is_array($row['indexStatus'])) {
-                continue;
-            }
-            $indexSummary['checked']++;
-            if (($row['indexStatus']['tone'] ?? '') === 'indexed') {
-                $indexSummary['indexed']++;
-            } elseif (($row['indexStatus']['tone'] ?? '') === 'issue') {
-                $indexSummary['issues']++;
-            }
-        }
-
         ksort($dailyBucket);
         $dailyRows = array_values(array_map(static function (array $row): array {
             if (($row['impressions'] ?? 0) > 0) {
@@ -1244,40 +1360,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
             return $row;
         }, $dailyBucket));
 
+        $diagnostics = [
+            'property' => $primaryProperty,
+            'sitemapSource' => $sitemapDiscovery['source'] ?? '',
+            'sitemapUrl' => $sitemapUrl,
+            'sitemapError' => $sitemapDiscovery['error'] ?? '',
+            'sitemapApiError' => $sitemapApiError,
+            'sitemapItems' => array_map(static fn ($item) => [
+                'path' => (string) ($item['path'] ?? ''),
+                'lastSubmitted' => (string) ($item['lastSubmitted'] ?? ''),
+                'isPending' => (bool) ($item['isPending'] ?? false),
+                'warnings' => (int) ($item['warnings'] ?? 0),
+                'errors' => (int) ($item['errors'] ?? 0),
+            ], $sitemapItems),
+            'properties' => array_values(array_map(static fn ($e) => [
+                'property' => (string) ($e['siteUrl'] ?? ''),
+                'permission' => (string) ($e['permissionLevel'] ?? ''),
+            ], $sites)),
+            'fromSitemap' => count($sitemapDiscovery['pages'] ?? []),
+            'fromManual' => count($manualPages),
+        ];
+
+        // Sin propiedad accesible no hay métricas: devolvemos el motivo, no una tabla vacía.
         if ($groups === [] && $unmatched !== []) {
             gscJson([
                 'connected' => true,
+                'host' => $host,
                 'error' => $unmatched[0]['error'],
-                'siteUrl' => $fallbackSite,
-                'sitemapUrl' => $sitemapUrl,
-                'sites' => array_values(array_map(static fn ($e) => $e['siteUrl'] ?? '', $sites)),
-                'siteDetails' => array_values(array_map(static fn ($e) => [
-                    'siteUrl' => (string) ($e['siteUrl'] ?? ''),
-                    'permission' => (string) ($e['permissionLevel'] ?? ''),
-                ], $sites)),
-                'discovery' => [
-                    'source' => $sitemapDiscovery['source'] ?? '',
-                    'detectedCount' => count($sitemapDiscovery['pages'] ?? []),
-                    'manualCount' => count($manualPages),
-                    'combinedCount' => count($pages),
-                    'indexSummary' => $indexSummary,
-                    'error' => $sitemapDiscovery['error'] ?? '',
-                ],
-                'sitemaps' => [
-                    'items' => [],
-                    'error' => $sitemapApiError,
-                ],
-                'pages' => array_map(static fn ($miss) => [
-                    'url' => $miss['page']['url'],
-                    'label' => $miss['page']['label'] ?: $miss['page']['url'],
-                    'error' => $miss['error'],
-                    'current' => gscMetricRow(null),
-                    'previous' => gscMetricRow(null),
-                    'delta' => gscDelta(gscMetricRow(null), gscMetricRow(null)),
-                    'queries' => [],
-                    'indexStatus' => null,
-                    'thermometer' => ['label' => 'Sin acceso', 'tone' => 'down'],
-                ], $unmatched),
+                'diagnostics' => $diagnostics,
+                'pages' => [],
+                'signals' => [],
+                'inventory' => gscBuildInventory([]),
             ], 200);
         }
 
@@ -1286,48 +1399,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'query') {
             'cached' => false,
             'fetchedAt' => time(),
             'pageSig' => $pageSig,
-            'siteUrl' => $fallbackSite,
-            'sitemapUrl' => $sitemapUrl,
-            'sites' => array_values(array_map(static fn ($e) => $e['siteUrl'] ?? '', $sites)),
-            'siteDetails' => array_values(array_map(static fn ($e) => [
-                'siteUrl' => (string) ($e['siteUrl'] ?? ''),
-                'permission' => (string) ($e['permissionLevel'] ?? ''),
-            ], $sites)),
-            'range' => [
-                'start' => $startIso,
-                'end' => $endIso,
-                'prevStart' => $prevStartIso,
-                'prevEnd' => $prevEndIso,
-            ],
+            'host' => $host,
+            'version' => GSC_VERSION,
+            'range' => ['start' => $startIso, 'end' => $endIso],
             'totals' => $totals,
             'totalsDelta' => gscDelta($totals, $totalsBefore),
-            'discovery' => [
-                'source' => $sitemapDiscovery['source'] ?? '',
-                'detectedCount' => count($sitemapDiscovery['pages'] ?? []),
-                'manualCount' => count($manualPages),
-                'combinedCount' => count($pages),
-                'indexSummary' => $indexSummary,
-                'error' => $sitemapDiscovery['error'] ?? '',
-            ],
-            'sitemaps' => [
-                'items' => array_map(static fn ($item) => [
-                    'path' => (string) ($item['path'] ?? ''),
-                    'lastSubmitted' => (string) ($item['lastSubmitted'] ?? ''),
-                    'isPending' => (bool) ($item['isPending'] ?? false),
-                    'warnings' => (int) ($item['warnings'] ?? 0),
-                    'errors' => (int) ($item['errors'] ?? 0),
-                    'isSitemapsIndex' => (bool) ($item['isSitemapsIndex'] ?? false),
-                ], $sitemapItems),
-                'error' => $sitemapApiError,
-            ],
+            'daily' => array_map(static fn ($row) => [
+                'date' => $row['date'],
+                'clicks' => (int) $row['clicks'],
+                'impressions' => (int) $row['impressions'],
+            ], array_slice($dailyRows, -56)),
             'trend' => [
                 'weekdays' => gscAggregateWeekdays($dailyRows),
                 'months' => gscAggregateMonths($dailyRows),
             ],
-            'insights' => gscBuildInsights($pageRows),
+            'inventory' => gscBuildInventory($pageRows),
+            'signals' => gscBuildSignals($pageRows),
+            'diagnostics' => $diagnostics,
             'pages' => $pageRows,
         ];
-        gscWriteJson($cacheFile, $payload);
+        gscWriteJson($hostCacheFile, $payload);
         gscJson($payload);
     } catch (Throwable $e) {
         gscJson(['error' => $e->getMessage()], 500);

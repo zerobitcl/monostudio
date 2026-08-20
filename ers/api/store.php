@@ -1,8 +1,8 @@
 <?php
 /**
  * Mono Studio OS — API de persistencia
- * GET  → devuelve { clients, requests }
- * POST → guarda { clients, requests } en data/store.json
+ * GET  → devuelve { clients, requests, tasks }
+ * POST → guarda { clients, requests, tasks } en data/store.json
  */
 
 declare(strict_types=1);
@@ -16,6 +16,12 @@ $dataFile = $dataDir . '/store.json';
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
     exit;
+}
+
+/** mbstring no está garantizado en todos los hosting; substr es el fallback seguro. */
+function clip(string $value, int $length): string
+{
+    return function_exists('mb_substr') ? mb_substr($value, 0, $length) : substr($value, 0, $length);
 }
 
 function sanitizeNotes($notes): array
@@ -34,8 +40,8 @@ function sanitizeNotes($notes): array
             continue;
         }
         $out[] = [
-            'id' => mb_substr((string) ($note['id'] ?? ''), 0, 64),
-            'body' => mb_substr($body, 0, 4000),
+            'id' => clip((string) ($note['id'] ?? ''), 64),
+            'body' => clip($body, 4000),
             'createdAt' => (int) ($note['createdAt'] ?? 0),
         ];
     }
@@ -54,31 +60,72 @@ function sanitizeClients($clients): array
             continue;
         }
         $client['notes'] = sanitizeNotes($client['notes'] ?? []);
-        $client['siteUrl'] = mb_substr(trim((string) ($client['siteUrl'] ?? '')), 0, 300);
+        $client['siteUrl'] = clip(trim((string) ($client['siteUrl'] ?? '')), 300);
         $out[] = $client;
     }
     return $out;
 }
 
+/**
+ * Las tareas alimentan el panel "Hoy". `ref` guarda el origen (URL SEO, id de cobro…)
+ * para poder deduplicar señales ya convertidas en tarea sin volver a crearlas.
+ */
+function sanitizeTasks($tasks): array
+{
+    if (!is_array($tasks)) {
+        return [];
+    }
+
+    $out = [];
+    foreach (array_slice($tasks, 0, 500) as $task) {
+        if (!is_array($task)) {
+            continue;
+        }
+        $title = trim((string) ($task['title'] ?? ''));
+        if ($title === '') {
+            continue;
+        }
+        $out[] = [
+            'id' => clip((string) ($task['id'] ?? ''), 64),
+            'title' => clip($title, 240),
+            'clientId' => clip((string) ($task['clientId'] ?? ''), 64),
+            'kind' => clip((string) ($task['kind'] ?? 'manual'), 24),
+            'ref' => clip((string) ($task['ref'] ?? ''), 500),
+            'dueDate' => preg_match('#^\d{4}-\d{2}-\d{2}$#', (string) ($task['dueDate'] ?? ''))
+                ? (string) $task['dueDate']
+                : '',
+            'createdAt' => (int) ($task['createdAt'] ?? 0),
+            'doneAt' => (int) ($task['doneAt'] ?? 0),
+        ];
+    }
+    return $out;
+}
+
+function emptyStore(): array
+{
+    return ['clients' => [], 'requests' => [], 'tasks' => []];
+}
+
 function readStore(string $path): array
 {
     if (!file_exists($path)) {
-        return ['clients' => [], 'requests' => []];
+        return emptyStore();
     }
 
     $raw = file_get_contents($path);
     if ($raw === false || $raw === '') {
-        return ['clients' => [], 'requests' => []];
+        return emptyStore();
     }
 
     $data = json_decode($raw, true);
     if (!is_array($data)) {
-        return ['clients' => [], 'requests' => []];
+        return emptyStore();
     }
 
     return [
         'clients' => sanitizeClients($data['clients'] ?? null),
         'requests' => is_array($data['requests'] ?? null) ? $data['requests'] : [],
+        'tasks' => sanitizeTasks($data['tasks'] ?? null),
     ];
 }
 
@@ -93,6 +140,7 @@ function writeStore(string $path, array $data): bool
         [
             'clients' => $data['clients'] ?? [],
             'requests' => $data['requests'] ?? [],
+            'tasks' => $data['tasks'] ?? [],
             'updatedAt' => gmdate('c'),
         ],
         JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE
@@ -127,6 +175,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $store = [
         'clients' => sanitizeClients($input['clients'] ?? null),
         'requests' => is_array($input['requests'] ?? null) ? $input['requests'] : [],
+        'tasks' => sanitizeTasks($input['tasks'] ?? null),
     ];
 
     if (!writeStore($dataFile, $store)) {

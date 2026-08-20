@@ -3,16 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Mono Studio OS — CRM visual y dashboard financiero interno" />
+  <meta name="description" content="Mono Studio OS — base de operaciones diaria" />
   <title>Mono Studio OS</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=20260820" />
 </head>
 <body>
 
   <div class="boot-screen" id="bootScreen">
     <div class="boot-screen__core" aria-hidden="true">◮</div>
-    <p>Sincronizando con el servidor…</p>
+    <p>Cargando…</p>
   </div>
 
   <div class="boot-error" id="bootError" hidden>
@@ -23,69 +22,75 @@
 
   <div class="app-shell">
 
-    <!-- ============ HEADER / MÓDULO FINANCIERO ============ -->
-    <header class="finance-bar" aria-label="Panel financiero">
+    <header class="topbar">
       <div class="brand">
         <div class="brand__logo" aria-hidden="true">◮</div>
-        <div class="brand__text">
-          <h1>Mono Studio <span>OS</span></h1>
-          <p class="brand__tag">Internal Revenue Engine</p>
-        </div>
-        <nav class="module-nav" aria-label="Módulos">
-          <button class="module-nav__btn is-active" id="btnModuleSwarm" type="button">Enjambre</button>
-          <button class="module-nav__btn" id="btnModuleSeo" type="button">Search Console</button>
-        </nav>
+        <h1>Mono Studio <span>OS</span></h1>
       </div>
 
-      <div class="kpi-grid">
-        <article class="kpi-card kpi-card--primary">
-          <span class="kpi-card__label">Compromiso en contratos</span>
-          <strong class="kpi-card__value" id="kpiPortfolio">$0</strong>
-          <span class="kpi-card__meta" id="kpiPortfolioMeta">Suma nominal de planes</span>
-          <span class="kpi-card__meta" id="kpiClientCount">0 clientes activos</span>
-          <span class="kpi-card__meta kpi-card__meta--dev" id="kpiDevCount" hidden>0 en desarrollo</span>
-        </article>
+      <nav class="module-nav" aria-label="Módulos">
+        <button class="module-nav__btn is-active" id="btnModuleToday" type="button">Hoy</button>
+        <button class="module-nav__btn" id="btnModuleClients" type="button">Clientes</button>
+        <button class="module-nav__btn" id="btnModuleSeo" type="button">SEO</button>
+      </nav>
 
-        <article class="kpi-card">
-          <span class="kpi-card__label">MRR <em>· Ingreso Mensual Recurrente</em></span>
-          <strong class="kpi-card__value kpi-card__value--mrr" id="kpiMRR">$0</strong>
-          <span class="kpi-card__meta" id="kpiMRRMeta">mensuales + anuales ÷ 12</span>
-        </article>
-
-        <article class="kpi-card">
-          <span class="kpi-card__label">ARR <em>· Ingreso Anual Recurrente</em></span>
-          <strong class="kpi-card__value kpi-card__value--arr" id="kpiARR">$0</strong>
-          <span class="kpi-card__meta" id="kpiARRMeta">anuales + mensuales × 12</span>
-        </article>
+      <div class="topbar__stats" id="topStats">
+        <button class="stat" id="statBilling" type="button">
+          <span class="stat__label">Por cobrar</span>
+          <strong class="stat__value" id="statBillingValue">$0</strong>
+          <em class="stat__meta" id="statBillingMeta">—</em>
+        </button>
+        <button class="stat" id="statMrr" type="button">
+          <span class="stat__label">MRR</span>
+          <strong class="stat__value" id="statMrrValue">$0</strong>
+          <em class="stat__meta" id="statMrrMeta">—</em>
+        </button>
+        <button class="stat" id="statAlerts" type="button">
+          <span class="stat__label">Alertas SEO</span>
+          <strong class="stat__value" id="statAlertsValue">—</strong>
+          <em class="stat__meta" id="statAlertsMeta">Sin revisar</em>
+        </button>
       </div>
     </header>
 
-    <!-- ============ MAIN: ENJAMBRE + PANEL LATERAL ============ -->
-    <main class="workspace">
+    <!-- ============ HOY ============ -->
+    <main class="panel" id="panelToday">
+      <div class="panel-head">
+        <h2>Tu día</h2>
+        <span class="panel-head__count" id="agendaCount">0 pendientes</span>
+        <div class="filter-group" id="agendaFilters" role="tablist" aria-label="Filtro de la agenda">
+          <button class="filter is-active" type="button" data-filter="all" role="tab">Todo</button>
+          <button class="filter" type="button" data-filter="money" role="tab">Dinero</button>
+          <button class="filter" type="button" data-filter="seo" role="tab">SEO</button>
+          <button class="filter" type="button" data-filter="task" role="tab">Tareas</button>
+        </div>
+        <button class="btn btn--neon" id="btnOpenTaskModal" type="button">+ Tarea</button>
+      </div>
 
-      <!-- ===== EL ENJAMBRE ===== -->
-      <section class="swarm-panel" aria-label="Enjambre de clientes">
+      <ul class="agenda" id="agendaList"></ul>
+
+      <div class="empty-state" id="agendaEmpty" hidden>
+        <div class="empty-state__icon" aria-hidden="true">✓</div>
+        <p>Nada urgente. Buen momento para trabajar en lo importante.</p>
+      </div>
+
+      <div class="agenda-done" id="agendaDone" hidden>
+        <h3>Completado hoy</h3>
+        <ul class="agenda agenda--done" id="agendaDoneList"></ul>
+      </div>
+    </main>
+
+    <!-- ============ CLIENTES ============ -->
+    <main class="panel panel--split" id="panelClients" hidden>
+      <section class="swarm-panel" aria-label="Cartera de clientes">
         <div class="panel-head">
-          <h2>El Enjambre</h2>
-          <div class="legend">
-            <span class="legend__item legend__item--annual">Anual</span>
-            <span class="legend__item legend__item--monthly">Mensual</span>
-            <span class="legend__item legend__item--urgent">Urgente</span>
-            <span class="legend__item legend__item--dev">En desarrollo</span>
-          </div>
+          <h2>Cartera</h2>
           <div class="view-toggle" role="tablist" aria-label="Vista de clientes">
             <button class="view-toggle__btn is-active" id="btnViewOrbit" type="button" role="tab">Órbita</button>
             <button class="view-toggle__btn" id="btnViewList" type="button" role="tab">Lista</button>
           </div>
-          <button class="icon-btn" id="btnOrbitExpand" type="button" aria-pressed="false" title="Expandir la órbita" aria-label="Expandir la órbita">⤢</button>
+          <button class="icon-btn" id="btnOrbitExpand" type="button" aria-pressed="false" title="Expandir" aria-label="Expandir la órbita">⤢</button>
           <button class="btn btn--neon" id="btnOpenClientModal" type="button">+ Cliente</button>
-        </div>
-
-        <div class="next-billing" id="nextBilling" hidden>
-          <span class="next-billing__label">Próximo cobro</span>
-          <strong class="next-billing__name" id="nextBillingName">—</strong>
-          <span class="next-billing__amount" id="nextBillingAmount">$0</span>
-          <span class="next-billing__when" id="nextBillingWhen">—</span>
         </div>
 
         <div class="cash-chart" id="cashChartWrap" hidden>
@@ -95,12 +100,11 @@
             <strong class="cash-chart__total" id="chartPeriodTotal">$0</strong>
           </div>
           <div class="cash-chart__viewport">
-            <div class="cash-chart__bars" id="chartBars" role="img" aria-label="Gráfico de cobros próximos 30 días"></div>
+            <div class="cash-chart__bars" id="chartBars" role="img" aria-label="Gráfico de cobros"></div>
           </div>
           <div class="cash-chart__axis" id="chartAxis"></div>
         </div>
 
-        <!-- Vista orbital: distancia al núcleo = días hasta el cobro -->
         <div class="orbit" id="orbitView" hidden>
           <div class="orbit__ring orbit__ring--1"><span class="orbit__ring-label">7d</span></div>
           <div class="orbit__ring orbit__ring--2"><span class="orbit__ring-label">14d</span></div>
@@ -114,130 +118,72 @@
           <div class="orbit__nodes" id="orbitNodes"></div>
         </div>
 
-        <div class="timeline" id="swarmGrid" role="list">
-          <!-- Filas temporales renderizadas por JS -->
-        </div>
+        <div class="timeline" id="swarmGrid" role="list"></div>
 
         <div class="empty-state" id="swarmEmpty">
           <div class="empty-state__icon" aria-hidden="true">⬡</div>
-          <p>El enjambre está vacío.<br />Agrega tu primer cliente para encender la colmena.</p>
+          <p>Sin clientes todavía.</p>
         </div>
       </section>
 
-      <!-- ===== SEARCH CONSOLE ===== -->
-      <section class="seo-panel" id="seoPanel" aria-label="Google Search Console" hidden>
+      <aside class="requests-panel" aria-label="Solicitudes activas">
         <div class="panel-head">
-          <h2>Search Console</h2>
-          <span class="seo-range" id="seoRange">Últimos 28 días</span>
-          <button class="btn btn--ghost" id="btnGscRefresh" type="button">Actualizar</button>
+          <h2>Solicitudes</h2>
+          <button class="btn btn--ghost" id="btnOpenRequestModal" type="button">+ Nueva</button>
         </div>
-
-        <div class="seo-setup" id="seoSetup">
-          <p class="seo-setup__lead">El backend autentica con la <strong>cuenta de servicio</strong> del servidor. No hay login de Google en el navegador.</p>
-          <p class="seo-setup__status" id="seoSaStatus">Buscando JSON de servicio…</p>
-          <p class="seo-sites" id="seoSites" hidden></p>
-          <ol class="seo-setup__steps">
-            <li>Sube el JSON de Google Cloud a <code>ers/data/gsc-service-account.json</code> (FTP / administrador de archivos). No va a GitHub.</li>
-            <li>En Search Console → Usuarios: agrega el bot con permiso <strong>Completo</strong> (Restringido no sirve para la API) en cada sitio de cliente.</li>
-            <li>Deja que el sistema descubra las URLs desde el sitemap. Solo pega URLs manuales si quieres forzar páginas críticas.</li>
-          </ol>
-
-          <form class="seo-form" id="gscConfigForm" autocomplete="off">
-            <label class="field">
-              <span>Propiedad GSC <em class="field__optional">(déjalo vacío; no uses https:// — se usa sc-domain:sitio.cl)</em></span>
-              <input type="text" name="siteUrl" id="gscSiteUrl" placeholder="sc-domain:abogadoslegaltamaya.cl" />
-            </label>
-            <label class="field">
-              <span>Sitemap XML <em class="field__optional">(opcional; si lo omites se intenta detectar solo)</em></span>
-              <input type="url" name="sitemapUrl" id="gscSitemapUrl" placeholder="https://abogadoslegaltamaya.cl/sitemap_index.xml" />
-            </label>
-            <label class="field">
-              <span>URLs manuales <em class="field__optional">(opcional · una por línea · URL | etiqueta)</em></span>
-              <textarea name="pages" id="gscPages" rows="7" placeholder="https://abogadoslegaltamaya.cl/ | Legal Tamaya"></textarea>
-            </label>
-            <div class="seo-form__actions">
-              <button type="submit" class="btn btn--neon">Guardar y cargar métricas</button>
-            </div>
-          </form>
-          <p class="seo-discovery" id="seoDiscovery" hidden></p>
+        <ul class="request-list" id="requestList"></ul>
+        <div class="empty-state empty-state--sm" id="requestsEmpty">
+          <p>Sin solicitudes activas.</p>
         </div>
+      </aside>
+    </main>
 
-        <div class="seo-kpis" id="seoKpis" hidden>
-          <article class="seo-kpi">
-            <span>Clics</span>
-            <strong id="seoClicks">—</strong>
-            <em id="seoClicksDelta"></em>
-          </article>
-          <article class="seo-kpi">
-            <span>Impresiones</span>
-            <strong id="seoImpressions">—</strong>
-            <em id="seoImpressionsDelta"></em>
-          </article>
-          <article class="seo-kpi">
-            <span>CTR</span>
-            <strong id="seoCtr">—</strong>
-            <em id="seoCtrDelta"></em>
-          </article>
-          <article class="seo-kpi">
-            <span>Posición</span>
-            <strong id="seoPosition">—</strong>
-            <em id="seoPositionDelta"></em>
-          </article>
-        </div>
+    <!-- ============ SEO ============ -->
+    <main class="panel" id="panelSeo" hidden>
+      <div class="panel-head">
+        <h2>SEO</h2>
+        <span class="panel-head__count" id="seoRange">Últimos 28 días</span>
+        <button class="btn btn--ghost" id="btnGscRefresh" type="button">Actualizar</button>
+      </div>
 
-        <div class="seo-grid">
-          <article class="seo-card seo-card--wide" id="seoSummaryCard">
-            <div class="seo-card__head">
-              <h3>Estado del análisis</h3>
-              <span id="seoSummaryMeta">Esperando consulta</span>
-            </div>
-            <p class="seo-summary__title" id="seoSummaryTitle">Conecta una propiedad o sitemap para empezar.</p>
-            <p class="seo-summary__detail" id="seoSummaryDetail">Cuando Search Console devuelva señales útiles, aquí verás el resumen operativo.</p>
-          </article>
+      <div class="site-picker" id="seoClients" role="tablist" aria-label="Sitios de clientes"></div>
 
-          <article class="seo-card" id="seoInsightsCard" hidden>
-            <div class="seo-card__head">
-              <h3>Oportunidades</h3>
-              <span>Qué empujar primero</span>
-            </div>
-            <ul class="seo-list" id="seoInsights"></ul>
-          </article>
+      <p class="notice" id="seoNotice" hidden></p>
 
-          <article class="seo-card" id="seoPropertiesCard" hidden>
-            <div class="seo-card__head">
-              <h3>Propiedades</h3>
-              <span>Lo que el bot realmente ve</span>
-            </div>
-            <ul class="seo-list" id="seoProperties"></ul>
-          </article>
+      <div class="seo-kpis" id="seoKpis" hidden>
+        <article class="seo-kpi">
+          <span>Clics</span>
+          <strong id="seoClicks">—</strong>
+          <em id="seoClicksDelta"></em>
+        </article>
+        <article class="seo-kpi">
+          <span>Impresiones</span>
+          <strong id="seoImpressions">—</strong>
+          <em id="seoImpressionsDelta"></em>
+        </article>
+        <article class="seo-kpi">
+          <span>CTR</span>
+          <strong id="seoCtr">—</strong>
+          <em id="seoCtrDelta"></em>
+        </article>
+        <article class="seo-kpi">
+          <span>Posición</span>
+          <strong id="seoPosition">—</strong>
+          <em id="seoPositionDelta"></em>
+        </article>
+        <div class="spark" id="seoSpark" role="img" aria-label="Clics por día"></div>
+      </div>
 
-          <article class="seo-card" id="seoSitemapsCard" hidden>
-            <div class="seo-card__head">
-              <h3>Sitemaps</h3>
-              <span>Fuente y estado</span>
-            </div>
-            <ul class="seo-list" id="seoSitemaps"></ul>
-          </article>
+      <div class="inventory" id="seoInventory" hidden></div>
 
-          <article class="seo-card seo-card--wide" id="seoTrendCard" hidden>
-            <div class="seo-card__head">
-              <h3>Tendencias</h3>
-              <span>Días fuertes y lectura mensual</span>
-            </div>
-            <div class="seo-trend-grid">
-              <div>
-                <h4>Día de semana</h4>
-                <ul class="seo-list" id="seoTrendWeekdays"></ul>
-              </div>
-              <div>
-                <h4>Mes</h4>
-                <ul class="seo-list" id="seoTrendMonths"></ul>
-              </div>
-            </div>
-          </article>
-        </div>
+      <section class="signals" aria-label="Acciones SEO">
+        <ul class="signal-list" id="seoSignals"></ul>
+        <p class="signal-empty" id="seoSignalsEmpty" hidden>Sin alertas en este sitio.</p>
+      </section>
 
-        <div class="seo-table-wrap" id="seoTableWrap" hidden>
+      <details class="drawer" id="seoPagesDrawer" hidden>
+        <summary>Todas las páginas <span id="seoPagesCount"></span></summary>
+        <div class="seo-table-wrap">
           <table class="seo-table">
             <thead>
               <tr>
@@ -246,35 +192,32 @@
                 <th>Imp.</th>
                 <th>CTR</th>
                 <th>Pos.</th>
-                <th>Estado</th>
+                <th>Índice</th>
               </tr>
             </thead>
             <tbody id="seoTableBody"></tbody>
           </table>
         </div>
+      </details>
 
-        <p class="seo-empty" id="seoEmpty" hidden>Sin datos aún. Revisa la conexión o espera el delay de 2–3 días de GSC.</p>
-      </section>
-
-      <!-- ===== SOLICITUDES ===== -->
-      <aside class="requests-panel" aria-label="Solicitudes activas">
-        <div class="panel-head">
-          <h2>Solicitudes</h2>
-          <button class="btn btn--ghost" id="btnOpenRequestModal" type="button">+ Nueva</button>
-        </div>
-
-        <ul class="request-list" id="requestList">
-          <!-- Solicitudes renderizadas por JS -->
-        </ul>
-
-        <div class="empty-state empty-state--sm" id="requestsEmpty">
-          <p>Sin solicitudes activas.</p>
-        </div>
-      </aside>
+      <details class="drawer" id="seoDiagDrawer">
+        <summary>Diagnóstico y conexión</summary>
+        <div class="diag" id="seoDiag"></div>
+        <form class="seo-form" id="gscConfigForm" autocomplete="off">
+          <label class="field">
+            <span>Sitemap del sitio activo <em class="field__optional">(opcional)</em></span>
+            <input type="url" name="sitemapUrl" id="gscSitemapUrl" placeholder="https://cliente.cl/sitemap_index.xml" />
+          </label>
+          <label class="field">
+            <span>URLs prioritarias <em class="field__optional">(una por línea · URL | etiqueta)</em></span>
+            <textarea name="pages" id="gscPages" rows="4" placeholder="https://cliente.cl/servicios | Servicios"></textarea>
+          </label>
+          <button type="submit" class="btn btn--neon">Guardar y recargar</button>
+        </form>
+      </details>
     </main>
   </div>
 
-  <!-- Tooltip flotante del enjambre -->
   <div class="node-tooltip" id="nodeTooltip" role="tooltip" hidden>
     <strong class="node-tooltip__name"></strong>
     <span class="node-tooltip__plan"></span>
@@ -282,39 +225,39 @@
     <span class="node-tooltip__value"></span>
   </div>
 
-  <!-- ============ MODAL: CLIENTE (crear / editar) ============ -->
+  <!-- ============ MODAL: CLIENTE ============ -->
   <div class="modal-backdrop" id="clientModal" hidden>
     <form class="modal glass" id="clientForm" autocomplete="off">
       <input type="hidden" name="clientId" id="clientIdField" value="" />
 
       <header class="modal__head">
-        <h3 id="clientModalTitle">Nuevo Cliente</h3>
+        <h3 id="clientModalTitle">Nuevo cliente</h3>
         <button type="button" class="modal__close" data-close="clientModal" aria-label="Cerrar">✕</button>
       </header>
 
       <label class="field">
-        <span>Nombre del cliente</span>
+        <span>Nombre</span>
         <input type="text" name="name" id="clientName" required maxlength="40" placeholder="Ej: Clínica Andes" />
       </label>
 
       <label class="field">
         <span id="clientValueLabel">Valor del plan (CLP)</span>
         <input type="number" name="valueCLP" id="clientValue" required min="1" step="1" placeholder="Ej: 250000" />
-        <small class="field__hint" id="clientValueHint">Selecciona el tipo de plan para ver qué monto ingresar.</small>
+        <small class="field__hint" id="clientValueHint">Elige el tipo de plan.</small>
       </label>
 
       <label class="field">
-        <span>Fecha próximo cobro</span>
+        <span>Próximo cobro</span>
         <input type="date" name="nextBillingDate" id="clientBillingDate" required />
       </label>
 
       <label class="field">
-        <span>Teléfono <em class="field__optional">(opcional, para WhatsApp y llamadas)</em></span>
-        <input type="tel" name="phone" id="clientPhone" maxlength="16" placeholder="Ej: +56 9 1234 5678" />
+        <span>Teléfono <em class="field__optional">(opcional)</em></span>
+        <input type="tel" name="phone" id="clientPhone" maxlength="16" placeholder="+56 9 1234 5678" />
       </label>
 
       <label class="field">
-        <span>Sitio web <em class="field__optional">(opcional)</em></span>
+        <span>Sitio web <em class="field__optional">(habilita el módulo SEO)</em></span>
         <input type="url" name="siteUrl" id="clientSiteUrl" maxlength="300" placeholder="https://cliente.cl" />
       </label>
 
@@ -339,21 +282,21 @@
         <input type="checkbox" name="inDevelopment" id="clientDev" />
         <span class="dev-switch__track" aria-hidden="true"><span class="dev-switch__thumb"></span></span>
         <span class="dev-switch__text">
-          <strong>Proyecto en desarrollo</strong>
-          <small>No suma a MRR/ARR ni a los cobros hasta que lo actives.</small>
+          <strong>En desarrollo</strong>
+          <small>No suma a MRR ni a cobros.</small>
         </span>
       </label>
 
-      <button type="submit" class="btn btn--neon btn--block" id="clientSubmitBtn">Agregar al Enjambre</button>
+      <button type="submit" class="btn btn--neon btn--block" id="clientSubmitBtn">Guardar</button>
       <button type="button" class="btn btn--danger btn--block" id="btnDeleteClient" hidden>Eliminar cliente</button>
     </form>
   </div>
 
-  <!-- ============ MODAL: NUEVA SOLICITUD ============ -->
+  <!-- ============ MODAL: SOLICITUD ============ -->
   <div class="modal-backdrop" id="requestModal" hidden>
     <form class="modal glass" id="requestForm" autocomplete="off">
       <header class="modal__head">
-        <h3>Nueva Solicitud</h3>
+        <h3>Nueva solicitud</h3>
         <button type="button" class="modal__close" data-close="requestModal" aria-label="Cerrar">✕</button>
       </header>
 
@@ -369,11 +312,40 @@
         <textarea name="description" required maxlength="200" rows="3" placeholder="Ej: Cambio de banner en home"></textarea>
       </label>
 
-      <button type="submit" class="btn btn--neon btn--block">Crear Solicitud</button>
+      <button type="submit" class="btn btn--neon btn--block">Crear</button>
     </form>
   </div>
 
-  <!-- ============ CUADERNO DEL CLIENTE ============ -->
+  <!-- ============ MODAL: TAREA ============ -->
+  <div class="modal-backdrop" id="taskModal" hidden>
+    <form class="modal glass" id="taskForm" autocomplete="off">
+      <header class="modal__head">
+        <h3>Nueva tarea</h3>
+        <button type="button" class="modal__close" data-close="taskModal" aria-label="Cerrar">✕</button>
+      </header>
+
+      <label class="field">
+        <span>¿Qué hay que hacer?</span>
+        <input type="text" name="title" id="taskTitle" required maxlength="240" placeholder="Ej: Reescribir title de /servicios" />
+      </label>
+
+      <label class="field">
+        <span>Cliente <em class="field__optional">(opcional)</em></span>
+        <select name="clientId" id="taskClientSelect">
+          <option value="">Sin cliente</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Para cuándo <em class="field__optional">(opcional)</em></span>
+        <input type="date" name="dueDate" id="taskDueDate" />
+      </label>
+
+      <button type="submit" class="btn btn--neon btn--block">Agregar al día</button>
+    </form>
+  </div>
+
+  <!-- ============ CUADERNO ============ -->
   <div class="modal-backdrop" id="notebookModal" hidden>
     <div class="modal modal--sheet glass" role="dialog" aria-labelledby="notebookTitle">
       <header class="modal__head">
@@ -385,18 +357,18 @@
       </header>
       <p class="notebook__site" id="notebookSite" hidden></p>
       <ol class="notebook__list" id="notebookList"></ol>
-      <p class="notebook__empty" id="notebookEmpty">Sin notas aún. Deja la primera para este cliente.</p>
+      <p class="notebook__empty" id="notebookEmpty">Sin notas aún.</p>
       <form class="notebook__composer" id="notebookForm">
         <label class="field">
           <span>Nueva nota</span>
-          <textarea name="body" id="notebookBody" required maxlength="4000" rows="3" placeholder="Qué estamos haciendo, acuerdos, pendientes…"></textarea>
+          <textarea name="body" id="notebookBody" required maxlength="4000" rows="3" placeholder="Acuerdos, pendientes…"></textarea>
         </label>
-        <button type="submit" class="btn btn--neon btn--block">Guardar en el cuaderno</button>
+        <button type="submit" class="btn btn--neon btn--block">Guardar</button>
       </form>
     </div>
   </div>
 
-  <script src="app.js?v=20260818"></script>
+  <script src="app.js?v=20260820"></script>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </body>

@@ -1,39 +1,43 @@
 "use strict";
 
 /* ============================================================
-   MONO STUDIO OS — Núcleo de la aplicación
-   Arquitectura: Store (persistencia) → Módulos de dominio →
-   CRMController (orquestación de estado, DOM y eventos).
+   MONO STUDIO OS — Base de operaciones
+   Store (persistencia) → Módulos de dominio → AppController.
+
+   La pantalla "Hoy" es una agenda única: dinero, solicitudes,
+   tareas y señales SEO comparten el mismo modelo de item para
+   que la priorización viva en un solo lugar (Agenda.build).
    ============================================================ */
 
-/** Umbral en horas a partir del cual una solicitud se marca en rojo. */
+/** Horas tras las que una solicitud pasa a urgente. */
 const OVERDUE_HOURS = 48;
 
 /** Ventana del gráfico de flujo de cobros (días). */
 const CHART_WINDOW_DAYS = 30;
 
-/** Días para marcar un cobro como urgente (ámbar). */
+/** Días para marcar un cobro como urgente. */
 const URGENT_DAYS = 3;
 
-/** Frecuencia de refresco de cronómetros: 60s (la UI muestra hh:mm). */
+/** Días de anticipación con que las tareas futuras entran a la agenda. */
+const TASK_LOOKAHEAD_DAYS = 7;
+
 const TIMER_TICK_MS = 60 * 1000;
 
 /* ------------------------------------------------------------
-   Capa de persistencia
+   Persistencia
    ------------------------------------------------------------ */
 class Store {
   static KEYS = {
-    legacyClients: "monoStudio.clients",
-    legacyRequests: "monoStudio.requests",
     view: "monoStudio.view",
     expanded: "monoStudio.expanded",
     module: "monoStudio.module",
+    seoHost: "monoStudio.seoHost",
+    seoCache: "monoStudio.seoCache",
   };
 
   static API = "./api/store.php";
-  static cache = { clients: [], requests: [] };
+  static cache = { clients: [], requests: [], tasks: [] };
 
-  /** Carga datos desde el servidor. Migra localStorage si el servidor está vacío. */
   static async init() {
     const res = await fetch(Store.API, { headers: { Accept: "application/json" } });
     if (!res.ok) throw new Error(`No se pudo conectar al servidor (${res.status})`);
@@ -42,75 +46,44 @@ class Store {
     Store.cache = {
       clients: Array.isArray(data.clients) ? data.clients : [],
       requests: Array.isArray(data.requests) ? data.requests : [],
+      tasks: Array.isArray(data.tasks) ? data.tasks : [],
     };
-
-    const legacyClients = Store.#loadLegacy(Store.KEYS.legacyClients);
-    const legacyRequests = Store.#loadLegacy(Store.KEYS.legacyRequests);
-
-    if (Store.cache.clients.length === 0 && legacyClients.length > 0) {
-      Store.cache.clients = legacyClients;
-      Store.cache.requests = legacyRequests;
-      await Store.persist();
-      localStorage.removeItem(Store.KEYS.legacyClients);
-      localStorage.removeItem(Store.KEYS.legacyRequests);
-    }
-
     return Store.cache;
   }
 
-  static #loadLegacy(key) {
-    try {
-      const raw = localStorage.getItem(key);
-      return raw ? JSON.parse(raw) : [];
-    } catch {
-      return [];
-    }
-  }
-
-  /** Persiste clientes y solicitudes en el servidor. */
-  static async persist() {
+  static async save(clients, requests, tasks) {
+    Store.cache = { clients, requests, tasks };
     const res = await fetch(Store.API, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(Store.cache),
     });
-
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || `Error al guardar (${res.status})`);
     }
   }
-
-  static async save(clients, requests) {
-    Store.cache = { clients, requests };
-    await Store.persist();
-  }
 }
 
 /* ------------------------------------------------------------
-   Módulo Financiero
+   Finanzas
    ------------------------------------------------------------ */
 class FinanceModule {
-  static #clpFormatter = new Intl.NumberFormat("es-CL", {
+  static #clp = new Intl.NumberFormat("es-CL", {
     style: "currency",
     currency: "CLP",
     maximumFractionDigits: 0,
   });
 
   static formatCLP(amount) {
-    return FinanceModule.#clpFormatter.format(Math.round(amount));
+    return FinanceModule.#clp.format(Math.round(amount || 0));
   }
 
   /**
-   * valueCLP = monto que cobras en cada ciclo del plan:
-   *   mensual → valor por mes | anual → valor por año (se prorratea en MRR/ARR).
-   *
-   * MRR  = mensuales + (anuales ÷ 12)
-   * ARR  = anuales + (mensuales × 12)
+   * MRR = mensuales + (anuales ÷ 12) · ARR = anuales + (mensuales × 12).
+   * Los clientes en desarrollo no facturan: cuentan como pipeline.
    */
   static computeMetrics(clients) {
-    // Los clientes en desarrollo aún no facturan: no suman a MRR/ARR/portfolio,
-    // pero registramos su valor como "pipeline" (ingreso potencial al activarse).
     const totals = clients.reduce(
       (acc, c) => {
         const value = Number(c.valueCLP) || 0;
@@ -126,34 +99,23 @@ class FinanceModule {
       { annual: 0, monthly: 0, devCount: 0, devPipeline: 0 }
     );
 
-    const monthlyMRR = totals.monthly;
-    const annualMRR = totals.annual / 12;
-
     return {
-      monthlySum: totals.monthly,
-      annualSum: totals.annual,
-      monthlyMRR,
-      annualMRR,
       portfolio: totals.annual + totals.monthly,
-      mrr: monthlyMRR + annualMRR,
+      mrr: totals.monthly + totals.annual / 12,
       arr: totals.annual + totals.monthly * 12,
       devCount: totals.devCount,
       devPipeline: totals.devPipeline,
+      activeCount: clients.length - totals.devCount,
     };
   }
 }
 
 /* ------------------------------------------------------------
-   Módulo de fechas y cobros
+   Fechas y cobros
    ------------------------------------------------------------ */
 class BillingModule {
-  static #dateFmt = new Intl.DateTimeFormat("es-CL", { day: "numeric", month: "short" });
-  static #dateFmtLong = new Intl.DateTimeFormat("es-CL", {
-    weekday: "short",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
+  static #short = new Intl.DateTimeFormat("es-CL", { day: "numeric", month: "short" });
+  static #long = new Intl.DateTimeFormat("es-CL", { weekday: "short", day: "numeric", month: "long" });
 
   static toISODate(date) {
     const y = date.getFullYear();
@@ -169,8 +131,8 @@ class BillingModule {
   }
 
   static parseDate(iso) {
-    const [y, m, d] = iso.split("-").map(Number);
-    return new Date(y, m - 1, d);
+    const [y, m, d] = String(iso).split("-").map(Number);
+    return new Date(y, (m || 1) - 1, d || 1);
   }
 
   static daysUntil(isoDate) {
@@ -193,14 +155,13 @@ class BillingModule {
   }
 
   static formatShort(iso) {
-    return BillingModule.#dateFmt.format(BillingModule.parseDate(iso));
+    return BillingModule.#short.format(BillingModule.parseDate(iso));
   }
 
   static formatLong(iso) {
-    return BillingModule.#dateFmtLong.format(BillingModule.parseDate(iso));
+    return BillingModule.#long.format(BillingModule.parseDate(iso));
   }
 
-  /** Clientes legacy sin fecha: primer día del mes siguiente. */
   static migrateClient(client) {
     if (!client.nextBillingDate) {
       const d = new Date();
@@ -212,38 +173,23 @@ class BillingModule {
     return client;
   }
 
-  /** Orden: vencidos primero (más antiguo arriba), luego por fecha ascendente. */
   static sortByBilling(clients) {
-    return [...clients].sort((a, b) => {
-      const da = BillingModule.parseDate(a.nextBillingDate).getTime();
-      const db = BillingModule.parseDate(b.nextBillingDate).getTime();
-      return da - db;
-    });
+    return [...clients].sort(
+      (a, b) =>
+        BillingModule.parseDate(a.nextBillingDate).getTime() -
+        BillingModule.parseDate(b.nextBillingDate).getTime()
+    );
   }
 
-  static nextBillingClient(clients) {
-    const sorted = BillingModule.sortByBilling(clients);
-    return sorted.find((c) => BillingModule.daysUntil(c.nextBillingDate) >= 0) ?? sorted[0] ?? null;
-  }
-
-  /** Serie diaria de cobros para el gráfico (próximos N días). */
   static buildCashFlowSeries(clients, days = CHART_WINDOW_DAYS) {
     const today = BillingModule.startOfDay();
     const buckets = [];
-
     for (let i = 0; i < days; i++) {
       const d = new Date(today);
       d.setDate(d.getDate() + i);
-      buckets.push({
-        date: BillingModule.toISODate(d),
-        total: 0,
-        clients: [],
-        isToday: i === 0,
-      });
+      buckets.push({ date: BillingModule.toISODate(d), total: 0, clients: [], isToday: i === 0 });
     }
-
     const map = new Map(buckets.map((b) => [b.date, b]));
-
     clients.forEach((c) => {
       const bucket = map.get(c.nextBillingDate);
       if (bucket) {
@@ -251,33 +197,25 @@ class BillingModule {
         bucket.clients.push(c);
       }
     });
-
     return buckets;
   }
 
-  /** Avanza la fecha al siguiente ciclo según el plan. */
   static advanceBillingDate(client) {
     const d = BillingModule.parseDate(client.nextBillingDate);
-    if (client.planType === "anual") {
-      d.setFullYear(d.getFullYear() + 1);
-    } else {
-      d.setMonth(d.getMonth() + 1);
-    }
+    if (client.planType === "anual") d.setFullYear(d.getFullYear() + 1);
+    else d.setMonth(d.getMonth() + 1);
     return BillingModule.toISODate(d);
   }
 }
 
 /* ------------------------------------------------------------
-   Módulo de contacto (WhatsApp / llamadas)
+   Contacto
    ------------------------------------------------------------ */
 class ContactModule {
-  /**
-   * Normaliza a formato E.164 asumiendo Chile como país por defecto:
-   * "9 1234 5678" → "56912345678". Si ya trae código país, se respeta.
-   */
+  /** Normaliza a E.164 asumiendo Chile: "9 1234 5678" → "56912345678". */
   static normalizePhone(raw) {
     if (!raw) return null;
-    let digits = raw.replace(/\D/g, "");
+    const digits = String(raw).replace(/\D/g, "");
     if (!digits) return null;
     if (digits.startsWith("56") && digits.length >= 11) return digits;
     if (digits.length === 9 && digits.startsWith("9")) return `56${digits}`;
@@ -299,16 +237,52 @@ class ContactModule {
 }
 
 /* ------------------------------------------------------------
-   Google Search Console (proxy PHP, sin SDK)
+   Search Console (proxy PHP)
    ------------------------------------------------------------ */
 class GscModule {
   static API = "./api/gsc.php";
-  static NO_CACHE = { cache: "no-store" };
 
-  static apiUrl(action, extra = "") {
-    const bust = `_=${Date.now()}`;
-    const qs = extra ? `${extra}&${bust}` : bust;
-    return `${GscModule.API}?action=${action}&${qs}`;
+  static #url(action, extra = "") {
+    const qs = extra ? `${extra}&` : "";
+    return `${GscModule.API}?action=${action}&${qs}_=${Date.now()}`;
+  }
+
+  static async #get(action, extra = "") {
+    const res = await fetch(GscModule.#url(action, extra), {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Search Console respondió ${res.status}`);
+    return data;
+  }
+
+  static sites() {
+    return GscModule.#get("sites");
+  }
+
+  static site(host, fresh = false) {
+    return GscModule.#get("site", `host=${encodeURIComponent(host)}${fresh ? "&fresh=1" : ""}`);
+  }
+
+  static async saveConfig(payload) {
+    const res = await fetch(GscModule.#url("config"), {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "No se pudo guardar");
+    return data;
+  }
+
+  static hostOf(url) {
+    try {
+      return new URL(String(url)).hostname.replace(/^www\./i, "").toLowerCase();
+    } catch {
+      return "";
+    }
   }
 
   static parsePages(raw) {
@@ -321,27 +295,14 @@ class GscModule {
         const [url, ...rest] = line.split("|");
         return { url: url.trim(), label: rest.join("|").trim() };
       })
-      .filter((p) => /^https?:\/\//i.test(p.url) && !GscModule.isAgencyUrl(p.url));
-  }
-
-  static isAgencyUrl(url) {
-    try {
-      const host = new URL(url).hostname.replace(/^www\./i, "").toLowerCase();
-      return host === "monostudio.cl";
-    } catch {
-      return /monostudio\.cl/i.test(String(url || ""));
-    }
+      .filter((p) => /^https?:\/\//i.test(p.url));
   }
 
   static serializePages(pages) {
     return (pages || [])
-      .filter((p) => p.url && !GscModule.isAgencyUrl(p.url))
+      .filter((p) => p?.url)
       .map((p) => (p.label ? `${p.url} | ${p.label}` : p.url))
       .join("\n");
-  }
-
-  static emptyMetrics() {
-    return { clicks: 0, impressions: 0, ctr: 0, position: 0 };
   }
 
   static fmt(n) {
@@ -356,210 +317,298 @@ class GscModule {
     return (n || 0).toFixed(1);
   }
 
-  static monthLabel(value) {
-    const [year, month] = String(value || "").split("-");
-    if (!year || !month) return value || "—";
-    const date = new Date(Number(year), Number(month) - 1, 1);
-    return new Intl.DateTimeFormat("es-CL", { month: "short", year: "numeric" }).format(date);
-  }
-
-  static deltaLabel(value, { invert = false, percent = false, position = false } = {}) {
-    if (!value) return { text: "igual vs 28d prev.", cls: "" };
+  static delta(value, { invert = false, percent = false, position = false } = {}) {
+    if (!value) return { text: "sin cambio", cls: "" };
     const up = invert ? value < 0 : value > 0;
     const sign = value > 0 ? "+" : "";
     let text;
     if (percent) text = `${sign}${(value * 100).toFixed(1)} pp`;
     else if (position) text = `${value > 0 ? "↑" : "↓"} ${Math.abs(value).toFixed(1)}`;
     else text = `${sign}${GscModule.fmt(value)}`;
-    return { text: `${text} vs 28d prev.`, cls: up ? "is-up" : "is-down" };
+    return { text, cls: up ? "is-up" : "is-down" };
+  }
+}
+
+/**
+ * Caché de resultados SEO por host. Vive en sessionStorage para que cambiar
+ * de pestaña sea instantáneo sin volver a golpear la API de Google.
+ */
+class SeoStore {
+  static data = new Map();
+
+  static load() {
+    try {
+      const raw = sessionStorage.getItem(Store.KEYS.seoCache);
+      if (!raw) return;
+      Object.entries(JSON.parse(raw)).forEach(([host, value]) => SeoStore.data.set(host, value));
+    } catch {
+      /* caché corrupta: se reconstruye sola */
+    }
   }
 
-  static async status() {
-    const res = await fetch(GscModule.apiUrl("status"), {
-      ...GscModule.NO_CACHE,
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) throw new Error("No se pudo leer el estado de Search Console");
-    return res.json();
+  static persist() {
+    try {
+      sessionStorage.setItem(
+        Store.KEYS.seoCache,
+        JSON.stringify(Object.fromEntries(SeoStore.data))
+      );
+    } catch {
+      /* cuota llena: seguimos solo en memoria */
+    }
   }
 
-  static async saveConfig(payload) {
-    const res = await fetch(GscModule.apiUrl("config"), {
-      method: "POST",
-      ...GscModule.NO_CACHE,
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "No se pudo guardar la config GSC");
-    return data;
+  static get(host) {
+    return SeoStore.data.get(host) || null;
   }
 
-  static async query(fresh = false) {
-    const res = await fetch(GscModule.apiUrl("query", fresh ? "fresh=1" : ""), {
-      ...GscModule.NO_CACHE,
-      headers: { Accept: "application/json" },
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "No se pudieron cargar las métricas");
-    return data;
+  static set(host, value) {
+    SeoStore.data.set(host, value);
+    SeoStore.persist();
   }
 }
 
 /* ------------------------------------------------------------
-   Controlador principal
+   Agenda: un solo modelo de item para todo lo pendiente
    ------------------------------------------------------------ */
-class CRMController {
+class Agenda {
+  static GROUPS = { money: "Dinero", seo: "SEO", task: "Tareas" };
+
+  static build({ clients, requests, tasks }) {
+    return [
+      ...Agenda.#fromBilling(clients),
+      ...Agenda.#fromRequests(requests, clients),
+      ...Agenda.#fromTasks(tasks, clients),
+      ...Agenda.#fromSeo(clients),
+    ].sort((a, b) => b.severity - a.severity || a.title.localeCompare(b.title));
+  }
+
+  static #fromBilling(clients) {
+    const items = [];
+    clients.forEach((client) => {
+      const days = BillingModule.daysUntil(client.nextBillingDate);
+
+      if (client.inDevelopment) {
+        if (days > 0) return;
+        items.push({
+          id: `dev:${client.id}`,
+          group: "money",
+          severity: 2,
+          title: `Lanzar ${client.name}`,
+          detail: `Fecha estimada ${BillingModule.formatLong(client.nextBillingDate)}. Al activarlo suma ${FinanceModule.formatCLP(client.valueCLP)} al plan ${client.planType}.`,
+          clientId: client.id,
+          clientName: client.name,
+          actions: [
+            { label: "Activar", act: "activate", value: client.id, primary: true },
+            ...Agenda.#contactActions(client),
+          ],
+        });
+        return;
+      }
+
+      if (days > URGENT_DAYS) return;
+      items.push({
+        id: `bill:${client.id}`,
+        group: "money",
+        severity: days < 0 ? 3 : 2,
+        title: `Cobrar a ${client.name}`,
+        detail: `${FinanceModule.formatCLP(client.valueCLP)} · ${BillingModule.relativeLabel(days)} (${BillingModule.formatLong(client.nextBillingDate)})`,
+        clientId: client.id,
+        clientName: client.name,
+        actions: [
+          { label: "Cobrado", act: "paid", value: client.id, primary: true },
+          ...Agenda.#contactActions(client),
+        ],
+      });
+    });
+    return items;
+  }
+
+  static #contactActions(client) {
+    const wa = ContactModule.waLink(client.phone, client.name);
+    return wa ? [{ label: "WhatsApp", act: "link", value: wa }] : [];
+  }
+
+  static #fromRequests(requests, clients) {
+    return requests
+      .filter((r) => r.status === "activa")
+      .map((req) => {
+        const client = clients.find((c) => c.id === req.clientId);
+        const hours = Math.floor((Date.now() - Number(req.createdAt)) / 3600000);
+        const overdue = hours >= OVERDUE_HOURS;
+        return {
+          id: `req:${req.id}`,
+          group: "task",
+          severity: overdue ? 3 : 1,
+          title: req.description,
+          detail: overdue
+            ? `Solicitud abierta hace ${Math.floor(hours / 24)} día${Math.floor(hours / 24) === 1 ? "" : "s"}`
+            : `Solicitud abierta hace ${hours}h`,
+          clientId: client?.id || "",
+          clientName: client?.name || "Cliente eliminado",
+          actions: [{ label: "Completar", act: "request-done", value: req.id, primary: true }],
+        };
+      });
+  }
+
+  static #fromTasks(tasks, clients) {
+    const items = [];
+    tasks
+      .filter((t) => !t.doneAt)
+      .forEach((task) => {
+        const client = clients.find((c) => c.id === task.clientId);
+        let severity = 2;
+        let detail = "Tarea sin fecha";
+
+        if (task.dueDate) {
+          const days = BillingModule.daysUntil(task.dueDate);
+          if (days > TASK_LOOKAHEAD_DAYS) return;
+          severity = days <= 0 ? 3 : days <= 2 ? 2 : 1;
+          detail = BillingModule.relativeLabel(days);
+        }
+
+        items.push({
+          id: `task:${task.id}`,
+          group: "task",
+          severity,
+          title: task.title,
+          detail,
+          clientId: client?.id || "",
+          clientName: client?.name || "",
+          actions: [
+            { label: "Hecho", act: "task-done", value: task.id, primary: true },
+            ...(task.ref ? [{ label: "Abrir", act: "link", value: task.ref }] : []),
+            { label: "Quitar", act: "task-delete", value: task.id, subtle: true },
+          ],
+        });
+      });
+    return items;
+  }
+
+  /** Recorre todo lo analizado, no solo lo vinculado a un cliente. */
+  static #fromSeo(clients) {
+    const items = [];
+
+    SeoStore.data.forEach((cached, host) => {
+      if (!cached?.signals?.length) return;
+      const client = clients.find((c) => GscModule.hostOf(c.siteUrl) === host);
+
+      cached.signals.slice(0, 6).forEach((signal) => {
+        items.push({
+          id: `seo:${host}:${signal.id}`,
+          group: "seo",
+          severity: Number(signal.severity) || 1,
+          title: signal.title,
+          detail: `${signal.detail} · ${signal.metric}`,
+          clientId: client?.id || "",
+          clientName: client?.name || host,
+          actions: [
+            { label: "Anotar tarea", act: "signal-task", value: `${host}|${signal.id}`, primary: true },
+            ...(signal.url ? [{ label: "Ver página", act: "link", value: signal.url }] : []),
+            { label: "Ver sitio", act: "open-seo", value: host },
+          ],
+        });
+      });
+    });
+
+    return items;
+  }
+}
+
+/* ------------------------------------------------------------
+   Controlador
+   ------------------------------------------------------------ */
+class AppController {
   static isLiteDevice() {
     return window.matchMedia("(max-width: 760px), (pointer: coarse)").matches;
   }
 
-  constructor(clients, requests) {
+  constructor({ clients, requests, tasks }) {
     this.clients = clients.map(BillingModule.migrateClient);
     this.requests = requests;
+    this.tasks = tasks;
+
     this.timerId = null;
     this.toastTimer = null;
     this.editingClientId = null;
     this.notebookClientId = null;
-    this.gscPagesDirty = false;
     this.highlightDate = null;
     this.isSaving = false;
-    this.isLite = CRMController.isLiteDevice();
-    this.module = localStorage.getItem(Store.KEYS.module) || "swarm";
-    this.view = this.isLite ? "list" : (localStorage.getItem(Store.KEYS.view) || "orbit");
+    this.agendaFilter = "all";
+    this.seoHost = localStorage.getItem(Store.KEYS.seoHost) || "";
+    this.seoProperties = [];
+    this.seoConnection = null;
+    this.seoLoading = false;
+    this.warming = false;
+
+    this.isLite = AppController.isLiteDevice();
+    this.module = localStorage.getItem(Store.KEYS.module) || "today";
+    this.view = this.isLite ? "list" : localStorage.getItem(Store.KEYS.view) || "orbit";
     this.expanded = !this.isLite && localStorage.getItem(Store.KEYS.expanded) === "1";
     this.chartDays = this.isLite ? 14 : CHART_WINDOW_DAYS;
     document.documentElement.classList.toggle("is-lite", this.isLite);
 
-    this.dom = {
-      kpiPortfolio: document.getElementById("kpiPortfolio"),
-      kpiMRR: document.getElementById("kpiMRR"),
-      kpiARR: document.getElementById("kpiARR"),
-      kpiPortfolioMeta: document.getElementById("kpiPortfolioMeta"),
-      kpiMRRMeta: document.getElementById("kpiMRRMeta"),
-      kpiARRMeta: document.getElementById("kpiARRMeta"),
-      kpiClientCount: document.getElementById("kpiClientCount"),
-      kpiDevCount: document.getElementById("kpiDevCount"),
-      workspace: document.querySelector(".workspace"),
-      btnOrbitExpand: document.getElementById("btnOrbitExpand"),
-      clientDev: document.getElementById("clientDev"),
-      swarmGrid: document.getElementById("swarmGrid"),
-      swarmEmpty: document.getElementById("swarmEmpty"),
-      cashChartWrap: document.getElementById("cashChartWrap"),
-      chartBars: document.getElementById("chartBars"),
-      chartAxis: document.getElementById("chartAxis"),
-      chartPeriodTotal: document.getElementById("chartPeriodTotal"),
-      chartRangeLabel: document.getElementById("chartRangeLabel"),
-      nextBilling: document.getElementById("nextBilling"),
-      nextBillingName: document.getElementById("nextBillingName"),
-      nextBillingAmount: document.getElementById("nextBillingAmount"),
-      nextBillingWhen: document.getElementById("nextBillingWhen"),
-      requestList: document.getElementById("requestList"),
-      requestsEmpty: document.getElementById("requestsEmpty"),
-      tooltip: document.getElementById("nodeTooltip"),
-      clientModal: document.getElementById("clientModal"),
-      requestModal: document.getElementById("requestModal"),
-      notebookModal: document.getElementById("notebookModal"),
-      clientForm: document.getElementById("clientForm"),
-      clientModalTitle: document.getElementById("clientModalTitle"),
-      clientSubmitBtn: document.getElementById("clientSubmitBtn"),
-      btnDeleteClient: document.getElementById("btnDeleteClient"),
-      clientIdField: document.getElementById("clientIdField"),
-      clientName: document.getElementById("clientName"),
-      clientValue: document.getElementById("clientValue"),
-      clientValueLabel: document.getElementById("clientValueLabel"),
-      clientValueHint: document.getElementById("clientValueHint"),
-      planAnual: document.getElementById("planAnual"),
-      planMensual: document.getElementById("planMensual"),
-      requestForm: document.getElementById("requestForm"),
-      requestClientSelect: document.getElementById("requestClientSelect"),
-      clientBillingDate: document.getElementById("clientBillingDate"),
-      clientPhone: document.getElementById("clientPhone"),
-      clientSiteUrl: document.getElementById("clientSiteUrl"),
-      contactActions: document.getElementById("contactActions"),
-      linkWhatsApp: document.getElementById("linkWhatsApp"),
-      linkCall: document.getElementById("linkCall"),
-      orbitView: document.getElementById("orbitView"),
-      orbitWeb: document.getElementById("orbitWeb"),
-      orbitNodes: document.getElementById("orbitNodes"),
-      orbitCoreValue: document.getElementById("orbitCoreValue"),
-      btnViewOrbit: document.getElementById("btnViewOrbit"),
-      btnViewList: document.getElementById("btnViewList"),
-      toast: document.getElementById("toast"),
-      btnModuleSwarm: document.getElementById("btnModuleSwarm"),
-      btnModuleSeo: document.getElementById("btnModuleSeo"),
-      swarmPanel: document.querySelector(".swarm-panel"),
-      seoPanel: document.getElementById("seoPanel"),
-      notebookTitle: document.getElementById("notebookTitle"),
-      notebookSite: document.getElementById("notebookSite"),
-      notebookList: document.getElementById("notebookList"),
-      notebookEmpty: document.getElementById("notebookEmpty"),
-      notebookForm: document.getElementById("notebookForm"),
-      notebookBody: document.getElementById("notebookBody"),
-      seoSetup: document.getElementById("seoSetup"),
-      seoSaStatus: document.getElementById("seoSaStatus"),
-      seoSites: document.getElementById("seoSites"),
-      gscConfigForm: document.getElementById("gscConfigForm"),
-      gscSiteUrl: document.getElementById("gscSiteUrl"),
-      gscSitemapUrl: document.getElementById("gscSitemapUrl"),
-      gscPages: document.getElementById("gscPages"),
-      btnGscRefresh: document.getElementById("btnGscRefresh"),
-      seoDiscovery: document.getElementById("seoDiscovery"),
-      seoKpis: document.getElementById("seoKpis"),
-      seoInsightsCard: document.getElementById("seoInsightsCard"),
-      seoInsights: document.getElementById("seoInsights"),
-      seoPropertiesCard: document.getElementById("seoPropertiesCard"),
-      seoProperties: document.getElementById("seoProperties"),
-      seoSitemapsCard: document.getElementById("seoSitemapsCard"),
-      seoSitemaps: document.getElementById("seoSitemaps"),
-      seoTrendCard: document.getElementById("seoTrendCard"),
-      seoTrendWeekdays: document.getElementById("seoTrendWeekdays"),
-      seoTrendMonths: document.getElementById("seoTrendMonths"),
-      seoTableWrap: document.getElementById("seoTableWrap"),
-      seoTableBody: document.getElementById("seoTableBody"),
-      seoEmpty: document.getElementById("seoEmpty"),
-      seoRange: document.getElementById("seoRange"),
-      seoClicks: document.getElementById("seoClicks"),
-      seoImpressions: document.getElementById("seoImpressions"),
-      seoCtr: document.getElementById("seoCtr"),
-      seoPosition: document.getElementById("seoPosition"),
-      seoSummaryCard: document.getElementById("seoSummaryCard"),
-      seoSummaryTitle: document.getElementById("seoSummaryTitle"),
-      seoSummaryDetail: document.getElementById("seoSummaryDetail"),
-      seoSummaryMeta: document.getElementById("seoSummaryMeta"),
-      seoClicksDelta: document.getElementById("seoClicksDelta"),
-      seoImpressionsDelta: document.getElementById("seoImpressionsDelta"),
-      seoCtrDelta: document.getElementById("seoCtrDelta"),
-      seoPositionDelta: document.getElementById("seoPositionDelta"),
-    };
+    this.dom = AppController.#collectDom();
+  }
+
+  static #collectDom() {
+    const ids = [
+      "panelToday", "panelClients", "panelSeo",
+      "btnModuleToday", "btnModuleClients", "btnModuleSeo",
+      "statBilling", "statBillingValue", "statBillingMeta",
+      "statMrr", "statMrrValue", "statMrrMeta",
+      "statAlerts", "statAlertsValue", "statAlertsMeta",
+      "agendaList", "agendaEmpty", "agendaCount", "agendaFilters",
+      "agendaDone", "agendaDoneList",
+      "swarmGrid", "swarmEmpty", "orbitView", "orbitWeb", "orbitNodes", "orbitCoreValue",
+      "cashChartWrap", "chartBars", "chartAxis", "chartPeriodTotal", "chartRangeLabel",
+      "btnViewOrbit", "btnViewList", "btnOrbitExpand",
+      "requestList", "requestsEmpty",
+      "seoClients", "seoNotice", "seoKpis", "seoSpark", "seoInventory",
+      "seoSignals", "seoSignalsEmpty", "seoPagesDrawer", "seoPagesCount",
+      "seoTableBody", "seoDiagDrawer", "seoDiag", "seoRange",
+      "seoClicks", "seoImpressions", "seoCtr", "seoPosition",
+      "seoClicksDelta", "seoImpressionsDelta", "seoCtrDelta", "seoPositionDelta",
+      "btnGscRefresh", "gscConfigForm", "gscSitemapUrl", "gscPages",
+      "clientModal", "requestModal", "taskModal", "notebookModal",
+      "clientForm", "clientModalTitle", "clientSubmitBtn", "btnDeleteClient", "clientIdField",
+      "clientName", "clientValue", "clientValueLabel", "clientValueHint",
+      "clientBillingDate", "clientPhone", "clientSiteUrl", "clientDev",
+      "planAnual", "planMensual", "contactActions", "linkWhatsApp", "linkCall",
+      "requestForm", "requestClientSelect",
+      "taskForm", "taskTitle", "taskClientSelect", "taskDueDate",
+      "notebookTitle", "notebookSite", "notebookList", "notebookEmpty", "notebookForm", "notebookBody",
+      "nodeTooltip", "toast",
+    ];
+    const dom = {};
+    ids.forEach((id) => {
+      dom[id] = document.getElementById(id);
+    });
+    dom.tooltip = dom.nodeTooltip;
+    return dom;
   }
 
   async init() {
-    this.closeModal("clientModal");
-    this.closeModal("requestModal");
-    this.closeModal("notebookModal");
+    ["clientModal", "requestModal", "taskModal", "notebookModal"].forEach((id) => this.closeModal(id));
     this.dom.btnViewOrbit.classList.toggle("is-active", this.view === "orbit");
     this.dom.btnViewList.classList.toggle("is-active", this.view === "list");
     this.applyExpanded();
-    this.setModule(this.module, { persist: false, silent: true });
     this.bindEvents();
+    this.setModule(this.module, { persist: false, silent: true });
 
-    if (this.clients.some((c) => !c.nextBillingDate)) {
-      await this.persistState();
-    }
+    if (this.clients.some((c) => !c.nextBillingDate)) await this.persistState();
 
     this.renderAll();
-    this.startTimerLoop();
-    if (this.module === "seo") this.loadGsc();
+    this.timerId = setInterval(() => this.renderAgenda(), TIMER_TICK_MS);
+    this.warmSeo();
   }
 
   async persistState() {
     if (this.isSaving) return;
     this.isSaving = true;
     try {
-      await Store.save(this.clients, this.requests);
+      await Store.save(this.clients, this.requests, this.tasks);
     } catch (err) {
-      this.showToast(err.message || "Error al guardar en el servidor");
+      this.showToast(err.message || "Error al guardar");
       throw err;
     } finally {
       this.isSaving = false;
@@ -568,64 +617,113 @@ class CRMController {
 
   /* ---------- Eventos ---------- */
   bindEvents() {
-    document.getElementById("btnOpenClientModal")
-      .addEventListener("click", () => this.openCreateClient());
+    this.dom.btnModuleToday.addEventListener("click", () => this.setModule("today"));
+    this.dom.btnModuleClients.addEventListener("click", () => this.setModule("clients"));
+    this.dom.btnModuleSeo.addEventListener("click", () => this.setModule("seo"));
+    this.dom.statBilling.addEventListener("click", () => this.setModule("clients"));
+    this.dom.statMrr.addEventListener("click", () => this.setModule("clients"));
+    this.dom.statAlerts.addEventListener("click", () => this.setModule("seo"));
 
-    document.getElementById("btnOpenRequestModal")
-      .addEventListener("click", () => this.openRequestModal());
+    this.dom.agendaFilters.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-filter]");
+      if (!btn) return;
+      this.agendaFilter = btn.dataset.filter;
+      this.dom.agendaFilters.querySelectorAll(".filter").forEach((el) => {
+        el.classList.toggle("is-active", el === btn);
+      });
+      this.renderAgenda();
+    });
 
-    // Cierre de modales: botón ✕ o clic en el backdrop.
+    this.dom.agendaList.addEventListener("click", (e) => this.handleAgendaClick(e));
+    this.dom.agendaDoneList.addEventListener("click", (e) => this.handleAgendaClick(e));
+
+    document.getElementById("btnOpenClientModal").addEventListener("click", () => this.openCreateClient());
+    document.getElementById("btnOpenRequestModal").addEventListener("click", () => this.openRequestModal());
+    this.dom.btnOpenTaskModal = document.getElementById("btnOpenTaskModal");
+    this.dom.btnOpenTaskModal.addEventListener("click", () => this.openTaskModal());
+
     document.querySelectorAll("[data-close]").forEach((btn) =>
       btn.addEventListener("click", () => this.closeModal(btn.dataset.close))
     );
-    [this.dom.clientModal, this.dom.requestModal, this.dom.notebookModal].forEach((backdrop) =>
-      backdrop.addEventListener("click", (e) => {
-        if (e.target === backdrop) this.closeModal(backdrop.id);
-      })
+    [this.dom.clientModal, this.dom.requestModal, this.dom.taskModal, this.dom.notebookModal].forEach(
+      (backdrop) =>
+        backdrop.addEventListener("click", (e) => {
+          if (e.target === backdrop) this.closeModal(backdrop.id);
+        })
     );
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        this.closeModal("clientModal");
-        this.closeModal("requestModal");
-        this.closeModal("notebookModal");
-      }
+      if (e.key !== "Escape") return;
+      ["clientModal", "requestModal", "taskModal", "notebookModal"].forEach((id) => this.closeModal(id));
     });
 
     this.dom.clientForm.addEventListener("submit", (e) => this.handleClientSubmit(e));
-    this.dom.btnDeleteClient.addEventListener("click", () => this.deleteClient(this.editingClientId));
     this.dom.clientForm.addEventListener("change", (e) => {
       if (e.target.name === "planType") this.updateValueFieldHint();
     });
+    this.dom.btnDeleteClient.addEventListener("click", () => this.deleteClient(this.editingClientId));
+    this.dom.clientPhone.addEventListener("input", () => this.refreshContactLinks());
     this.dom.requestForm.addEventListener("submit", (e) => this.handleAddRequest(e));
+    this.dom.taskForm.addEventListener("submit", (e) => this.handleAddTask(e));
     this.dom.notebookForm.addEventListener("submit", (e) => this.handleAddNote(e));
     this.dom.notebookList.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-delete-note]");
       if (btn) this.deleteNote(btn.dataset.deleteNote);
     });
 
-    this.dom.btnModuleSwarm.addEventListener("click", () => this.setModule("swarm"));
-    this.dom.btnModuleSeo.addEventListener("click", () => this.setModule("seo"));
-    this.dom.gscConfigForm.addEventListener("submit", (e) => this.handleGscConfig(e));
-    this.dom.gscPages.addEventListener("input", () => {
-      this.gscPagesDirty = true;
+    this.dom.seoClients.addEventListener("click", (e) => {
+      const chip = e.target.closest("[data-host]");
+      if (chip) this.selectSeoHost(chip.dataset.host);
     });
-    this.dom.btnGscRefresh.addEventListener("click", () => this.loadGsc(true));
+    this.dom.seoSignals.addEventListener("click", (e) => this.handleAgendaClick(e));
+    this.dom.btnGscRefresh.addEventListener("click", () => this.loadSeoHost(this.seoHost, true));
+    this.dom.gscConfigForm.addEventListener("submit", (e) => this.handleGscConfig(e));
+
+    this.dom.btnViewOrbit.addEventListener("click", () => this.setView("orbit"));
+    this.dom.btnViewList.addEventListener("click", () => this.setView("list"));
+    this.dom.btnOrbitExpand.addEventListener("click", () => this.toggleExpanded());
+
+    this.dom.orbitNodes.addEventListener("click", (e) => {
+      const node = e.target.closest(".orbit-node");
+      if (!node) return;
+      this.hideTooltip();
+      this.openNotebook(node.dataset.id);
+    });
+
+    this.dom.swarmGrid.addEventListener("click", (e) => {
+      const map = {
+        "[data-mark-live]": (el) => this.markClientLive(el.dataset.markLive),
+        "[data-mark-paid]": (el) => this.markClientPaid(el.dataset.markPaid),
+        "[data-notebook]": (el) => this.openNotebook(el.dataset.notebook),
+        "[data-edit-client]": (el) => this.openEditClient(el.dataset.editClient),
+        "[data-delete-client]": (el) => this.deleteClient(el.dataset.deleteClient),
+      };
+      for (const [selector, handler] of Object.entries(map)) {
+        const el = e.target.closest(selector);
+        if (el) {
+          e.stopPropagation();
+          handler(el);
+          return;
+        }
+      }
+    });
+
+    this.dom.requestList.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-complete]");
+      if (btn) this.completeRequest(btn.dataset.complete);
+    });
 
     if (!this.isLite) {
       this.dom.swarmGrid.addEventListener("mouseover", (e) => this.handleNodeHover(e));
+      this.dom.swarmGrid.addEventListener("mousemove", (e) => this.moveTooltip(e));
       this.dom.swarmGrid.addEventListener("mouseout", (e) => {
-        const inside = e.target.closest(".node, .timeline-row");
-        const stillInside = e.relatedTarget?.closest?.("#swarmGrid");
-        if (inside && !stillInside) {
+        if (e.target.closest(".node, .timeline-row") && !e.relatedTarget?.closest?.("#swarmGrid")) {
           this.hideTooltip();
           this.setChartHighlight(null);
         }
       });
-      this.dom.swarmGrid.addEventListener("mousemove", (e) => this.moveTooltip(e));
       this.dom.chartBars.addEventListener("mouseover", (e) => {
         const bar = e.target.closest(".chart-bar");
-        if (!bar) return;
-        this.setChartHighlight(bar.dataset.date);
+        if (bar) this.setChartHighlight(bar.dataset.date);
       });
       this.dom.chartBars.addEventListener("mouseleave", () => this.setChartHighlight(null));
       this.dom.orbitNodes.addEventListener("mouseover", (e) => this.handleNodeHover(e));
@@ -635,138 +733,62 @@ class CRMController {
         this.setChartHighlight(null);
       });
     }
-
-    // Toggle de vistas Órbita / Lista.
-    this.dom.btnViewOrbit.addEventListener("click", () => this.setView("orbit"));
-    this.dom.btnViewList.addEventListener("click", () => this.setView("list"));
-    this.dom.btnOrbitExpand.addEventListener("click", () => this.toggleExpanded());
-
-    this.dom.orbitNodes.addEventListener("click", (e) => {
-      const node = e.target.closest(".orbit-node");
-      if (node) {
-        this.hideTooltip();
-        this.openNotebook(node.dataset.id);
-      }
-    });
-
-    // Actualiza los enlaces de contacto mientras se escribe el teléfono.
-    this.dom.clientPhone.addEventListener("input", () => this.refreshContactLinks());
-
-    this.dom.swarmGrid.addEventListener("click", (e) => {
-      const paidBtn = e.target.closest("[data-mark-paid]");
-      const liveBtn = e.target.closest("[data-mark-live]");
-      const editBtn = e.target.closest("[data-edit-client]");
-      const noteBtn = e.target.closest("[data-notebook]");
-      const deleteBtn = e.target.closest("[data-delete-client]");
-      if (liveBtn) {
-        e.stopPropagation();
-        this.markClientLive(liveBtn.dataset.markLive);
-      } else if (paidBtn) {
-        e.stopPropagation();
-        this.markClientPaid(paidBtn.dataset.markPaid);
-      } else if (noteBtn) {
-        e.stopPropagation();
-        this.openNotebook(noteBtn.dataset.notebook);
-      } else if (editBtn) {
-        e.stopPropagation();
-        this.openEditClient(editBtn.dataset.editClient);
-      } else if (deleteBtn) {
-        e.stopPropagation();
-        this.deleteClient(deleteBtn.dataset.deleteClient);
-      }
-    });
-
-    // Delegación para completar solicitudes.
-    this.dom.requestList.addEventListener("click", (e) => {
-      const btn = e.target.closest("[data-complete]");
-      if (btn) this.completeRequest(btn.dataset.complete);
-    });
   }
 
-  /* ---------- Modales ---------- */
-  setDefaultBillingDate() {
-    const d = new Date();
-    d.setDate(d.getDate() + 7);
-    this.dom.clientBillingDate.value = BillingModule.toISODate(d);
-  }
+  handleAgendaClick(e) {
+    const btn = e.target.closest("[data-act]");
+    if (!btn) return;
+    const { act, value } = btn.dataset;
 
-  setChartHighlight(date) {
-    this.highlightDate = date;
-    this.dom.chartBars.querySelectorAll(".chart-bar").forEach((bar) => {
-      bar.classList.toggle("is-active", bar.dataset.date === date);
-    });
-    this.dom.swarmGrid.querySelectorAll(".timeline-row").forEach((row) => {
-      row.classList.toggle("is-highlighted", row.dataset.date === date);
-    });
-  }
-
-  updateValueFieldHint() {
-    const isAnnual = this.dom.planAnual.checked;
-    const isMonthly = this.dom.planMensual.checked;
-
-    if (isAnnual) {
-      this.dom.clientValueLabel.textContent = "Valor del contrato anual (CLP)";
-      this.dom.clientValueHint.textContent =
-        "Ingresa lo que cobras una vez al año. En MRR se divide automáticamente entre 12.";
-      this.dom.clientValue.placeholder = "Ej: 1200000";
-    } else if (isMonthly) {
-      this.dom.clientValueLabel.textContent = "Valor mensual (CLP)";
-      this.dom.clientValueHint.textContent =
-        "Ingresa lo que cobras cada mes. Ese monto suma directo al MRR.";
-      this.dom.clientValue.placeholder = "Ej: 250000";
-    } else {
-      this.dom.clientValueLabel.textContent = "Valor del plan (CLP)";
-      this.dom.clientValueHint.textContent = "Selecciona el tipo de plan para ver qué monto ingresar.";
-      this.dom.clientValue.placeholder = "Ej: 250000";
+    switch (act) {
+      case "paid":
+        this.markClientPaid(value);
+        break;
+      case "activate":
+        this.markClientLive(value);
+        break;
+      case "request-done":
+        this.completeRequest(value);
+        break;
+      case "task-done":
+        this.toggleTask(value);
+        break;
+      case "task-delete":
+        this.deleteTask(value);
+        break;
+      case "signal-task":
+        this.taskFromSignal(value);
+        break;
+      case "open-seo":
+        this.selectSeoHost(value);
+        this.setModule("seo");
+        break;
+      case "link":
+        window.open(value, "_blank", "noopener");
+        break;
+      default:
+        break;
     }
   }
 
-  openCreateClient() {
-    this.editingClientId = null;
-    this.dom.clientForm.reset();
-    this.dom.clientIdField.value = "";
-    this.dom.clientModalTitle.textContent = "Nuevo Cliente";
-    this.dom.clientSubmitBtn.textContent = "Agregar al Enjambre";
-    this.dom.btnDeleteClient.hidden = true;
-    this.updateValueFieldHint();
-    this.setDefaultBillingDate();
-    this.openModal("clientModal");
-  }
+  /* ---------- Navegación ---------- */
+  setModule(module, { persist = true, silent = false } = {}) {
+    const valid = ["today", "clients", "seo"];
+    this.module = valid.includes(module) ? module : "today";
+    if (persist) localStorage.setItem(Store.KEYS.module, this.module);
 
-  openEditClient(id) {
-    const client = this.clients.find((c) => c.id === id);
-    if (!client) return;
+    const map = {
+      today: [this.dom.btnModuleToday, this.dom.panelToday],
+      clients: [this.dom.btnModuleClients, this.dom.panelClients],
+      seo: [this.dom.btnModuleSeo, this.dom.panelSeo],
+    };
+    Object.entries(map).forEach(([key, [btn, panel]]) => {
+      btn.classList.toggle("is-active", key === this.module);
+      panel.hidden = key !== this.module;
+    });
 
-    this.editingClientId = id;
-    this.dom.clientIdField.value = id;
-    this.dom.clientName.value = client.name;
-    this.dom.clientValue.value = client.valueCLP;
-    this.dom.clientBillingDate.value = client.nextBillingDate;
-    this.dom.clientPhone.value = client.phone ?? "";
-    this.dom.clientSiteUrl.value = client.siteUrl ?? "";
-    this.dom.clientDev.checked = Boolean(client.inDevelopment);
-    (client.planType === "anual" ? this.dom.planAnual : this.dom.planMensual).checked = true;
-
-    this.dom.clientModalTitle.textContent = "Editar Cliente";
-    this.dom.clientSubmitBtn.textContent = "Guardar cambios";
-    this.dom.btnDeleteClient.hidden = false;
-    this.updateValueFieldHint();
-    this.refreshContactLinks();
-    this.openModal("clientModal");
-  }
-
-  /** Muestra WhatsApp/Llamar en el modal cuando hay teléfono válido. */
-  refreshContactLinks() {
-    const phone = this.dom.clientPhone.value;
-    const name = this.dom.clientName.value.trim() || "!";
-    const wa = ContactModule.waLink(phone, name);
-    const tel = ContactModule.telLink(phone);
-
-    this.dom.contactActions.hidden = !wa;
-    if (wa) {
-      this.dom.linkWhatsApp.href = wa;
-      this.dom.linkCall.href = tel;
-    }
+    if (this.module === "clients") this.renderSwarm();
+    if (this.module === "seo" && !silent) this.renderSeo();
   }
 
   setView(view) {
@@ -778,16 +800,14 @@ class CRMController {
   }
 
   applyExpanded() {
-    this.dom.workspace.classList.toggle("is-expanded", this.expanded);
+    this.dom.panelClients.classList.toggle("is-expanded", this.expanded);
     this.dom.btnOrbitExpand.setAttribute("aria-pressed", String(this.expanded));
     this.dom.btnOrbitExpand.textContent = this.expanded ? "⤡" : "⤢";
-    this.dom.btnOrbitExpand.title = this.expanded ? "Reducir la órbita" : "Expandir la órbita";
   }
 
   toggleExpanded() {
     this.expanded = !this.expanded;
     localStorage.setItem(Store.KEYS.expanded, this.expanded ? "1" : "0");
-    // Al expandir, la órbita es la protagonista: aseguramos esa vista.
     if (this.expanded && this.view !== "orbit") this.setView("orbit");
     this.applyExpanded();
   }
@@ -810,16 +830,905 @@ class CRMController {
     this.dom[id].hidden = true;
   }
 
-  setModule(module, { persist = true, silent = false } = {}) {
-    this.module = module === "seo" ? "seo" : "swarm";
-    if (persist) localStorage.setItem(Store.KEYS.module, this.module);
-    this.dom.btnModuleSwarm.classList.toggle("is-active", this.module === "swarm");
-    this.dom.btnModuleSeo.classList.toggle("is-active", this.module === "seo");
-    this.dom.swarmPanel.hidden = this.module !== "swarm";
-    this.dom.seoPanel.hidden = this.module !== "seo";
-    if (this.module === "seo" && !silent) this.loadGsc();
+  /* ---------- Render raíz ---------- */
+  renderAll() {
+    this.renderStats();
+    this.renderAgenda();
+    this.renderChart();
+    this.renderSwarm();
+    this.renderRequests();
   }
 
+  renderStats() {
+    const active = this.activeClients();
+    const metrics = FinanceModule.computeMetrics(this.clients);
+
+    const dueSoon = active.filter((c) => BillingModule.daysUntil(c.nextBillingDate) <= 7);
+    const dueTotal = dueSoon.reduce((sum, c) => sum + (Number(c.valueCLP) || 0), 0);
+    const overdue = dueSoon.filter((c) => BillingModule.daysUntil(c.nextBillingDate) < 0).length;
+
+    this.dom.statBillingValue.textContent = FinanceModule.formatCLP(dueTotal);
+    this.dom.statBillingMeta.textContent = dueSoon.length
+      ? `${dueSoon.length} en 7 días${overdue ? ` · ${overdue} vencido${overdue === 1 ? "" : "s"}` : ""}`
+      : "Nada por cobrar";
+    this.dom.statBilling.classList.toggle("is-alert", overdue > 0);
+
+    this.dom.statMrrValue.textContent = FinanceModule.formatCLP(metrics.mrr);
+    this.dom.statMrrMeta.textContent = `${metrics.activeCount} activo${metrics.activeCount === 1 ? "" : "s"}${metrics.devCount ? ` · ${metrics.devCount} en dev` : ""}`;
+
+    const hosts = this.seoHosts();
+    const scanned = hosts.filter((h) => SeoStore.get(h.host));
+    const critical = scanned.reduce(
+      (sum, h) => sum + (SeoStore.get(h.host)?.signals || []).filter((s) => s.severity >= 3).length,
+      0
+    );
+    this.dom.statAlertsValue.textContent = scanned.length ? String(critical) : "—";
+    this.dom.statAlertsMeta.textContent = hosts.length
+      ? `${scanned.length}/${hosts.length} sitios revisados`
+      : "Agrega el sitio de un cliente";
+    this.dom.statAlerts.classList.toggle("is-alert", critical > 0);
+  }
+
+  /* ---------- Hoy ---------- */
+  renderAgenda() {
+    const items = Agenda.build({
+      clients: this.clients,
+      requests: this.requests,
+      tasks: this.tasks,
+    });
+    const visible =
+      this.agendaFilter === "all" ? items : items.filter((i) => i.group === this.agendaFilter);
+
+    this.dom.agendaCount.textContent = `${items.length} pendiente${items.length === 1 ? "" : "s"}`;
+    this.dom.agendaEmpty.hidden = visible.length > 0;
+    this.dom.agendaList.innerHTML = "";
+
+    const fragment = document.createDocumentFragment();
+    visible.forEach((item) => fragment.appendChild(this.#agendaItem(item)));
+    this.dom.agendaList.appendChild(fragment);
+
+    this.renderDoneToday();
+  }
+
+  #agendaItem(item) {
+    const li = document.createElement("li");
+    li.className = `agenda-item agenda-item--s${item.severity} agenda-item--${item.group}`;
+
+    const head = document.createElement("div");
+    head.className = "agenda-item__head";
+
+    const tag = document.createElement("span");
+    tag.className = "agenda-item__tag";
+    tag.textContent = Agenda.GROUPS[item.group] || item.group;
+    head.appendChild(tag);
+
+    if (item.clientName) {
+      const who = document.createElement("span");
+      who.className = "agenda-item__client";
+      who.textContent = item.clientName;
+      head.appendChild(who);
+    }
+
+    const title = document.createElement("strong");
+    title.className = "agenda-item__title";
+    title.textContent = item.title;
+
+    const detail = document.createElement("p");
+    detail.className = "agenda-item__detail";
+    detail.textContent = item.detail;
+
+    const actions = document.createElement("div");
+    actions.className = "agenda-item__actions";
+    (item.actions || []).forEach((action) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `chip-btn${action.primary ? " chip-btn--primary" : ""}${action.subtle ? " chip-btn--subtle" : ""}`;
+      btn.dataset.act = action.act;
+      btn.dataset.value = action.value;
+      btn.textContent = action.label;
+      actions.appendChild(btn);
+    });
+
+    li.append(head, title, detail, actions);
+    return li;
+  }
+
+  renderDoneToday() {
+    const today = BillingModule.toISODate(new Date());
+    const done = this.tasks.filter(
+      (t) => t.doneAt && BillingModule.toISODate(new Date(t.doneAt)) === today
+    );
+    this.dom.agendaDone.hidden = done.length === 0;
+    this.dom.agendaDoneList.innerHTML = "";
+    if (!done.length) return;
+
+    const fragment = document.createDocumentFragment();
+    done.forEach((task) => {
+      const li = document.createElement("li");
+      li.className = "agenda-item agenda-item--done";
+      const title = document.createElement("strong");
+      title.className = "agenda-item__title";
+      title.textContent = task.title;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "chip-btn chip-btn--subtle";
+      btn.dataset.act = "task-done";
+      btn.dataset.value = task.id;
+      btn.textContent = "Reabrir";
+      li.append(title, btn);
+      fragment.appendChild(li);
+    });
+    this.dom.agendaDoneList.appendChild(fragment);
+  }
+
+  /* ---------- Tareas ---------- */
+  openTaskModal(prefill = {}) {
+    this.dom.taskForm.reset();
+    this.populateSelect(this.dom.taskClientSelect, { includeEmpty: "Sin cliente" });
+    if (prefill.title) this.dom.taskTitle.value = prefill.title;
+    if (prefill.clientId) this.dom.taskClientSelect.value = prefill.clientId;
+    this.openModal("taskModal");
+  }
+
+  async handleAddTask(e) {
+    e.preventDefault();
+    const data = new FormData(this.dom.taskForm);
+    const title = String(data.get("title") || "").trim();
+    if (!title) return;
+
+    await this.addTask({
+      title,
+      clientId: String(data.get("clientId") || ""),
+      dueDate: String(data.get("dueDate") || ""),
+      kind: "manual",
+    });
+    this.closeModal("taskModal");
+  }
+
+  async addTask({ title, clientId = "", dueDate = "", kind = "manual", ref = "" }) {
+    const task = {
+      id: crypto.randomUUID(),
+      title,
+      clientId,
+      dueDate,
+      kind,
+      ref,
+      createdAt: Date.now(),
+      doneAt: 0,
+    };
+    this.tasks.push(task);
+    try {
+      await this.persistState();
+      this.renderAgenda();
+      this.showToast("Tarea agregada");
+    } catch {
+      this.tasks.pop();
+    }
+  }
+
+  async toggleTask(id) {
+    const task = this.tasks.find((t) => t.id === id);
+    if (!task) return;
+    const prev = task.doneAt;
+    task.doneAt = prev ? 0 : Date.now();
+    try {
+      await this.persistState();
+      this.renderAgenda();
+    } catch {
+      task.doneAt = prev;
+    }
+  }
+
+  async deleteTask(id) {
+    const prev = this.tasks;
+    this.tasks = this.tasks.filter((t) => t.id !== id);
+    try {
+      await this.persistState();
+      this.renderAgenda();
+    } catch {
+      this.tasks = prev;
+    }
+  }
+
+  /** Convierte una señal SEO en tarea, evitando duplicar la misma señal. */
+  async taskFromSignal(value) {
+    const [host, ...rest] = String(value).split("|");
+    const signalId = rest.join("|");
+    const cached = SeoStore.get(host);
+    const signal = (cached?.signals || []).find((s) => s.id === signalId);
+    if (!signal) return;
+
+    if (this.tasks.some((t) => !t.doneAt && t.ref === signal.url && t.kind === signal.kind)) {
+      this.showToast("Ya está en tu lista");
+      return;
+    }
+
+    const client = this.clients.find((c) => GscModule.hostOf(c.siteUrl) === host);
+    await this.addTask({
+      title: signal.title,
+      clientId: client?.id || "",
+      kind: signal.kind,
+      ref: signal.url || "",
+    });
+  }
+
+  /* ---------- SEO ---------- */
+  /**
+   * Sitios operables: los de clientes con web asociada, más las propiedades que
+   * el bot ya ve en Search Console (aunque aún no estén vinculadas a un cliente).
+   */
+  seoHosts() {
+    const seen = new Map();
+
+    this.clients.forEach((client) => {
+      const host = GscModule.hostOf(client.siteUrl);
+      if (!host || seen.has(host)) return;
+      seen.set(host, { host, label: client.name, clientId: client.id });
+    });
+
+    [...this.seoProperties.map((p) => p.host), ...(this.seoConnection?.hosts || [])].forEach(
+      (host) => {
+        if (!host || seen.has(host)) return;
+        seen.set(host, { host, label: host, clientId: "" });
+      }
+    );
+
+    return [...seen.values()];
+  }
+
+  /** Precarga secuencial: la caché de 15 min del servidor hace baratas las recargas. */
+  async warmSeo() {
+    if (this.warming) return;
+    this.warming = true;
+
+    try {
+      this.seoConnection = await GscModule.sites();
+      this.seoProperties = this.seoConnection.properties || [];
+    } catch (err) {
+      this.seoConnection = { connected: false, error: err.message };
+    }
+    this.renderStats();
+    if (this.module === "seo") this.renderSeo();
+
+    try {
+      for (const { host } of this.seoHosts()) {
+        if (SeoStore.get(host)) continue;
+        try {
+          SeoStore.set(host, await GscModule.site(host));
+        } catch (err) {
+          SeoStore.set(host, { error: err.message, signals: [] });
+        }
+        this.renderStats();
+        this.renderAgenda();
+        if (this.module === "seo") this.renderSeo();
+      }
+    } finally {
+      this.warming = false;
+    }
+  }
+
+  selectSeoHost(host) {
+    this.seoHost = host;
+    localStorage.setItem(Store.KEYS.seoHost, host);
+    this.renderSeo();
+    if (!SeoStore.get(host)) this.loadSeoHost(host);
+  }
+
+  async loadSeoHost(host, fresh = false) {
+    if (!host || this.seoLoading) return;
+    this.seoLoading = true;
+    this.dom.btnGscRefresh.disabled = true;
+    this.dom.seoNotice.hidden = false;
+    this.dom.seoNotice.className = "notice";
+    this.dom.seoNotice.textContent = "Consultando Search Console…";
+    try {
+      SeoStore.set(host, await GscModule.site(host, fresh));
+    } catch (err) {
+      SeoStore.set(host, { error: err.message, signals: [] });
+    } finally {
+      this.seoLoading = false;
+      this.dom.btnGscRefresh.disabled = false;
+      this.renderSeo();
+      this.renderStats();
+      this.renderAgenda();
+    }
+  }
+
+  renderSeo() {
+    const hosts = this.seoHosts();
+    if (!hosts.some((h) => h.host === this.seoHost)) {
+      this.seoHost = hosts[0]?.host || "";
+    }
+    this.renderSeoPicker(hosts);
+
+    const data = this.seoHost ? SeoStore.get(this.seoHost) : null;
+    const hasMetrics = Boolean(data?.totals);
+
+    this.dom.seoKpis.hidden = !hasMetrics;
+    this.dom.seoInventory.hidden = !data?.inventory?.total;
+    this.dom.seoPagesDrawer.hidden = !data?.pages?.length;
+
+    if (this.seoConnection && !this.seoConnection.connected) {
+      this.#seoNotice(
+        "Falta la cuenta de servicio en el servidor (ers/data/gsc-service-account.json).",
+        "warn"
+      );
+    } else if (!hosts.length) {
+      this.#seoNotice(
+        "Ningún sitio disponible. Agrega el sitio web de un cliente en la pestaña Clientes.",
+        "warn"
+      );
+      this.dom.seoSignals.innerHTML = "";
+      this.dom.seoSignalsEmpty.hidden = true;
+      return;
+    } else if (data?.error) {
+      this.#seoNotice(data.error, "warn");
+    } else if (!data) {
+      this.#seoNotice("Sin datos cargados para este sitio.", "");
+    } else {
+      this.dom.seoNotice.hidden = true;
+    }
+
+    if (hasMetrics) this.renderSeoMetrics(data);
+    this.renderSeoInventory(data);
+    this.renderSeoSignals(data);
+    this.renderSeoPages(data);
+    this.renderSeoDiagnostics(data);
+    this.syncSeoForm(data);
+  }
+
+  #seoNotice(text, tone) {
+    this.dom.seoNotice.hidden = false;
+    this.dom.seoNotice.className = `notice${tone ? ` notice--${tone}` : ""}`;
+    this.dom.seoNotice.textContent = text;
+  }
+
+  renderSeoPicker(hosts) {
+    this.dom.seoClients.innerHTML = "";
+    const fragment = document.createDocumentFragment();
+
+    hosts.forEach(({ host, label }) => {
+      const data = SeoStore.get(host);
+      const critical = (data?.signals || []).filter((s) => s.severity >= 3).length;
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `site-chip${host === this.seoHost ? " is-active" : ""}`;
+      btn.dataset.host = host;
+      btn.setAttribute("role", "tab");
+      btn.setAttribute("aria-selected", String(host === this.seoHost));
+
+      const name = document.createElement("strong");
+      name.textContent = label;
+      const domain = document.createElement("small");
+      domain.textContent = host;
+      btn.append(name, domain);
+
+      if (data?.error) {
+        const badge = document.createElement("span");
+        badge.className = "site-chip__badge site-chip__badge--issue";
+        badge.textContent = "!";
+        btn.appendChild(badge);
+      } else if (critical) {
+        const badge = document.createElement("span");
+        badge.className = "site-chip__badge";
+        badge.textContent = String(critical);
+        btn.appendChild(badge);
+      } else if (!data) {
+        const badge = document.createElement("span");
+        badge.className = "site-chip__badge site-chip__badge--idle";
+        badge.textContent = "…";
+        btn.appendChild(badge);
+      }
+
+      fragment.appendChild(btn);
+    });
+
+    this.dom.seoClients.appendChild(fragment);
+  }
+
+  renderSeoMetrics(data) {
+    const totals = data.totals;
+    const delta = data.totalsDelta || {};
+
+    if (data.range) {
+      this.dom.seoRange.textContent = `${data.range.start} → ${data.range.end}${data.cached ? " · caché" : ""}`;
+    }
+
+    this.dom.seoClicks.textContent = GscModule.fmt(totals.clicks);
+    this.dom.seoImpressions.textContent = GscModule.fmt(totals.impressions);
+    this.dom.seoCtr.textContent = GscModule.pct(totals.ctr);
+    this.dom.seoPosition.textContent = GscModule.pos(totals.position);
+
+    const pairs = [
+      [this.dom.seoClicksDelta, delta.clicks, {}],
+      [this.dom.seoImpressionsDelta, delta.impressions, {}],
+      [this.dom.seoCtrDelta, delta.ctr, { percent: true }],
+      [this.dom.seoPositionDelta, delta.position, { invert: true, position: true }],
+    ];
+    pairs.forEach(([el, value, opts]) => {
+      const { text, cls } = GscModule.delta(value, opts);
+      el.textContent = text;
+      el.className = cls;
+    });
+
+    this.renderSpark(data.daily || []);
+  }
+
+  renderSpark(daily) {
+    this.dom.seoSpark.innerHTML = "";
+    if (!daily.length) return;
+    const max = Math.max(...daily.map((d) => d.clicks), 1);
+    const fragment = document.createDocumentFragment();
+    daily.forEach((day) => {
+      const bar = document.createElement("span");
+      bar.className = "spark__bar";
+      bar.style.setProperty("--h", `${Math.max((day.clicks / max) * 100, 2)}%`);
+      bar.title = `${day.date}: ${GscModule.fmt(day.clicks)} clics`;
+      fragment.appendChild(bar);
+    });
+    this.dom.seoSpark.appendChild(fragment);
+  }
+
+  renderSeoInventory(data) {
+    const inv = data?.inventory;
+    if (!inv?.total) {
+      this.dom.seoInventory.hidden = true;
+      return;
+    }
+
+    const cells = [
+      { label: "Páginas", value: inv.total },
+      { label: "Con tráfico", value: inv.withData, tone: "ok" },
+      { label: "Sin impresiones", value: inv.noData, tone: inv.noData ? "warn" : "" },
+      { label: "Indexadas", value: `${inv.indexed}/${inv.checked || 0}`, tone: "ok" },
+      { label: "Fuera del índice", value: inv.notIndexed, tone: inv.notIndexed ? "bad" : "" },
+    ];
+
+    this.dom.seoInventory.hidden = false;
+    this.dom.seoInventory.innerHTML = "";
+    const fragment = document.createDocumentFragment();
+    cells.forEach((cell) => {
+      const box = document.createElement("div");
+      box.className = `inventory__cell${cell.tone ? ` is-${cell.tone}` : ""}`;
+      const value = document.createElement("strong");
+      value.textContent = String(cell.value);
+      const label = document.createElement("span");
+      label.textContent = cell.label;
+      box.append(value, label);
+      fragment.appendChild(box);
+    });
+    this.dom.seoInventory.appendChild(fragment);
+  }
+
+  renderSeoSignals(data) {
+    const signals = data?.signals || [];
+    this.dom.seoSignals.innerHTML = "";
+    this.dom.seoSignalsEmpty.hidden = signals.length > 0 || !data?.totals;
+
+    const fragment = document.createDocumentFragment();
+    signals.forEach((signal) => {
+      fragment.appendChild(
+        this.#agendaItem({
+          id: signal.id,
+          group: "seo",
+          severity: Number(signal.severity) || 1,
+          title: signal.title,
+          detail: signal.detail,
+          clientName: signal.metric,
+          actions: [
+            {
+              label: "Anotar tarea",
+              act: "signal-task",
+              value: `${this.seoHost}|${signal.id}`,
+              primary: true,
+            },
+            ...(signal.url ? [{ label: "Abrir", act: "link", value: signal.url }] : []),
+          ],
+        })
+      );
+    });
+    this.dom.seoSignals.appendChild(fragment);
+  }
+
+  renderSeoPages(data) {
+    const pages = data?.pages || [];
+    this.dom.seoPagesCount.textContent = pages.length ? `(${pages.length})` : "";
+    this.dom.seoTableBody.innerHTML = "";
+    if (!pages.length) return;
+
+    const fragment = document.createDocumentFragment();
+    pages.forEach((row) => {
+      const tr = document.createElement("tr");
+      if (row.error) tr.classList.add("is-blocked");
+
+      const name = document.createElement("td");
+      const link = document.createElement("a");
+      link.href = row.url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.className = "seo-page-link";
+      link.textContent = String(row.url || "").replace(/^https?:\/\/[^/]+/, "") || "/";
+      name.appendChild(link);
+
+      if (row.thermometer?.label) {
+        const tag = document.createElement("span");
+        tag.className = `seo-tag is-${row.thermometer.tone || "neutral"}`;
+        tag.textContent = row.thermometer.label;
+        name.appendChild(tag);
+      }
+      if (Array.isArray(row.queries) && row.queries.length) {
+        const queries = document.createElement("div");
+        queries.className = "seo-query-list";
+        row.queries.slice(0, 3).forEach((item) => {
+          const chip = document.createElement("span");
+          chip.className = "seo-query";
+          chip.textContent = `${item.query} · ${GscModule.fmt(item.clicks)}c`;
+          queries.appendChild(chip);
+        });
+        name.appendChild(queries);
+      }
+
+      const current = row.current || {};
+      const cell = (raw, formatter, deltaValue, opts) => {
+        const td = document.createElement("td");
+        if (row.error) {
+          td.textContent = "—";
+          return td;
+        }
+        td.textContent = formatter(raw);
+        const { text, cls } = GscModule.delta(deltaValue, opts);
+        if (text !== "sin cambio") {
+          const span = document.createElement("span");
+          span.className = `seo-delta ${cls}`;
+          span.textContent = text;
+          td.appendChild(span);
+        }
+        return td;
+      };
+
+      const state = document.createElement("td");
+      if (row.error) {
+        state.textContent = "—";
+      } else if (row.indexStatus?.label) {
+        const badge = document.createElement("span");
+        badge.className = `seo-index is-${row.indexStatus.tone || "neutral"}`;
+        badge.textContent = row.indexStatus.label;
+        state.appendChild(badge);
+      } else {
+        state.textContent = "—";
+      }
+
+      tr.append(
+        name,
+        cell(current.clicks, GscModule.fmt, row.delta?.clicks, {}),
+        cell(current.impressions, GscModule.fmt, row.delta?.impressions, {}),
+        cell(current.ctr, GscModule.pct, row.delta?.ctr, { percent: true }),
+        cell(current.position, GscModule.pos, row.delta?.position, { invert: true, position: true }),
+        state
+      );
+      fragment.appendChild(tr);
+    });
+    this.dom.seoTableBody.appendChild(fragment);
+  }
+
+  renderSeoDiagnostics(data) {
+    const diag = data?.diagnostics || {};
+    const rows = [
+      ["Cuenta de servicio", this.seoConnection?.serviceEmail || "no detectada"],
+      ["Propiedad usada", diag.property || "sin resolver"],
+      ["Sitemap leído", diag.sitemapSource || diag.sitemapUrl || "no detectado"],
+      [
+        "Origen de las URLs",
+        `${diag.fromSitemap || 0} del sitemap · ${diag.fromManual || 0} manuales`,
+      ],
+      [
+        "Propiedades visibles",
+        (this.seoProperties.map((p) => p.property).join(", ") ||
+          this.seoConnection?.error ||
+          "ninguna"),
+      ],
+      ["Versión API", data?.version || this.seoConnection?.version || "—"],
+    ];
+    if (diag.sitemapError) rows.push(["Error de sitemap", diag.sitemapError]);
+    if (diag.sitemapApiError) rows.push(["Error de la API de sitemaps", diag.sitemapApiError]);
+
+    this.dom.seoDiag.innerHTML = "";
+    const fragment = document.createDocumentFragment();
+    rows.forEach(([label, value]) => {
+      const row = document.createElement("div");
+      row.className = "diag__row";
+      const key = document.createElement("span");
+      key.textContent = label;
+      const val = document.createElement("strong");
+      val.textContent = value;
+      row.append(key, val);
+      fragment.appendChild(row);
+    });
+    this.dom.seoDiag.appendChild(fragment);
+  }
+
+  syncSeoForm(data) {
+    if (document.activeElement === this.dom.gscSitemapUrl || document.activeElement === this.dom.gscPages) {
+      return;
+    }
+    this.dom.gscSitemapUrl.value = data?.diagnostics?.sitemapUrl || "";
+    const manual = (data?.pages || []).filter((p) => p.label && p.label !== p.url);
+    this.dom.gscPages.value = GscModule.serializePages(manual);
+  }
+
+  async handleGscConfig(e) {
+    e.preventDefault();
+    if (!this.seoHost) return;
+    try {
+      await GscModule.saveConfig({
+        host: this.seoHost,
+        sitemapUrl: this.dom.gscSitemapUrl.value.trim(),
+        pages: GscModule.parsePages(this.dom.gscPages.value),
+      });
+      this.showToast("Configuración guardada");
+      await this.loadSeoHost(this.seoHost, true);
+    } catch (err) {
+      this.showToast(err.message);
+    }
+  }
+
+  /* ---------- Clientes ---------- */
+  activeClients() {
+    return this.clients.filter((c) => !c.inDevelopment);
+  }
+
+  populateSelect(select, { includeEmpty = "" } = {}) {
+    select.innerHTML = includeEmpty ? `<option value="">${includeEmpty}</option>` : "";
+    if (!includeEmpty) {
+      select.innerHTML = '<option value="" disabled selected>Selecciona un cliente…</option>';
+    }
+    this.clients.forEach((c) => {
+      const opt = document.createElement("option");
+      opt.value = c.id;
+      opt.textContent = c.name;
+      select.appendChild(opt);
+    });
+  }
+
+  setDefaultBillingDate() {
+    const d = new Date();
+    d.setDate(d.getDate() + 7);
+    this.dom.clientBillingDate.value = BillingModule.toISODate(d);
+  }
+
+  updateValueFieldHint() {
+    if (this.dom.planAnual.checked) {
+      this.dom.clientValueLabel.textContent = "Valor anual (CLP)";
+      this.dom.clientValueHint.textContent = "Se divide entre 12 para el MRR.";
+      this.dom.clientValue.placeholder = "Ej: 1200000";
+    } else if (this.dom.planMensual.checked) {
+      this.dom.clientValueLabel.textContent = "Valor mensual (CLP)";
+      this.dom.clientValueHint.textContent = "Suma directo al MRR.";
+      this.dom.clientValue.placeholder = "Ej: 250000";
+    } else {
+      this.dom.clientValueLabel.textContent = "Valor del plan (CLP)";
+      this.dom.clientValueHint.textContent = "Elige el tipo de plan.";
+    }
+  }
+
+  openCreateClient() {
+    this.editingClientId = null;
+    this.dom.clientForm.reset();
+    this.dom.clientIdField.value = "";
+    this.dom.clientModalTitle.textContent = "Nuevo cliente";
+    this.dom.btnDeleteClient.hidden = true;
+    this.updateValueFieldHint();
+    this.setDefaultBillingDate();
+    this.openModal("clientModal");
+  }
+
+  openEditClient(id) {
+    const client = this.clients.find((c) => c.id === id);
+    if (!client) return;
+
+    this.editingClientId = id;
+    this.dom.clientIdField.value = id;
+    this.dom.clientName.value = client.name;
+    this.dom.clientValue.value = client.valueCLP;
+    this.dom.clientBillingDate.value = client.nextBillingDate;
+    this.dom.clientPhone.value = client.phone ?? "";
+    this.dom.clientSiteUrl.value = client.siteUrl ?? "";
+    this.dom.clientDev.checked = Boolean(client.inDevelopment);
+    (client.planType === "anual" ? this.dom.planAnual : this.dom.planMensual).checked = true;
+
+    this.dom.clientModalTitle.textContent = client.name;
+    this.dom.btnDeleteClient.hidden = false;
+    this.updateValueFieldHint();
+    this.refreshContactLinks();
+    this.openModal("clientModal");
+  }
+
+  refreshContactLinks() {
+    const wa = ContactModule.waLink(this.dom.clientPhone.value, this.dom.clientName.value.trim() || "!");
+    this.dom.contactActions.hidden = !wa;
+    if (wa) {
+      this.dom.linkWhatsApp.href = wa;
+      this.dom.linkCall.href = ContactModule.telLink(this.dom.clientPhone.value);
+    }
+  }
+
+  async handleClientSubmit(e) {
+    e.preventDefault();
+    const data = new FormData(this.dom.clientForm);
+
+    const payload = {
+      name: String(data.get("name") || "").trim(),
+      planType: data.get("planType"),
+      valueCLP: Number(data.get("valueCLP")),
+      nextBillingDate: data.get("nextBillingDate"),
+      phone: String(data.get("phone") || "").trim(),
+      siteUrl: String(data.get("siteUrl") || "").trim(),
+      inDevelopment: data.get("inDevelopment") === "on",
+    };
+
+    if (!payload.name || !payload.planType || payload.valueCLP <= 0 || !payload.nextBillingDate) return;
+
+    if (this.editingClientId) {
+      const idx = this.clients.findIndex((c) => c.id === this.editingClientId);
+      if (idx === -1) return;
+      this.clients[idx] = { ...this.clients[idx], ...payload };
+    } else {
+      this.clients.push({ id: crypto.randomUUID(), notes: [], ...payload });
+    }
+
+    try {
+      await this.persistState();
+      this.showToast(`${payload.name} guardado`);
+      this.dom.clientForm.reset();
+      this.editingClientId = null;
+      this.closeModal("clientModal");
+      this.renderAll();
+      this.warmSeo();
+    } catch {
+      /* el toast de error ya se mostró */
+    }
+  }
+
+  async markClientPaid(id) {
+    const client = this.clients.find((c) => c.id === id);
+    if (!client) return;
+    client.nextBillingDate = BillingModule.advanceBillingDate(client);
+    try {
+      await this.persistState();
+      this.renderAll();
+      this.showToast(`Cobrado · próximo ${BillingModule.formatShort(client.nextBillingDate)}`);
+    } catch {
+      /* ya notificado */
+    }
+  }
+
+  async markClientLive(id) {
+    const client = this.clients.find((c) => c.id === id);
+    if (!client) return;
+    client.inDevelopment = false;
+    try {
+      await this.persistState();
+      this.renderAll();
+      this.showToast(`${client.name} activado`);
+    } catch {
+      client.inDevelopment = true;
+    }
+  }
+
+  async deleteClient(id) {
+    if (!id) return;
+    const client = this.clients.find((c) => c.id === id);
+    if (!client) return;
+    if (!confirm(`¿Eliminar a "${client.name}"? Se borran sus solicitudes y tareas.`)) return;
+
+    this.clients = this.clients.filter((c) => c.id !== id);
+    this.requests = this.requests.filter((r) => r.clientId !== id);
+    this.tasks = this.tasks.filter((t) => t.clientId !== id);
+
+    try {
+      await this.persistState();
+      this.editingClientId = null;
+      this.closeModal("clientModal");
+      this.renderAll();
+      this.showToast(`${client.name} eliminado`);
+    } catch {
+      /* ya notificado */
+    }
+  }
+
+  /* ---------- Solicitudes ---------- */
+  openRequestModal() {
+    if (this.clients.length === 0) {
+      this.openCreateClient();
+      return;
+    }
+    this.populateSelect(this.dom.requestClientSelect);
+    this.openModal("requestModal");
+  }
+
+  async handleAddRequest(e) {
+    e.preventDefault();
+    const data = new FormData(this.dom.requestForm);
+    const request = {
+      id: crypto.randomUUID(),
+      clientId: data.get("clientId"),
+      description: String(data.get("description") || "").trim(),
+      createdAt: Date.now(),
+      status: "activa",
+    };
+    if (!request.clientId || !request.description) return;
+
+    this.requests.push(request);
+    try {
+      await this.persistState();
+      this.dom.requestForm.reset();
+      this.closeModal("requestModal");
+      this.renderRequests();
+      this.renderAgenda();
+    } catch {
+      this.requests.pop();
+    }
+  }
+
+  async completeRequest(id) {
+    const prev = this.requests;
+    this.requests = this.requests.filter((r) => r.id !== id);
+    try {
+      await this.persistState();
+      this.renderRequests();
+      this.renderAgenda();
+    } catch {
+      this.requests = prev;
+    }
+  }
+
+  renderRequests() {
+    const list = this.dom.requestList;
+    list.innerHTML = "";
+    const active = this.requests.filter((r) => r.status === "activa");
+    this.dom.requestsEmpty.hidden = active.length > 0;
+
+    const fragment = document.createDocumentFragment();
+    [...active]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .forEach((req) => {
+        const client = this.clients.find((c) => c.id === req.clientId);
+        const hours = Math.floor((Date.now() - Number(req.createdAt)) / 3600000);
+
+        const li = document.createElement("li");
+        li.className = "request-card";
+
+        const top = document.createElement("div");
+        top.className = "request-card__top";
+        const name = document.createElement("span");
+        name.className = "request-card__client";
+        name.textContent = client?.name ?? "Cliente eliminado";
+        top.appendChild(name);
+
+        const desc = document.createElement("p");
+        desc.className = "request-card__desc";
+        desc.textContent = req.description;
+
+        const bottom = document.createElement("div");
+        bottom.className = "request-card__bottom";
+        const timer = document.createElement("span");
+        timer.className = `timer${hours >= OVERDUE_HOURS ? " is-overdue" : ""}`;
+        timer.textContent = hours >= 24 ? `${Math.floor(hours / 24)}d` : `${hours}h`;
+        const done = document.createElement("button");
+        done.type = "button";
+        done.className = "btn-done";
+        done.dataset.complete = req.id;
+        done.textContent = "Completar";
+        bottom.append(timer, done);
+
+        li.append(top, desc, bottom);
+        fragment.appendChild(li);
+      });
+    list.appendChild(fragment);
+  }
+
+  /* ---------- Cuaderno ---------- */
   openNotebook(id) {
     const client = this.clients.find((c) => c.id === id);
     if (!client) return;
@@ -838,6 +1747,7 @@ class CRMController {
     const notes = [...(client?.notes || [])].sort((a, b) => b.createdAt - a.createdAt);
     this.dom.notebookEmpty.hidden = notes.length > 0;
     this.dom.notebookList.innerHTML = "";
+
     const stamp = new Intl.DateTimeFormat("es-CL", {
       day: "numeric",
       month: "short",
@@ -860,9 +1770,9 @@ class CRMController {
       del.setAttribute("aria-label", "Eliminar nota");
       del.textContent = "✕";
       head.append(time, del);
-      const p = document.createElement("p");
-      p.textContent = note.body;
-      li.append(head, p);
+      const body = document.createElement("p");
+      body.textContent = note.body;
+      li.append(head, body);
       fragment.appendChild(li);
     });
     this.dom.notebookList.appendChild(fragment);
@@ -871,9 +1781,9 @@ class CRMController {
   async handleAddNote(e) {
     e.preventDefault();
     const client = this.clients.find((c) => c.id === this.notebookClientId);
-    if (!client) return;
     const body = this.dom.notebookBody.value.trim();
-    if (!body) return;
+    if (!client || !body) return;
+
     client.notes = Array.isArray(client.notes) ? client.notes : [];
     client.notes.push({ id: crypto.randomUUID(), body, createdAt: Date.now() });
     try {
@@ -881,7 +1791,6 @@ class CRMController {
       this.dom.notebookForm.reset();
       this.renderNotebook();
       this.renderSwarm();
-      this.showToast("Nota guardada");
     } catch {
       client.notes.pop();
     }
@@ -901,622 +1810,11 @@ class CRMController {
     }
   }
 
-  async handleGscConfig(e) {
-    e.preventDefault();
-    const pages = GscModule.parsePages(this.dom.gscPages.value);
-    const siteUrl = this.dom.gscSiteUrl.value.trim();
-    const sitemapUrl = this.dom.gscSitemapUrl.value.trim();
-    if (!siteUrl && !sitemapUrl && pages.length === 0) {
-      this.showToast("Indica propiedad, sitemap o al menos una URL");
-      return;
-    }
-    try {
-      await GscModule.saveConfig({
-        siteUrl,
-        sitemapUrl,
-        pages,
-      });
-      this.gscPagesDirty = false;
-      this.showToast("Configuración GSC guardada");
-      await this.loadGsc(true);
-    } catch (err) {
-      this.showToast(err.message);
-    }
-  }
-
-  applyGscDelta(el, value, opts) {
-    if (!el) return;
-    const { text, cls } = GscModule.deltaLabel(value, opts);
-    el.textContent = text;
-    el.className = cls;
-  }
-
-  async applyGscPreset({ siteUrl, sitemapUrl }) {
-    if (siteUrl) this.dom.gscSiteUrl.value = siteUrl;
-    if (sitemapUrl) this.dom.gscSitemapUrl.value = sitemapUrl;
-    try {
-      await GscModule.saveConfig({
-        siteUrl: this.dom.gscSiteUrl.value.trim(),
-        sitemapUrl: this.dom.gscSitemapUrl.value.trim(),
-        pages: GscModule.parsePages(this.dom.gscPages.value),
-      });
-      this.gscPagesDirty = false;
-      this.showToast("Configuración SEO aplicada");
-      await this.loadGsc(true);
-    } catch (err) {
-      this.showToast(err.message);
-    }
-  }
-
-  renderSeoList(target, items, mapItem) {
-    if (!target) return;
-    target.innerHTML = "";
-    const fragment = document.createDocumentFragment();
-    items.forEach((item) => {
-      const row = mapItem(item);
-      if (!row) return;
-      const li = document.createElement("li");
-      const copy = document.createElement("div");
-      copy.className = "seo-list__main";
-      const title = document.createElement("strong");
-      title.textContent = row.title;
-      copy.appendChild(title);
-      if (row.detail) {
-        const detail = document.createElement("small");
-        detail.textContent = row.detail;
-        copy.appendChild(detail);
-      }
-      li.appendChild(copy);
-      if (row.meta) {
-        const meta = document.createElement("em");
-        meta.textContent = row.meta;
-        li.appendChild(meta);
-      }
-      if (row.actionLabel && typeof row.onAction === "function") {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "seo-list__action";
-        button.textContent = row.actionLabel;
-        button.addEventListener("click", row.onAction);
-        li.appendChild(button);
-      }
-      fragment.appendChild(li);
-    });
-    target.appendChild(fragment);
-  }
-
-  renderSeoSummary(data) {
-    if (!this.dom.seoSummaryCard) return;
-    let title = "Conecta una propiedad o sitemap para empezar.";
-    let detail = "Cuando Search Console devuelva señales útiles, aquí verás el resumen operativo.";
-    let meta = "Esperando consulta";
-
-    if (!data?.connected) {
-      title = "Falta la cuenta de servicio.";
-      detail = "Sube el JSON al servidor y vuelve a cargar el módulo.";
-      meta = "Sin conexión";
-    } else if (data.error) {
-      title = "Conexión OK, pero el análisis quedó bloqueado.";
-      detail = data.error;
-      meta = "Requiere revisión";
-    } else if (data.totals) {
-      const count = data.discovery?.combinedCount || data.pages?.length || 0;
-      const indexed = data.discovery?.indexSummary?.checked
-        ? `${data.discovery.indexSummary.indexed}/${data.discovery.indexSummary.checked} indexadas`
-        : "Indexación pendiente";
-      title = "Termómetro SEO listo.";
-      detail = `${count} URLs consideradas. Ya puedes leer páginas, queries y señales de empuje. ${indexed}.`;
-      meta = data.cached ? "Cache 15m" : "Datos frescos";
-    } else if (data.discovery?.combinedCount) {
-      title = "Conexión OK, pero Google no devolvió señales útiles todavía.";
-      detail = `Detecté ${data.discovery.combinedCount} URLs, pero aún no llegaron métricas suficientes para poblar el termómetro.`;
-      meta = data.discovery.source ? "Sitemap leído" : "Sin señales";
-    } else if (Array.isArray(data.siteDetails) && data.siteDetails.length) {
-      title = "El bot ya ve tus propiedades.";
-      detail = "Estás en la fase de diagnóstico. Usa una propiedad o sitemap desde las tarjetas inferiores para forzar el análisis.";
-      meta = "Diagnóstico listo";
-    }
-
-    this.dom.seoSummaryTitle.textContent = title;
-    this.dom.seoSummaryDetail.textContent = detail;
-    this.dom.seoSummaryMeta.textContent = meta;
-  }
-
-  renderSeoInsights(data) {
-    const items = Array.isArray(data.insights) ? data.insights : [];
-    this.dom.seoInsightsCard.hidden = items.length === 0;
-    if (items.length === 0) return;
-    this.renderSeoList(this.dom.seoInsights, items, (item) => ({
-      title: item.title || "Sin titulo",
-      detail: item.detail || "",
-      meta: item.meta || "",
-    }));
-  }
-
-  renderSeoProperties(data) {
-    const items = Array.isArray(data.siteDetails) ? data.siteDetails.filter((item) => item?.siteUrl) : [];
-    this.dom.seoPropertiesCard.hidden = items.length === 0;
-    if (items.length === 0) return;
-    this.renderSeoList(this.dom.seoProperties, items, (item) => ({
-      title: item.siteUrl,
-      detail: item.permission ? `Permiso ${item.permission}` : "Propiedad visible",
-      meta: item.permission?.includes("siteOwner") ? "Owner" : item.permission || "",
-      actionLabel: item.siteUrl?.startsWith("sc-domain:") ? "Usar" : "",
-      onAction: item.siteUrl?.startsWith("sc-domain:")
-        ? () => this.applyGscPreset({ siteUrl: item.siteUrl })
-        : null,
-    }));
-  }
-
-  renderSeoSitemaps(data) {
-    const apiItems = Array.isArray(data.sitemaps?.items) ? data.sitemaps.items : [];
-    const discovery = data.discovery || {};
-    const rows = [...apiItems];
-    if (!rows.length && discovery.source) {
-      rows.push({
-        path: discovery.source,
-        lastSubmitted: "",
-        warnings: 0,
-        errors: 0,
-        isPending: false,
-        isSitemapsIndex: false,
-      });
-    }
-    this.dom.seoSitemapsCard.hidden = rows.length === 0 && !data.sitemaps?.error;
-    if (rows.length === 0 && !data.sitemaps?.error) return;
-    this.renderSeoList(this.dom.seoSitemaps, rows, (item) => ({
-      title: item.path || "Sitemap",
-      detail: item.lastSubmitted
-        ? `Ultimo submit ${String(item.lastSubmitted).slice(0, 10)}`
-        : (discovery.source && item.path === discovery.source ? "Detectado por lectura directa" : "Sin fecha reportada"),
-      meta: item.isPending
-        ? "Pendiente"
-        : `${item.errors || 0} err / ${item.warnings || 0} warn`,
-      actionLabel: item.path ? "Usar" : "",
-      onAction: item.path ? () => this.applyGscPreset({ sitemapUrl: item.path }) : null,
-    }));
-    if (data.sitemaps?.error) {
-      const li = document.createElement("li");
-      const copy = document.createElement("div");
-      const title = document.createElement("strong");
-      title.textContent = "Estado API";
-      const detail = document.createElement("small");
-      detail.textContent = data.sitemaps.error;
-      copy.append(title, detail);
-      li.appendChild(copy);
-      this.dom.seoSitemaps.appendChild(li);
-    }
-  }
-
-  renderSeoTrend(data) {
-    const weekdays = Array.isArray(data.trend?.weekdays) ? data.trend.weekdays : [];
-    const months = Array.isArray(data.trend?.months) ? data.trend.months : [];
-    this.dom.seoTrendCard.hidden = weekdays.length === 0 && months.length === 0;
-    if (!this.dom.seoTrendCard.hidden) {
-      this.renderSeoList(this.dom.seoTrendWeekdays, weekdays.slice(0, 7), (item) => ({
-        title: item.label || "—",
-        detail: `${GscModule.fmt(item.clicks)} clics prom.`,
-        meta: `${GscModule.fmt(item.impressions)} imp.`,
-      }));
-      this.renderSeoList(this.dom.seoTrendMonths, months, (item) => ({
-        title: GscModule.monthLabel(item.label),
-        detail: `${GscModule.fmt(item.clicks)} clics`,
-        meta: `${GscModule.fmt(item.impressions)} imp.`,
-      }));
-    }
-  }
-
-  resetSeoPremium() {
-    this.dom.seoInsightsCard.hidden = true;
-    this.dom.seoPropertiesCard.hidden = true;
-    this.dom.seoSitemapsCard.hidden = true;
-    this.dom.seoTrendCard.hidden = true;
-    this.dom.seoDiscovery.hidden = true;
-  }
-
-  renderGsc(data) {
-    if (!data) return;
-    this.renderSeoSummary(data);
-    if (this.dom.seoSaStatus) {
-      if (data.connected && data.serviceEmail) {
-        this.dom.seoSaStatus.textContent = `Cuenta de servicio lista · ${data.serviceEmail}`;
-        this.dom.seoSaStatus.className = "seo-setup__status is-ok";
-      } else {
-        this.dom.seoSaStatus.textContent =
-          "No encuentro el JSON. Súbelo a ers/data/gsc-service-account.json y recarga.";
-        this.dom.seoSaStatus.className = "seo-setup__status is-warn";
-      }
-    }
-    if (this.dom.seoSites) {
-      const sites = Array.isArray(data.sites) ? data.sites.filter(Boolean) : [];
-      const version = data.version ? ` · API v${data.version}` : " · API sin versión (server desactualizado)";
-      if (data.sitesError) {
-        this.dom.seoSites.hidden = false;
-        this.dom.seoSites.textContent = `Google no listó propiedades: ${data.sitesError}${version}`;
-      } else if (sites.length) {
-        this.dom.seoSites.hidden = false;
-        this.dom.seoSites.textContent = `El bot ve: ${sites.join(" · ")}${version}`;
-      } else if (data.connected) {
-        this.dom.seoSites.hidden = false;
-        this.dom.seoSites.textContent =
-          `El bot no ve ninguna propiedad todavía.${version}`;
-      } else {
-        this.dom.seoSites.hidden = true;
-      }
-    }
-    if (data.siteUrl && !this.dom.gscSiteUrl.value && !GscModule.isAgencyUrl(data.siteUrl)) {
-      this.dom.gscSiteUrl.value = data.siteUrl;
-    }
-    if (data.sitemapUrl && !this.dom.gscSitemapUrl.value && !GscModule.isAgencyUrl(data.sitemapUrl)) {
-      this.dom.gscSitemapUrl.value = data.sitemapUrl;
-    }
-    if (GscModule.isAgencyUrl(this.dom.gscSiteUrl.value)) this.dom.gscSiteUrl.value = "";
-    if (Array.isArray(data.pages) && !data.totals && !this.gscPagesDirty) {
-      this.dom.gscPages.value = GscModule.serializePages(data.pages);
-    }
-
-    if (this.dom.seoDiscovery) {
-      const discovery = data.discovery || {};
-      const bits = [];
-      if (discovery.source) bits.push(`Sitemap fuente: ${discovery.source}`);
-      if (discovery.combinedCount) {
-        bits.push(`${discovery.combinedCount} URLs en termometro (${discovery.detectedCount || 0} auto + ${discovery.manualCount || 0} manual)`);
-      }
-      if (discovery.indexSummary?.checked) {
-        bits.push(`Indexacion muestreada: ${discovery.indexSummary.indexed}/${discovery.indexSummary.checked} indexadas`);
-      }
-      if (discovery.error) bits.push(`Sitemap: ${discovery.error}`);
-      this.dom.seoDiscovery.hidden = bits.length === 0;
-      this.dom.seoDiscovery.textContent = bits.join(" · ");
-    }
-
-    this.renderSeoInsights(data);
-    this.renderSeoProperties(data);
-    this.renderSeoSitemaps(data);
-    this.renderSeoTrend(data);
-
-    const metricPages = (data.pages || []).filter((row) => row && (row.current || row.error));
-    const totals = data.totals && typeof data.totals === "object"
-      ? { ...GscModule.emptyMetrics(), ...data.totals }
-      : null;
-
-    this.dom.seoKpis.hidden = !totals;
-    this.dom.seoTableWrap.hidden = metricPages.length === 0;
-    this.dom.seoEmpty.hidden = !data.error;
-    if (data.error) this.dom.seoEmpty.textContent = data.error;
-
-    if (totals) {
-      if (data.range) {
-        this.dom.seoRange.textContent = `${data.range.start} → ${data.range.end}`;
-      }
-      this.dom.seoClicks.textContent = GscModule.fmt(totals.clicks);
-      this.dom.seoImpressions.textContent = GscModule.fmt(totals.impressions);
-      this.dom.seoCtr.textContent = GscModule.pct(totals.ctr);
-      this.dom.seoPosition.textContent = GscModule.pos(totals.position);
-      this.applyGscDelta(this.dom.seoClicksDelta, data.totalsDelta?.clicks);
-      this.applyGscDelta(this.dom.seoImpressionsDelta, data.totalsDelta?.impressions);
-      this.applyGscDelta(this.dom.seoCtrDelta, data.totalsDelta?.ctr, { percent: true });
-      this.applyGscDelta(this.dom.seoPositionDelta, data.totalsDelta?.position, { invert: true, position: true });
-    }
-
-    if (metricPages.length === 0) return;
-
-    this.dom.seoTableBody.innerHTML = "";
-    const fragment = document.createDocumentFragment();
-    metricPages.forEach((row) => {
-      const tr = document.createElement("tr");
-      const name = document.createElement("td");
-      const label = document.createElement("strong");
-      label.textContent = row.label || row.url;
-      const url = document.createElement("div");
-      url.className = "seo-delta";
-      url.textContent = String(row.url || "").replace(/^https?:\/\//, "");
-      name.append(label, url);
-      if (row.thermometer?.label) {
-        const thermo = document.createElement("span");
-        thermo.className = `seo-tag ${row.thermometer.tone ? `is-${row.thermometer.tone}` : ""}`.trim();
-        thermo.textContent = row.thermometer.label;
-        name.appendChild(thermo);
-      }
-      if (row.property) {
-        const property = document.createElement("span");
-        property.className = "seo-tag";
-        property.textContent = row.property;
-        name.appendChild(property);
-      }
-      if (row.error) {
-        const err = document.createElement("div");
-        err.className = "seo-row-error";
-        err.textContent = row.error;
-        name.appendChild(err);
-        tr.classList.add("is-blocked");
-      } else if (Array.isArray(row.queries) && row.queries.length) {
-        const queries = document.createElement("div");
-        queries.className = "seo-query-list";
-        row.queries.slice(0, 3).forEach((item) => {
-          const chip = document.createElement("span");
-          chip.className = "seo-query";
-          const q = document.createElement("strong");
-          q.textContent = item.query;
-          chip.append(q, document.createTextNode(` ${GscModule.fmt(item.clicks)}c`));
-          queries.appendChild(chip);
-        });
-        name.appendChild(queries);
-      }
-
-      const current = { ...GscModule.emptyMetrics(), ...(row.current || {}) };
-      const cell = (metric, opts) => {
-        const td = document.createElement("td");
-        if (row.error) {
-          td.textContent = "—";
-          return td;
-        }
-        td.textContent = opts.pct
-          ? GscModule.pct(current[metric])
-          : opts.pos
-            ? GscModule.pos(current[metric])
-            : GscModule.fmt(current[metric]);
-        const delta = document.createElement("span");
-        const d = GscModule.deltaLabel(row.delta?.[metric], opts);
-        delta.className = `seo-delta ${d.cls}`;
-        delta.textContent = d.text;
-        td.appendChild(delta);
-        return td;
-      };
-
-      const state = document.createElement("td");
-      if (row.error) {
-        state.textContent = "—";
-      } else if (row.indexStatus?.label) {
-        const badge = document.createElement("span");
-        badge.className = `seo-index ${row.indexStatus.tone ? `is-${row.indexStatus.tone}` : ""}`.trim();
-        badge.textContent = row.indexStatus.label;
-        state.appendChild(badge);
-        if (row.indexStatus.coverage && row.indexStatus.coverage !== row.indexStatus.label) {
-          const note = document.createElement("span");
-          note.className = "seo-delta";
-          note.textContent = row.indexStatus.coverage;
-          state.appendChild(note);
-        }
-      } else {
-        state.textContent = "Pendiente";
-      }
-
-      tr.append(
-        name,
-        cell("clicks", {}),
-        cell("impressions", {}),
-        cell("ctr", { percent: true, pct: true }),
-        cell("position", { invert: true, position: true, pos: true }),
-        state
-      );
-      fragment.appendChild(tr);
-    });
-    this.dom.seoTableBody.appendChild(fragment);
-  }
-
-  async loadGsc(fresh = false) {
-    try {
-      this.renderSeoSummary({
-        connected: true,
-        siteDetails: [],
-        discovery: null,
-      });
-      this.dom.seoSummaryTitle.textContent = "Analizando Search Console...";
-      this.dom.seoSummaryDetail.textContent = "Leyendo propiedades, sitemap, queries e indexación. Puede tardar unos segundos.";
-      this.dom.seoSummaryMeta.textContent = fresh ? "Consulta fresca" : "Cargando";
-      const status = await GscModule.status();
-      this.renderGsc(status);
-      if (!status.connected) {
-        this.resetSeoPremium();
-        this.dom.seoKpis.hidden = true;
-        this.dom.seoTableWrap.hidden = true;
-        this.dom.seoEmpty.hidden = false;
-        this.dom.seoEmpty.textContent =
-          "Sube el JSON de la cuenta de servicio a ers/data/gsc-service-account.json y recarga.";
-        return;
-      }
-      const data = await GscModule.query(fresh);
-      this.renderGsc({ ...status, ...data, connected: true });
-    } catch (err) {
-      this.resetSeoPremium();
-      this.dom.seoEmpty.hidden = false;
-      this.dom.seoEmpty.textContent = err.message;
-      this.dom.seoKpis.hidden = true;
-      this.dom.seoTableWrap.hidden = true;
-    }
-  }
-
-  openRequestModal() {
-    if (this.clients.length === 0) {
-      this.openCreateClient();
-      return;
-    }
-    this.populateClientSelect();
-    this.openModal("requestModal");
-  }
-
-  populateClientSelect() {
-    const select = this.dom.requestClientSelect;
-    select.innerHTML = '<option value="" disabled selected>Selecciona un cliente…</option>';
-    this.clients.forEach((c) => {
-      const opt = document.createElement("option");
-      opt.value = c.id;
-      opt.textContent = `${c.name} (${c.planType})`;
-      select.appendChild(opt);
-    });
-  }
-
-  /* ---------- Clientes ---------- */
-  async handleClientSubmit(e) {
-    e.preventDefault();
-    const data = new FormData(this.dom.clientForm);
-
-    const payload = {
-      name: data.get("name").trim(),
-      planType: data.get("planType"),
-      valueCLP: Number(data.get("valueCLP")),
-      nextBillingDate: data.get("nextBillingDate"),
-      phone: data.get("phone").trim(),
-      siteUrl: (data.get("siteUrl") || "").trim(),
-      inDevelopment: data.get("inDevelopment") === "on",
-    };
-
-    if (!payload.name || !payload.planType || payload.valueCLP <= 0 || !payload.nextBillingDate) return;
-
-    if (this.editingClientId) {
-      const idx = this.clients.findIndex((c) => c.id === this.editingClientId);
-      if (idx === -1) return;
-      this.clients[idx] = { ...this.clients[idx], ...payload };
-    } else {
-      this.clients.push({ id: crypto.randomUUID(), notes: [], ...payload });
-    }
-
-    try {
-      await this.persistState();
-      this.showToast(
-        this.editingClientId ? `${payload.name} actualizado` : `${payload.name} agregado al enjambre`
-      );
-      this.dom.clientForm.reset();
-      this.editingClientId = null;
-      this.closeModal("clientModal");
-      this.renderAll();
-    } catch {
-      /* persistState ya mostró el toast de error */
-    }
-  }
-
-  async markClientPaid(id) {
-    const client = this.clients.find((c) => c.id === id);
-    if (!client) return;
-
-    client.nextBillingDate = BillingModule.advanceBillingDate(client);
-    try {
-      await this.persistState();
-      this.renderAll();
-      this.showToast(
-        `Cobrado · ${client.name} → próximo: ${BillingModule.formatShort(client.nextBillingDate)}`
-      );
-    } catch {
-      /* error ya notificado */
-    }
-  }
-
-  async markClientLive(id) {
-    const client = this.clients.find((c) => c.id === id);
-    if (!client) return;
-
-    client.inDevelopment = false;
-    try {
-      await this.persistState();
-      this.renderAll();
-      this.showToast(`${client.name} activado · ya suma a tus ingresos`);
-    } catch {
-      client.inDevelopment = true;
-    }
-  }
-
-  async deleteClient(id) {
-    if (!id) return;
-    const client = this.clients.find((c) => c.id === id);
-    if (!client) return;
-
-    const activeRequests = this.requests.filter(
-      (r) => r.clientId === id && r.status === "activa"
-    ).length;
-
-    const msg = activeRequests
-      ? `¿Eliminar a "${client.name}"? Se borrarán también ${activeRequests} solicitud${activeRequests === 1 ? "" : "es"} activa${activeRequests === 1 ? "" : "s"}.`
-      : `¿Eliminar a "${client.name}" del enjambre?`;
-
-    if (!confirm(msg)) return;
-
-    this.clients = this.clients.filter((c) => c.id !== id);
-    this.requests = this.requests.filter((r) => r.clientId !== id);
-
-    try {
-      await this.persistState();
-      this.editingClientId = null;
-      this.closeModal("clientModal");
-      this.renderAll();
-      this.showToast(`${client.name} eliminado`);
-    } catch {
-      /* error ya notificado */
-    }
-  }
-
-  /* ---------- Solicitudes ---------- */
-  async handleAddRequest(e) {
-    e.preventDefault();
-    const data = new FormData(this.dom.requestForm);
-
-    const request = {
-      id: crypto.randomUUID(),
-      clientId: data.get("clientId"),
-      description: data.get("description").trim(),
-      createdAt: Date.now(),
-      status: "activa",
-    };
-
-    if (!request.clientId || !request.description) return;
-
-    this.requests.push(request);
-
-    try {
-      await this.persistState();
-      this.dom.requestForm.reset();
-      this.closeModal("requestModal");
-      this.renderRequests();
-    } catch {
-      this.requests.pop();
-    }
-  }
-
-  async completeRequest(id) {
-    const prev = this.requests;
-    this.requests = this.requests.filter((r) => r.id !== id);
-    try {
-      await this.persistState();
-      this.renderRequests();
-    } catch {
-      this.requests = prev;
-    }
-  }
-
-  /* ---------- Cronómetros ---------- */
-  startTimerLoop() {
-    // Un único intervalo global actualiza todos los cronómetros a la vez;
-    // más barato que un setInterval por solicitud.
-    this.timerId = setInterval(() => this.updateTimers(), TIMER_TICK_MS);
-  }
-
-  updateTimers() {
-    this.dom.requestList.querySelectorAll(".timer").forEach((el) => {
-      const createdAt = Number(el.dataset.createdAt);
-      const { label, overdue } = CRMController.elapsedInfo(createdAt);
-      el.textContent = label;
-      el.classList.toggle("is-overdue", overdue);
-    });
-  }
-
-  static elapsedInfo(createdAt) {
-    const elapsedMs = Date.now() - createdAt;
-    const totalMinutes = Math.floor(elapsedMs / 60000);
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-    return {
-      label: `${hours}h ${String(minutes).padStart(2, "0")}m`,
-      overdue: hours >= OVERDUE_HOURS,
-    };
-  }
-
-  /* ---------- Tooltip del enjambre ---------- */
+  /* ---------- Tooltip ---------- */
   handleNodeHover(e) {
     const el = e.target.closest(".node, .timeline-row, .orbit-node");
     if (!el) return;
-
-    const id = el.dataset.id;
-    const client = this.clients.find((c) => c.id === id);
+    const client = this.clients.find((c) => c.id === el.dataset.id);
     if (!client) return;
 
     const days = BillingModule.daysUntil(client.nextBillingDate);
@@ -1526,7 +1824,7 @@ class CRMController {
       ? `Plan ${client.planType} · En desarrollo`
       : `Plan ${client.planType}`;
     tip.querySelector(".node-tooltip__date").textContent = client.inDevelopment
-      ? `Lanzamiento estimado · ${BillingModule.formatLong(client.nextBillingDate)}`
+      ? BillingModule.formatLong(client.nextBillingDate)
       : `${BillingModule.formatLong(client.nextBillingDate)} · ${BillingModule.relativeLabel(days)}`;
     tip.querySelector(".node-tooltip__value").textContent = FinanceModule.formatCLP(client.valueCLP);
     tip.hidden = false;
@@ -1544,120 +1842,47 @@ class CRMController {
     this.dom.tooltip.hidden = true;
   }
 
-  /* ---------- Render ---------- */
-  renderAll() {
-    this.renderKPIs();
-    this.renderNextBilling();
-    this.renderChart();
-    this.renderSwarm();
-    this.renderRequests();
-  }
-
-  renderKPIs() {
-    const metrics = FinanceModule.computeMetrics(this.clients);
-    const { portfolio, mrr, arr, monthlyMRR, annualMRR, monthlySum, annualSum } = metrics;
-
-    const updates = [
-      [this.dom.kpiPortfolio, portfolio],
-      [this.dom.kpiMRR, mrr],
-      [this.dom.kpiARR, arr],
-    ];
-
-    updates.forEach(([el, value]) => {
-      el.textContent = FinanceModule.formatCLP(value);
-      el.classList.remove("is-updated");
-      void el.offsetWidth;
-      el.classList.add("is-updated");
+  setChartHighlight(date) {
+    this.highlightDate = date;
+    this.dom.chartBars.querySelectorAll(".chart-bar").forEach((bar) => {
+      bar.classList.toggle("is-active", bar.dataset.date === date);
     });
-
-    const parts = [];
-    if (monthlySum > 0) parts.push(`mensuales ${FinanceModule.formatCLP(monthlySum)}`);
-    if (annualSum > 0) parts.push(`anuales ${FinanceModule.formatCLP(annualSum)}`);
-    this.dom.kpiPortfolioMeta.textContent = parts.length
-      ? parts.join(" + ")
-      : "Suma nominal de planes";
-
-    const mrrParts = [];
-    if (monthlyMRR > 0) mrrParts.push(`mensuales ${FinanceModule.formatCLP(monthlyMRR)}`);
-    if (annualMRR > 0) mrrParts.push(`anuales ÷12 ${FinanceModule.formatCLP(annualMRR)}`);
-    this.dom.kpiMRRMeta.textContent = mrrParts.length
-      ? mrrParts.join(" + ")
-      : "mensuales + anuales ÷ 12";
-
-    const arrParts = [];
-    if (annualSum > 0) arrParts.push(`anuales ${FinanceModule.formatCLP(annualSum)}`);
-    if (monthlySum > 0) arrParts.push(`mensuales ×12 ${FinanceModule.formatCLP(monthlySum * 12)}`);
-    this.dom.kpiARRMeta.textContent = arrParts.length
-      ? arrParts.join(" + ")
-      : "anuales + mensuales × 12";
-
-    const n = this.clients.length - metrics.devCount;
-    this.dom.kpiClientCount.textContent = `${n} cliente${n === 1 ? "" : "s"} activo${n === 1 ? "" : "s"}`;
-
-    if (metrics.devCount > 0) {
-      this.dom.kpiDevCount.hidden = false;
-      this.dom.kpiDevCount.textContent =
-        `${metrics.devCount} en desarrollo · pipeline ${FinanceModule.formatCLP(metrics.devPipeline)}/mes`;
-    } else {
-      this.dom.kpiDevCount.hidden = true;
-    }
+    this.dom.swarmGrid.querySelectorAll(".timeline-row").forEach((row) => {
+      row.classList.toggle("is-highlighted", row.dataset.date === date);
+    });
   }
 
-  /** Clientes que ya facturan (excluye los que están en desarrollo). */
-  activeClients() {
-    return this.clients.filter((c) => !c.inDevelopment);
-  }
-
-  renderNextBilling() {
-    const billing = this.activeClients();
-    const next = BillingModule.nextBillingClient(billing);
-    const hasBilling = billing.length > 0;
-    this.dom.nextBilling.hidden = !hasBilling;
-    this.dom.cashChartWrap.hidden = !hasBilling;
-
-    if (!next) return;
-
-    const days = BillingModule.daysUntil(next.nextBillingDate);
-    this.dom.nextBillingName.textContent = next.name;
-    this.dom.nextBillingAmount.textContent = FinanceModule.formatCLP(next.valueCLP);
-    this.dom.nextBillingWhen.textContent =
-      `${BillingModule.formatLong(next.nextBillingDate)} · ${BillingModule.relativeLabel(days)}`;
-  }
-
+  /* ---------- Cartera ---------- */
   renderChart() {
     const series = BillingModule.buildCashFlowSeries(this.activeClients(), this.chartDays);
+    const hasBilling = this.activeClients().length > 0;
+    this.dom.cashChartWrap.hidden = !hasBilling;
+    if (!hasBilling) return;
+
     const maxTotal = Math.max(...series.map((b) => b.total), 1);
     const periodTotal = series.reduce((sum, b) => sum + b.total, 0);
 
-    if (this.dom.chartRangeLabel) {
-      this.dom.chartRangeLabel.textContent = `Próximos ${this.chartDays} días`;
-    }
-
+    this.dom.chartRangeLabel.textContent = `Próximos ${this.chartDays} días`;
     this.dom.chartPeriodTotal.textContent = FinanceModule.formatCLP(periodTotal);
     this.dom.chartBars.innerHTML = "";
 
     const fragment = document.createDocumentFragment();
-
     series.forEach((bucket) => {
       const bar = document.createElement("div");
       bar.className = "chart-bar";
       if (bucket.isToday) bar.classList.add("is-today");
       if (bucket.total > 0) bar.style.setProperty("--bar-h", `${(bucket.total / maxTotal) * 100}%`);
       bar.dataset.date = bucket.date;
-      bar.setAttribute("role", "presentation");
       bar.title = bucket.total
         ? `${BillingModule.formatShort(bucket.date)}: ${FinanceModule.formatCLP(bucket.total)}`
         : BillingModule.formatShort(bucket.date);
 
       const tip = document.createElement("span");
       tip.className = "chart-bar__tip";
-      tip.textContent = bucket.total
-        ? `${FinanceModule.formatCLP(bucket.total)} · ${bucket.clients.length} cliente${bucket.clients.length === 1 ? "" : "s"}`
-        : "—";
+      tip.textContent = bucket.total ? FinanceModule.formatCLP(bucket.total) : "—";
       bar.appendChild(tip);
       fragment.appendChild(bar);
     });
-
     this.dom.chartBars.appendChild(fragment);
 
     const first = series[0];
@@ -1673,18 +1898,13 @@ class CRMController {
   renderSwarm() {
     const hasClients = this.clients.length > 0;
     this.dom.swarmEmpty.hidden = hasClients;
-
     const showOrbit = this.view === "orbit" && hasClients;
-    const showList = this.view === "list" && hasClients;
     this.dom.orbitView.hidden = !showOrbit;
-    this.dom.swarmGrid.hidden = !showList;
+    this.dom.swarmGrid.hidden = !(this.view === "list" && hasClients);
 
     if (!hasClients) return;
-    if (showOrbit) {
-      this.renderOrbit();
-      return;
-    }
-    this.renderList();
+    if (showOrbit) this.renderOrbit();
+    else this.renderList();
   }
 
   /**
@@ -1696,24 +1916,20 @@ class CRMController {
     container.innerHTML = "";
     this.dom.orbitWeb.innerHTML = "";
 
-    const { mrr } = FinanceModule.computeMetrics(this.clients);
-    this.dom.orbitCoreValue.textContent = FinanceModule.formatCLP(mrr);
+    this.dom.orbitCoreValue.textContent = FinanceModule.formatCLP(
+      FinanceModule.computeMetrics(this.clients).mrr
+    );
 
     const maxValue = Math.max(...this.clients.map((c) => Number(c.valueCLP) || 0), 1);
     const sorted = BillingModule.sortByBilling(this.clients);
     const fragment = document.createDocumentFragment();
-
     const GOLDEN_ANGLE = 137.5;
 
     sorted.forEach((client, i) => {
       const isDev = Boolean(client.inDevelopment);
       const days = BillingModule.daysUntil(client.nextBillingDate);
-      // Los clientes en desarrollo no facturan: no heredan urgencia (rojo/ámbar).
       const urgency = isDev ? "normal" : BillingModule.urgency(days);
 
-      // Radio: anillos alineados con las guías visuales (7d/14d/30d/+30d).
-      // Los proyectos en desarrollo orbitan en la periferia (aún no cobran).
-      // Anillos guía (mitad del eje): 7d→17, 14d→27, 30d→38, +30d→47.
       let radiusPct;
       if (isDev) radiusPct = 42 + (i % 3) * 2;
       else if (days < 0) radiusPct = 12;
@@ -1722,27 +1938,18 @@ class CRMController {
       else if (days <= 30) radiusPct = 27 + ((days - 14) / 16) * 11;
       else radiusPct = Math.min(38 + ((days - 30) / 60) * 8, 46);
 
-      // Radio en cada eje = mismo % → los nodos caen sobre los anillos elípticos,
-      // que a su vez replican el aspect ratio del área (nada se sale de la "caja").
       const angleRad = ((i * GOLDEN_ANGLE) % 360) * (Math.PI / 180);
       const x = 50 + radiusPct * Math.cos(angleRad);
       const y = 50 + radiusPct * Math.sin(angleRad);
-
-      // Tamaño: escala por raíz cuadrada para que la diferencia sea legible sin aplastar los pequeños.
-      const sizeRatio = Math.sqrt((Number(client.valueCLP) || 0) / maxValue);
-      const size = Math.round(44 + sizeRatio * 40);
+      const size = Math.round(44 + Math.sqrt((Number(client.valueCLP) || 0) / maxValue) * 40);
 
       const link = document.createElementNS("http://www.w3.org/2000/svg", "line");
       link.setAttribute("x1", "50");
       link.setAttribute("y1", "50");
       link.setAttribute("x2", String(x));
       link.setAttribute("y2", String(y));
-      if (isDev) {
-        link.classList.add("orbit-link", "orbit-link--dev");
-      } else {
-        link.classList.add("orbit-link", `orbit-link--${client.planType}`);
-        if (urgency !== "normal") link.classList.add(`orbit-link--${urgency}`);
-      }
+      link.classList.add("orbit-link", isDev ? "orbit-link--dev" : `orbit-link--${client.planType}`);
+      if (!isDev && urgency !== "normal") link.classList.add(`orbit-link--${urgency}`);
       this.dom.orbitWeb.appendChild(link);
 
       const node = document.createElement("div");
@@ -1754,46 +1961,20 @@ class CRMController {
       node.style.setProperty("--y", `${y}%`);
       node.style.setProperty("--size", `${size}px`);
       node.style.setProperty("--float-speed", `${4.6 + (i % 4) * 0.55}s`);
-      node.style.setProperty("--sat-speed", `${4.2 + (i % 3) * 0.7}s`);
       node.style.setProperty("--float-delay", `${(i % 5) * -1.2}s`);
       node.setAttribute("role", "button");
-      node.setAttribute(
-        "aria-label",
-        isDev
-          ? `${client.name}, en desarrollo`
-          : `${client.name}, cobro ${BillingModule.relativeLabel(days)}`
-      );
+      node.setAttribute("aria-label", `${client.name} · abrir cuaderno`);
       node.title = `${client.name} · clic para abrir el cuaderno`;
 
       const initials = document.createElement("span");
       initials.className = "orbit-node__initials";
-      initials.textContent = CRMController.getInitials(client.name);
+      initials.textContent = AppController.getInitials(client.name);
 
       const amount = document.createElement("span");
       amount.className = "orbit-node__amount";
-      amount.textContent = isDev ? "en dev" : days < 0 ? "¡Vencido!" : `${days}d`;
+      amount.textContent = isDev ? "dev" : days < 0 ? "vencido" : `${days}d`;
 
       node.append(initials, amount);
-
-      if (isDev) {
-        const badge = document.createElement("span");
-        badge.className = "orbit-node__badge orbit-node__badge--dev";
-        badge.textContent = "DEV";
-        node.appendChild(badge);
-      } else if (client.planType === "mensual") {
-        const badge = document.createElement("span");
-        badge.className = "orbit-node__badge";
-        badge.textContent = "MRR";
-        node.appendChild(badge);
-        if (!this.isLite) {
-          const satA = document.createElement("span");
-          satA.className = "orbit-node__satellite orbit-node__satellite--a";
-          const satB = document.createElement("span");
-          satB.className = "orbit-node__satellite orbit-node__satellite--b";
-          node.append(satA, satB);
-        }
-      }
-
       fragment.appendChild(node);
     });
 
@@ -1803,15 +1984,12 @@ class CRMController {
   renderList() {
     const grid = this.dom.swarmGrid;
     grid.innerHTML = "";
-
-    const sorted = BillingModule.sortByBilling(this.clients);
     const fragment = document.createDocumentFragment();
 
-    sorted.forEach((client, i) => {
+    BillingModule.sortByBilling(this.clients).forEach((client, i) => {
       const isDev = Boolean(client.inDevelopment);
       const days = BillingModule.daysUntil(client.nextBillingDate);
       const urgency = isDev ? "dev" : BillingModule.urgency(days);
-      const dayNum = BillingModule.parseDate(client.nextBillingDate).getDate();
 
       const row = document.createElement("article");
       row.className = `timeline-row timeline-row--${urgency}`;
@@ -1829,27 +2007,21 @@ class CRMController {
       const node = document.createElement("div");
       node.className = isDev ? "node node--dev" : `node node--${client.planType} node--${urgency}`;
       node.dataset.id = client.id;
-
       const dayLabel = document.createElement("span");
       dayLabel.className = "node__day";
-      dayLabel.textContent = String(dayNum).padStart(2, "0");
-
+      dayLabel.textContent = String(BillingModule.parseDate(client.nextBillingDate).getDate()).padStart(2, "0");
       const initials = document.createElement("span");
       initials.className = "node__initials";
-      initials.textContent = CRMController.getInitials(client.name);
-
+      initials.textContent = AppController.getInitials(client.name);
       const core = document.createElement("span");
       core.className = "node__core";
-
       node.append(dayLabel, initials, core);
 
       const meta = document.createElement("div");
       meta.className = "timeline-row__meta";
-
       const dateEl = document.createElement("span");
       dateEl.className = "timeline-row__date";
       dateEl.textContent = BillingModule.formatShort(client.nextBillingDate);
-
       const nameEl = document.createElement("strong");
       nameEl.className = "timeline-row__name";
       nameEl.textContent = client.name;
@@ -1857,58 +2029,43 @@ class CRMController {
         const tag = document.createElement("span");
         tag.className = "tag-dev";
         tag.textContent = "Dev";
-        tag.style.marginLeft = "8px";
         nameEl.appendChild(tag);
       }
-
-      const countdown = isDev
-        ? `<span class="timeline-row__countdown">En desarrollo</span>`
-        : `<span class="timeline-row__countdown">${BillingModule.relativeLabel(days)}</span>`;
-
       const sub = document.createElement("div");
       sub.className = "timeline-row__sub";
-      sub.innerHTML = `
-        ${countdown}
-        <span>Plan ${client.planType}</span>
-        <em>${FinanceModule.formatCLP(client.valueCLP)}</em>
-      `;
-
+      const countdown = document.createElement("span");
+      countdown.className = "timeline-row__countdown";
+      countdown.textContent = isDev ? "En desarrollo" : BillingModule.relativeLabel(days);
+      const value = document.createElement("em");
+      value.textContent = FinanceModule.formatCLP(client.valueCLP);
+      sub.append(countdown, value);
       meta.append(dateEl, nameEl, sub);
 
       const actions = document.createElement("div");
       actions.className = "timeline-row__actions";
 
+      const primary = document.createElement("button");
+      primary.type = "button";
       if (isDev) {
-        const liveBtn = document.createElement("button");
-        liveBtn.type = "button";
-        liveBtn.className = "btn-row btn-row--live";
-        liveBtn.dataset.markLive = client.id;
-        liveBtn.textContent = "🚀 Activar";
-        actions.appendChild(liveBtn);
+        primary.className = "btn-row btn-row--live";
+        primary.dataset.markLive = client.id;
+        primary.textContent = "Activar";
       } else {
-        const paidBtn = document.createElement("button");
-        paidBtn.type = "button";
-        paidBtn.className = "btn-row btn-row--paid";
-        paidBtn.dataset.markPaid = client.id;
-        paidBtn.textContent = "✓ Cobrado";
-        actions.appendChild(paidBtn);
+        primary.className = "btn-row btn-row--paid";
+        primary.dataset.markPaid = client.id;
+        primary.textContent = "Cobrado";
       }
+      actions.appendChild(primary);
 
       const waHref = ContactModule.waLink(client.phone, client.name);
       if (waHref) {
-        const waLink = document.createElement("a");
-        waLink.className = "btn-row btn-row--wa";
-        waLink.href = waHref;
-        waLink.target = "_blank";
-        waLink.rel = "noopener";
-        waLink.textContent = "WhatsApp";
-        actions.appendChild(waLink);
-
-        const callLink = document.createElement("a");
-        callLink.className = "btn-row btn-row--call";
-        callLink.href = ContactModule.telLink(client.phone);
-        callLink.textContent = "Llamar";
-        actions.appendChild(callLink);
+        const wa = document.createElement("a");
+        wa.className = "btn-row btn-row--wa";
+        wa.href = waHref;
+        wa.target = "_blank";
+        wa.rel = "noopener";
+        wa.textContent = "WhatsApp";
+        actions.appendChild(wa);
       }
 
       const noteBtn = document.createElement("button");
@@ -1924,79 +2081,21 @@ class CRMController {
       editBtn.dataset.editClient = client.id;
       editBtn.textContent = "Editar";
 
-      const deleteBtn = document.createElement("button");
-      deleteBtn.type = "button";
-      deleteBtn.className = "btn-row btn-row--delete";
-      deleteBtn.dataset.deleteClient = client.id;
-      deleteBtn.textContent = "Eliminar";
-
-      actions.append(noteBtn, editBtn, deleteBtn);
+      actions.append(noteBtn, editBtn);
       row.append(rail, node, meta, actions);
       fragment.appendChild(row);
     });
 
     grid.appendChild(fragment);
-
     if (this.highlightDate) this.setChartHighlight(this.highlightDate);
   }
 
   static getInitials(name) {
-    return name
+    return String(name)
       .split(/\s+/)
       .slice(0, 2)
       .map((w) => w[0]?.toUpperCase() ?? "")
       .join("");
-  }
-
-  renderRequests() {
-    const list = this.dom.requestList;
-    list.innerHTML = "";
-
-    const active = this.requests.filter((r) => r.status === "activa");
-    this.dom.requestsEmpty.hidden = active.length > 0;
-
-    const fragment = document.createDocumentFragment();
-
-    // Más recientes primero.
-    [...active].sort((a, b) => b.createdAt - a.createdAt).forEach((req) => {
-      const client = this.clients.find((c) => c.id === req.clientId);
-      const { label, overdue } = CRMController.elapsedInfo(req.createdAt);
-
-      const li = document.createElement("li");
-      li.className = "request-card";
-      if (client?.planType === "anual") li.classList.add("request-card--annual-client");
-
-      const top = document.createElement("div");
-      top.className = "request-card__top";
-      const clientName = document.createElement("span");
-      clientName.className = "request-card__client";
-      clientName.textContent = client?.name ?? "Cliente eliminado";
-      top.appendChild(clientName);
-
-      const desc = document.createElement("p");
-      desc.className = "request-card__desc";
-      desc.textContent = req.description;
-
-      const bottom = document.createElement("div");
-      bottom.className = "request-card__bottom";
-
-      const timer = document.createElement("span");
-      timer.className = `timer${overdue ? " is-overdue" : ""}`;
-      timer.dataset.createdAt = req.createdAt;
-      timer.textContent = label;
-
-      const doneBtn = document.createElement("button");
-      doneBtn.type = "button";
-      doneBtn.className = "btn-done";
-      doneBtn.dataset.complete = req.id;
-      doneBtn.textContent = "Completar";
-
-      bottom.append(timer, doneBtn);
-      li.append(top, desc, bottom);
-      fragment.appendChild(li);
-    });
-
-    list.appendChild(fragment);
   }
 }
 
@@ -2008,14 +2107,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   const bootError = document.getElementById("bootError");
 
   try {
+    SeoStore.load();
     const data = await Store.init();
     boot.hidden = true;
-    const app = new CRMController(data.clients, data.requests);
-    await app.init();
+    await new AppController(data).init();
   } catch (err) {
     boot.hidden = true;
     bootError.hidden = false;
     bootError.querySelector("p").textContent =
-      err.message || "No se pudo conectar con el servidor. Verifica que PHP esté activo y la carpeta /data tenga permisos de escritura.";
+      err.message || "No se pudo conectar con el servidor. Verifica PHP y los permisos de /data.";
   }
 });
