@@ -1,6 +1,13 @@
 {
-    "siteUrl": "",
-    "pages": [
-        { "url": "https://abogadoslegaltamaya.cl/", "label": "Legal Tamaya" }
-    ]
+    "hosts": {
+        "abogadoslegaltamaya.cl": {
+            "sitemapUrl": "",
+            "pages": [
+                {
+                    "url": "https:\/\/abogadoslegaltamaya.cl\/",
+                    "label": "Legal Tamaya"
+                }
+            ]
+        }
+    }
 }
