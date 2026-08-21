@@ -247,13 +247,21 @@ class GscModule {
     return `${GscModule.API}?action=${action}&${qs}_=${Date.now()}`;
   }
 
+  /** Un 502/504 viene del hosting, no de Google: el análisis tardó demasiado. */
+  static #gatewayMessage(status) {
+    if ([502, 503, 504].includes(status)) {
+      return "El servidor cortó el análisis por tiempo (error " + status + "). Suele pasar en sitios con muchas URLs: vuelve a pulsar Actualizar, la segunda pasada aprovecha lo ya consultado.";
+    }
+    return `Search Console respondió ${status}`;
+  }
+
   static async #get(action, extra = "") {
     const res = await fetch(GscModule.#url(action, extra), {
       cache: "no-store",
       headers: { Accept: "application/json" },
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `Search Console respondió ${res.status}`);
+    if (!res.ok) throw new Error(data.error || GscModule.#gatewayMessage(res.status));
     return data;
   }
 
@@ -1165,6 +1173,11 @@ class AppController {
       this.#seoNotice(data.error, "warn");
     } else if (!data) {
       this.#seoNotice("Sin datos cargados para este sitio.", "");
+    } else if (data.partial) {
+      this.#seoNotice(
+        "Análisis abreviado por tiempo: faltan keywords y estado de indexación en algunas páginas. Pulsa Actualizar para completarlo.",
+        "warn"
+      );
     } else {
       this.dom.seoNotice.hidden = true;
     }

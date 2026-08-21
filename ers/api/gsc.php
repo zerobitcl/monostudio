@@ -27,12 +27,26 @@ const GSC_MAX_QUERY_PROBES = 12;
 const GSC_MAX_URL_INSPECTIONS = 18;
 const GSC_TREND_DAYS = 90;
 
+/** Peticiones simultáneas a Google. Más alto arriesga rate limiting. */
+const GSC_CONCURRENCY = 6;
+
+/**
+ * Segundos de trabajo antes de devolver lo que haya. El proxy del hosting corta
+ * con 504 alrededor de los 60s, así que cerramos antes y marcamos `partial`.
+ */
+const GSC_TIME_BUDGET = 40;
+
 /** Sube al cambiar la lógica de resolución de propiedad; sirve para saber qué versión está viva en el server. */
 const GSC_VERSION = '2026.08.20-ops';
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
     exit;
+}
+
+function gscTimeLeft(float $deadline): float
+{
+    return $deadline - microtime(true);
 }
 
 function gscJson(array $payload, int $code = 200): void
@@ -131,6 +145,125 @@ function gscHttp(string $method, string $url, ?array $body = null, array $header
         'status' => $status,
         'error' => null,
         'data' => json_decode((string) $raw, true),
+    ];
+}
+
+/**
+ * Ejecuta varias peticiones en paralelo con curl_multi. Sin curl cae a modo
+ * secuencial, que es lento pero correcto.
+ *
+ * @param array<string,array{method:string,url:string,body?:?array,headers?:string[]}> $jobs
+ * @return array<string,array{ok:bool,status:int,error:?string,data:mixed}>
+ */
+function gscMultiFetch(array $jobs, int $concurrency = GSC_CONCURRENCY): array
+{
+    if ($jobs === []) {
+        return [];
+    }
+
+    if (!function_exists('curl_multi_init')) {
+        $out = [];
+        foreach ($jobs as $key => $job) {
+            $out[$key] = gscHttp($job['method'], $job['url'], $job['body'] ?? null, $job['headers'] ?? []);
+        }
+        return $out;
+    }
+
+    $results = [];
+    $multi = curl_multi_init();
+    $handles = [];
+    $pending = $jobs;
+
+    $push = static function () use (&$pending, &$handles, $multi, $concurrency): void {
+        while ($pending !== [] && count($handles) < $concurrency) {
+            $key = array_key_first($pending);
+            $job = $pending[$key];
+            unset($pending[$key]);
+
+            $headers = $job['headers'] ?? [];
+            $payload = isset($job['body']) && $job['body'] !== null ? json_encode($job['body']) : null;
+            if ($payload !== null) {
+                $headers[] = 'Content-Type: application/json';
+            }
+
+            $ch = curl_init($job['url']);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_CUSTOMREQUEST => $job['method'],
+                CURLOPT_HTTPHEADER => $headers,
+                CURLOPT_TIMEOUT => 20,
+                CURLOPT_CONNECTTIMEOUT => 8,
+            ]);
+            if ($payload !== null) {
+                curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+            }
+
+            curl_multi_add_handle($multi, $ch);
+            $handles[(int) $ch] = ['handle' => $ch, 'key' => $key];
+        }
+    };
+
+    $push();
+
+    do {
+        $status = curl_multi_exec($multi, $running);
+        if ($running > 0) {
+            curl_multi_select($multi, 0.5);
+        }
+
+        while ($info = curl_multi_info_read($multi)) {
+            $ch = $info['handle'];
+            $entry = $handles[(int) $ch] ?? null;
+            if ($entry !== null) {
+                $raw = curl_multi_getcontent($ch);
+                $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $err = curl_error($ch);
+                $results[$entry['key']] = [
+                    'ok' => $code >= 200 && $code < 300,
+                    'status' => $code,
+                    'error' => $err !== '' ? $err : null,
+                    'data' => is_string($raw) ? json_decode($raw, true) : null,
+                ];
+                unset($handles[(int) $ch]);
+            }
+            curl_multi_remove_handle($multi, $ch);
+            curl_close($ch);
+        }
+
+        $push();
+        $running = $running > 0 || $handles !== [] || $pending !== [];
+    } while ($running && $status === CURLM_OK);
+
+    curl_multi_close($multi);
+
+    foreach ($jobs as $key => $_) {
+        $results[$key] ??= ['ok' => false, 'status' => 0, 'error' => 'Sin respuesta', 'data' => null];
+    }
+    return $results;
+}
+
+function gscJobError(array $res, string $fallback): string
+{
+    return (string) ($res['data']['error']['message'] ?? $res['error'] ?? $fallback);
+}
+
+function gscAnalyticsJob(string $token, string $property, string $start, string $end, array $extra = []): array
+{
+    return [
+        'method' => 'POST',
+        'url' => 'https://www.googleapis.com/webmasters/v3/sites/' . rawurlencode($property) . '/searchAnalytics/query',
+        'body' => array_merge(['startDate' => $start, 'endDate' => $end, 'rowLimit' => 1000], $extra),
+        'headers' => ['Authorization: Bearer ' . $token],
+    ];
+}
+
+function gscInspectJob(string $token, string $property, string $url): array
+{
+    return [
+        'method' => 'POST',
+        'url' => 'https://searchconsole.googleapis.com/v1/urlInspection/index:inspect',
+        'body' => ['inspectionUrl' => $url, 'siteUrl' => $property, 'languageCode' => 'es-CL'],
+        'headers' => ['Authorization: Bearer ' . $token],
     ];
 }
 
@@ -624,7 +757,7 @@ function gscParseSitemapXml(string $xml): array
     return ['root' => $root, 'urls' => $urls, 'sitemaps' => $sitemaps];
 }
 
-function gscDiscoverPagesFromSitemap(array $candidates): array
+function gscDiscoverPagesFromSitemap(array $candidates, float $deadline = INF): array
 {
     $visited = [];
     $queue = $candidates;
@@ -633,6 +766,10 @@ function gscDiscoverPagesFromSitemap(array $candidates): array
     $lastError = '';
 
     while ($queue !== [] && count($pages) < GSC_MAX_SITEMAP_URLS && count($visited) < 18) {
+        // Leer sitemaps anidados no puede consumir el presupuesto de las métricas.
+        if (gscTimeLeft($deadline) < 12) {
+            break;
+        }
         $current = array_shift($queue);
         if (!$current || isset($visited[$current])) {
             continue;
@@ -676,53 +813,6 @@ function gscListSitemaps(string $token, string $siteUrl): array
     }
     $items = $res['data']['sitemap'] ?? [];
     return is_array($items) ? $items : [];
-}
-
-function gscTopQueriesForPage(string $token, string $siteUrl, string $pageUrl, string $start, string $end): array
-{
-    $payload = gscQueryAnalytics($token, $siteUrl, $start, $end, [
-        'dimensions' => ['query'],
-        'rowLimit' => 5,
-        'dimensionFilterGroups' => [[
-            'filters' => [[
-                'dimension' => 'page',
-                'operator' => 'equals',
-                'expression' => $pageUrl,
-            ]],
-        ]],
-    ]);
-
-    $out = [];
-    foreach ($payload['rows'] ?? [] as $row) {
-        $query = trim((string) (($row['keys'][0] ?? '')));
-        if ($query === '') {
-            continue;
-        }
-        $out[] = [
-            'query' => $query,
-            'clicks' => (int) round((float) ($row['clicks'] ?? 0)),
-            'impressions' => (int) round((float) ($row['impressions'] ?? 0)),
-        ];
-    }
-    return $out;
-}
-
-function gscDailyRows(string $token, string $siteUrl, string $start, string $end): array
-{
-    $payload = gscQueryAnalytics($token, $siteUrl, $start, $end, [
-        'dimensions' => ['date'],
-        'rowLimit' => GSC_TREND_DAYS + 10,
-    ]);
-
-    $rows = [];
-    foreach ($payload['rows'] ?? [] as $row) {
-        $date = (string) (($row['keys'][0] ?? ''));
-        if ($date === '') {
-            continue;
-        }
-        $rows[] = ['date' => $date] + gscMetricRow($row);
-    }
-    return $rows;
 }
 
 function gscAggregateWeekdays(array $daily): array
@@ -801,28 +891,11 @@ function gscMergeDailyBucket(array &$bucket, array $rows): void
     }
 }
 
-function gscInspectUrl(string $token, string $property, string $url): array
-{
-    $res = gscHttp('POST', 'https://searchconsole.googleapis.com/v1/urlInspection/index:inspect', [
-        'inspectionUrl' => $url,
-        'siteUrl' => $property,
-        'languageCode' => 'es-CL',
-    ], ['Authorization: Bearer ' . $token]);
-
-    if (!$res['ok']) {
-        $msg = $res['data']['error']['message'] ?? $res['error'] ?? 'No se pudo inspeccionar la URL';
-        throw new RuntimeException((string) $msg);
-    }
-
-    $index = $res['data']['inspectionResult']['indexStatusResult'] ?? [];
-    return is_array($index) ? $index : [];
-}
-
 function gscIndexLabel(array $status): array
 {
     $verdict = strtoupper((string) ($status['verdict'] ?? ''));
     $coverage = (string) ($status['coverageState'] ?? '');
-    $label = $coverage !== '' ? $coverage : 'Sin inspeccion';
+    $label = $coverage !== '' ? $coverage : 'Sin inspección';
     $tone = 'neutral';
     if ($verdict === 'PASS' || stripos($coverage, 'Submitted and indexed') !== false || stripos($coverage, 'Indexed') !== false) {
         $label = 'Indexada';
@@ -1126,6 +1199,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             ], 400);
         }
 
+        @set_time_limit(GSC_TIME_BUDGET + 30);
+        $deadline = microtime(true) + GSC_TIME_BUDGET;
+
         $host = gscSanitizeHost((string) ($_GET['host'] ?? ''));
         if ($host === '' && $config['hosts'] !== []) {
             $host = (string) array_key_first($config['hosts']);
@@ -1186,7 +1262,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             }
         }
 
-        $sitemapDiscovery = gscDiscoverPagesFromSitemap(gscSitemapCandidates($fallbackSite, $manualPages, $sitemapUrl));
+        $sitemapDiscovery = gscDiscoverPagesFromSitemap(
+            gscSitemapCandidates($fallbackSite, $manualPages, $sitemapUrl),
+            $deadline
+        );
         $pages = gscMergePages($manualPages, $sitemapDiscovery['pages']);
         if ($pages === []) {
             $pages = [['url' => $seedUrl, 'label' => 'Home']];
@@ -1234,32 +1313,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
         $weightPrev = 0;
         $dailyBucket = [];
 
+        // Las cinco consultas de una propiedad son independientes: van en paralelo.
         foreach ($groups as $property => $groupPages) {
-            try {
-                $current = gscQueryAnalytics($token, $property, $startIso, $endIso, ['dimensions' => ['page']]);
-                $previous = gscQueryAnalytics($token, $property, $prevStartIso, $prevEndIso, ['dimensions' => ['page']]);
-                $totalsNow = gscQueryAnalytics($token, $property, $startIso, $endIso);
-                $totalsPrev = gscQueryAnalytics($token, $property, $prevStartIso, $prevEndIso);
-                $daily = gscDailyRows($token, $property, $trendStartIso, $endIso);
-                $nowMap += gscIndexRows($current);
-                $prevMap += gscIndexRows($previous);
-                gscMergeDailyBucket($dailyBucket, $daily);
-                $tNow = gscMetricRow($totalsNow['rows'][0] ?? null);
-                $tPrev = gscMetricRow($totalsPrev['rows'][0] ?? null);
-                $totals['clicks'] += $tNow['clicks'];
-                $totals['impressions'] += $tNow['impressions'];
-                $totalsBefore['clicks'] += $tPrev['clicks'];
-                $totalsBefore['impressions'] += $tPrev['impressions'];
-                if ($tNow['impressions'] > 0) {
-                    $totals['position'] += $tNow['position'] * $tNow['impressions'];
-                    $weightNow += $tNow['impressions'];
+            $res = gscMultiFetch([
+                'current' => gscAnalyticsJob($token, $property, $startIso, $endIso, ['dimensions' => ['page']]),
+                'previous' => gscAnalyticsJob($token, $property, $prevStartIso, $prevEndIso, ['dimensions' => ['page']]),
+                'totalsNow' => gscAnalyticsJob($token, $property, $startIso, $endIso),
+                'totalsPrev' => gscAnalyticsJob($token, $property, $prevStartIso, $prevEndIso),
+                'daily' => gscAnalyticsJob($token, $property, $trendStartIso, $endIso, [
+                    'dimensions' => ['date'],
+                    'rowLimit' => GSC_TREND_DAYS + 10,
+                ]),
+            ]);
+
+            if (!$res['current']['ok']) {
+                $propertyErrors[$property] = gscJobError($res['current'], 'Error al consultar Search Console');
+                continue;
+            }
+
+            $nowMap += gscIndexRows(is_array($res['current']['data']) ? $res['current']['data'] : []);
+            if ($res['previous']['ok'] && is_array($res['previous']['data'])) {
+                $prevMap += gscIndexRows($res['previous']['data']);
+            }
+
+            if ($res['daily']['ok']) {
+                $dailyRowsRaw = [];
+                foreach ($res['daily']['data']['rows'] ?? [] as $row) {
+                    $date = (string) ($row['keys'][0] ?? '');
+                    if ($date !== '') {
+                        $dailyRowsRaw[] = ['date' => $date] + gscMetricRow($row);
+                    }
                 }
-                if ($tPrev['impressions'] > 0) {
-                    $totalsBefore['position'] += $tPrev['position'] * $tPrev['impressions'];
-                    $weightPrev += $tPrev['impressions'];
-                }
-            } catch (Throwable $e) {
-                $propertyErrors[$property] = $e->getMessage();
+                gscMergeDailyBucket($dailyBucket, $dailyRowsRaw);
+            }
+
+            $tNow = gscMetricRow($res['totalsNow']['data']['rows'][0] ?? null);
+            $tPrev = gscMetricRow($res['totalsPrev']['data']['rows'][0] ?? null);
+            $totals['clicks'] += $tNow['clicks'];
+            $totals['impressions'] += $tNow['impressions'];
+            $totalsBefore['clicks'] += $tPrev['clicks'];
+            $totalsBefore['impressions'] += $tPrev['impressions'];
+            if ($tNow['impressions'] > 0) {
+                $totals['position'] += $tNow['position'] * $tNow['impressions'];
+                $weightNow += $tNow['impressions'];
+            }
+            if ($tPrev['impressions'] > 0) {
+                $totalsBefore['position'] += $tPrev['position'] * $tPrev['impressions'];
+                $weightPrev += $tPrev['impressions'];
             }
         }
 
@@ -1307,45 +1407,85 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
 
         usort($pageRows, static fn ($a, $b) => (($b['current']['impressions'] ?? 0) <=> ($a['current']['impressions'] ?? 0)) ?: (($b['current']['clicks'] ?? 0) <=> ($a['current']['clicks'] ?? 0)));
 
-        $queryTargets = [];
+        // Enriquecimiento opcional: si el presupuesto se agota, devolvemos lo básico.
+        $partial = false;
+        $enrichable = [];
         foreach ($pageRows as $idx => $row) {
-            if (($row['error'] ?? null) === null && count($queryTargets) < GSC_MAX_QUERY_PROBES) {
-                $queryTargets[] = $idx;
-            }
-        }
-        foreach ($queryTargets as $idx) {
-            try {
-                $property = (string) ($pageRows[$idx]['property'] ?? '');
-                if ($property === '') {
-                    continue;
-                }
-                $pageRows[$idx]['queries'] = gscTopQueriesForPage($token, $property, (string) $pageRows[$idx]['url'], $startIso, $endIso);
-            } catch (Throwable $e) {
-                // Las consultas enriquecen; no bloquean el termometro.
+            if (($row['error'] ?? null) === null && ($row['property'] ?? '') !== '') {
+                $enrichable[] = $idx;
             }
         }
 
-        $inspectionTargets = [];
-        foreach ($pageRows as $idx => $row) {
-            if (($row['error'] ?? null) === null && count($inspectionTargets) < GSC_MAX_URL_INSPECTIONS) {
-                $inspectionTargets[] = $idx;
+        if (gscTimeLeft($deadline) > 8) {
+            $queryJobs = [];
+            foreach (array_slice($enrichable, 0, GSC_MAX_QUERY_PROBES) as $idx) {
+                $queryJobs[$idx] = gscAnalyticsJob(
+                    $token,
+                    (string) $pageRows[$idx]['property'],
+                    $startIso,
+                    $endIso,
+                    [
+                        'dimensions' => ['query'],
+                        'rowLimit' => 5,
+                        'dimensionFilterGroups' => [[
+                            'filters' => [[
+                                'dimension' => 'page',
+                                'operator' => 'equals',
+                                'expression' => (string) $pageRows[$idx]['url'],
+                            ]],
+                        ]],
+                    ]
+                );
             }
-        }
-        foreach ($inspectionTargets as $idx) {
-            try {
-                $property = (string) ($pageRows[$idx]['property'] ?? '');
-                if ($property === '') {
+
+            foreach (gscMultiFetch($queryJobs) as $idx => $res) {
+                if (!$res['ok']) {
                     continue;
                 }
-                $pageRows[$idx]['indexStatus'] = gscIndexLabel(gscInspectUrl($token, $property, (string) $pageRows[$idx]['url']));
-            } catch (Throwable $e) {
+                $queries = [];
+                foreach ($res['data']['rows'] ?? [] as $row) {
+                    $query = trim((string) ($row['keys'][0] ?? ''));
+                    if ($query === '') {
+                        continue;
+                    }
+                    $queries[] = [
+                        'query' => $query,
+                        'clicks' => (int) round((float) ($row['clicks'] ?? 0)),
+                        'impressions' => (int) round((float) ($row['impressions'] ?? 0)),
+                    ];
+                }
+                $pageRows[$idx]['queries'] = $queries;
+            }
+        } else {
+            $partial = true;
+        }
+
+        // La inspección de URL es la llamada más lenta de Google: siempre al final.
+        if (gscTimeLeft($deadline) > 10) {
+            $inspectJobs = [];
+            foreach (array_slice($enrichable, 0, GSC_MAX_URL_INSPECTIONS) as $idx) {
+                $inspectJobs[$idx] = gscInspectJob(
+                    $token,
+                    (string) $pageRows[$idx]['property'],
+                    (string) $pageRows[$idx]['url']
+                );
+            }
+
+            foreach (gscMultiFetch($inspectJobs) as $idx => $res) {
+                if ($res['ok']) {
+                    $index = $res['data']['inspectionResult']['indexStatusResult'] ?? [];
+                    $pageRows[$idx]['indexStatus'] = gscIndexLabel(is_array($index) ? $index : []);
+                    continue;
+                }
                 $pageRows[$idx]['indexStatus'] = [
-                    'label' => 'Sin inspeccion',
+                    'label' => 'Sin inspección',
                     'tone' => 'neutral',
-                    'coverage' => $e->getMessage(),
+                    'coverage' => gscJobError($res, 'No se pudo inspeccionar la URL'),
                     'lastCrawl' => '',
                 ];
             }
+        } else {
+            $partial = true;
         }
 
         ksort($dailyBucket);
@@ -1401,6 +1541,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             'pageSig' => $pageSig,
             'host' => $host,
             'version' => GSC_VERSION,
+            'partial' => $partial,
+            'elapsed' => round(GSC_TIME_BUDGET - gscTimeLeft($deadline), 1),
             'range' => ['start' => $startIso, 'end' => $endIso],
             'totals' => $totals,
             'totalsDelta' => gscDelta($totals, $totalsBefore),
