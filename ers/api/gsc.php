@@ -37,7 +37,7 @@ const GSC_CONCURRENCY = 6;
 const GSC_TIME_BUDGET = 40;
 
 /** Sube al cambiar la lógica de resolución de propiedad; sirve para saber qué versión está viva en el server. */
-const GSC_VERSION = '2026.08.20-ops';
+const GSC_VERSION = '2026.09.06-criticals';
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
@@ -891,24 +891,117 @@ function gscMergeDailyBucket(array &$bucket, array $rows): void
     }
 }
 
+/**
+ * Normaliza el resultado de URL Inspection a un estado accionable.
+ * El `reason` es lo que el operador necesita leer en 2 segundos.
+ */
 function gscIndexLabel(array $status): array
 {
     $verdict = strtoupper((string) ($status['verdict'] ?? ''));
     $coverage = (string) ($status['coverageState'] ?? '');
+    $robots = strtoupper((string) ($status['robotsTxtState'] ?? ''));
+    $fetch = strtoupper((string) ($status['pageFetchState'] ?? ''));
+    $indexing = strtoupper((string) ($status['indexingState'] ?? ''));
+    $lastCrawl = (string) ($status['lastCrawlTime'] ?? '');
+
     $label = $coverage !== '' ? $coverage : 'Sin inspección';
     $tone = 'neutral';
-    if ($verdict === 'PASS' || stripos($coverage, 'Submitted and indexed') !== false || stripos($coverage, 'Indexed') !== false) {
+    $reason = $coverage !== '' ? $coverage : 'Google aún no devolvió estado de cobertura.';
+
+    $isIndexed = $verdict === 'PASS'
+        || stripos($coverage, 'Submitted and indexed') !== false
+        || (stripos($coverage, 'Indexed') !== false && stripos($coverage, 'not indexed') === false);
+
+    $isIssue = $verdict === 'FAIL'
+        || stripos($coverage, 'not indexed') !== false
+        || stripos($coverage, 'Excluded') !== false
+        || stripos($coverage, 'Error') !== false
+        || stripos($coverage, 'Blocked') !== false
+        || stripos($coverage, 'Soft 404') !== false
+        || stripos($coverage, 'Redirect') !== false
+        || stripos($coverage, 'Duplicate') !== false
+        || stripos($coverage, 'Alternate page') !== false
+        || in_array($indexing, [
+            'BLOCKED_BY_META_TAG',
+            'BLOCKED_BY_HTTP_HEADER',
+            'BLOCKED_BY_ROBOTS_TXT',
+        ], true)
+        || in_array($fetch, [
+            'SOFT_404',
+            'NOT_FOUND',
+            'ACCESS_DENIED',
+            'SERVER_ERROR',
+            'REDIRECT_ERROR',
+            'BLOCKED_ROBOTS_TXT',
+            'BLOCKED_4XX',
+        ], true)
+        || $robots === 'DISALLOWED';
+
+    if ($isIndexed) {
         $label = 'Indexada';
         $tone = 'indexed';
-    } elseif ($verdict === 'FAIL' || stripos($coverage, 'not indexed') !== false || stripos($coverage, 'Error') !== false) {
+        $reason = 'Google la tiene en el índice.';
+    } elseif ($isIssue) {
         $tone = 'issue';
+        $label = 'Fuera del índice';
+        $reason = gscIndexReason($coverage, $robots, $fetch, $indexing);
     }
+
     return [
         'label' => $label,
         'tone' => $tone,
         'coverage' => $coverage,
-        'lastCrawl' => (string) ($status['lastCrawlTime'] ?? ''),
+        'reason' => $reason,
+        'robots' => $robots,
+        'fetch' => $fetch,
+        'indexing' => $indexing,
+        'lastCrawl' => $lastCrawl,
     ];
+}
+
+/** Motivo corto en español a partir de los flags técnicos de Inspection. */
+function gscIndexReason(string $coverage, string $robots, string $fetch, string $indexing): string
+{
+    if ($robots === 'DISALLOWED' || $indexing === 'BLOCKED_BY_ROBOTS_TXT' || $fetch === 'BLOCKED_ROBOTS_TXT') {
+        return 'robots.txt bloquea el rastreo.';
+    }
+    if ($indexing === 'BLOCKED_BY_META_TAG') {
+        return 'Meta robots noindex en la página.';
+    }
+    if ($indexing === 'BLOCKED_BY_HTTP_HEADER') {
+        return 'Cabecera X-Robots-Tag con noindex.';
+    }
+    if ($fetch === 'SOFT_404' || stripos($coverage, 'Soft 404') !== false) {
+        return 'Google la trata como soft 404.';
+    }
+    if ($fetch === 'NOT_FOUND' || stripos($coverage, 'not found') !== false) {
+        return 'La URL responde 404.';
+    }
+    if ($fetch === 'SERVER_ERROR') {
+        return 'Error de servidor al rastrear.';
+    }
+    if ($fetch === 'ACCESS_DENIED' || $fetch === 'BLOCKED_4XX') {
+        return 'El bot no pudo acceder (permiso/4xx).';
+    }
+    if (stripos($coverage, 'Redirect') !== false || $fetch === 'REDIRECT_ERROR') {
+        return 'Redirección problemática o cadena de redirects.';
+    }
+    if (stripos($coverage, 'Duplicate') !== false || stripos($coverage, 'Alternate page') !== false) {
+        return 'Google eligió otra URL canónica.';
+    }
+    if (stripos($coverage, 'Excluded by') !== false && stripos($coverage, 'noindex') !== false) {
+        return 'Excluida por noindex.';
+    }
+    if (stripos($coverage, 'Discovered') !== false) {
+        return 'Descubierta pero aún no rastreada: falta crawl budget o enlaces internos.';
+    }
+    if (stripos($coverage, 'Crawled') !== false) {
+        return 'Rastreada pero no indexada: calidad, canónica o señal débil.';
+    }
+    if ($coverage !== '') {
+        return $coverage;
+    }
+    return 'Google no la tiene en el índice.';
 }
 
 function gscThermometer(array $now, array $delta, float $siteCtr): array
@@ -939,10 +1032,14 @@ function gscPageTitle(array $row): string
 /**
  * Convierte métricas en acciones. La severidad (3 alta → 1 baja) es lo único que
  * el front necesita para priorizar; así el orden vive en un solo lugar.
+ *
+ * Páginas fuera del índice son siempre gravedad 3, y si hay ≥1 se antepone
+ * una señal de sitio para que el operador lo vea como incidente, no como detalle.
  */
 function gscBuildSignals(array $rows): array
 {
     $signals = [];
+    $notIndexedUrls = [];
 
     foreach ($rows as $row) {
         $url = (string) ($row['url'] ?? '');
@@ -951,6 +1048,9 @@ function gscBuildSignals(array $rows): array
         $delta = is_array($row['delta'] ?? null) ? $row['delta'] : [];
         $tone = (string) ($row['thermometer']['tone'] ?? '');
         $indexTone = (string) ($row['indexStatus']['tone'] ?? '');
+        $indexReason = (string) ($row['indexStatus']['reason']
+            ?? $row['indexStatus']['coverage']
+            ?? 'Google no la tiene en el índice.');
 
         if (!empty($row['error'])) {
             $signals[] = [
@@ -965,12 +1065,13 @@ function gscBuildSignals(array $rows): array
         }
 
         if ($indexTone === 'issue') {
+            $notIndexedUrls[] = $title;
             $signals[] = [
                 'kind' => 'noindex',
                 'severity' => 3,
                 'title' => $title . ' no está indexada',
-                'detail' => (string) ($row['indexStatus']['coverage'] ?? 'Google no la tiene en el índice.'),
-                'metric' => 'Pedir indexación',
+                'detail' => $indexReason,
+                'metric' => 'CRÍTICO · Pedir indexación',
                 'url' => $url,
             ];
         }
@@ -1014,11 +1115,37 @@ function gscBuildSignals(array $rows): array
         }
     }
 
+    $notCount = count($notIndexedUrls);
+    if ($notCount > 0) {
+        $sample = array_slice($notIndexedUrls, 0, 4);
+        $extra = $notCount > 4 ? ' y ' . ($notCount - 4) . ' más' : '';
+        array_unshift($signals, [
+            'kind' => 'site-noindex',
+            'severity' => 3,
+            'title' => $notCount === 1
+                ? '1 página fuera del índice'
+                : $notCount . ' páginas fuera del índice',
+            'detail' => 'Incidente grave: sin indexación no hay tráfico orgánico. Revisar: '
+                . implode(', ', $sample) . $extra . '.',
+            'metric' => 'CRÍTICO',
+            'url' => '',
+        ]);
+    }
+
     usort($signals, static fn ($a, $b) => ($b['severity'] <=> $a['severity']));
+    // Mantener la señal de sitio arriba aunque el sort reordene por título.
+    usort($signals, static function ($a, $b) {
+        $aSite = ($a['kind'] ?? '') === 'site-noindex' ? 1 : 0;
+        $bSite = ($b['kind'] ?? '') === 'site-noindex' ? 1 : 0;
+        if ($aSite !== $bSite) {
+            return $bSite <=> $aSite;
+        }
+        return ($b['severity'] <=> $a['severity']);
+    });
     $signals = array_slice($signals, 0, 24);
 
     foreach ($signals as $i => $signal) {
-        $signals[$i]['id'] = $signal['kind'] . '|' . $signal['url'];
+        $signals[$i]['id'] = $signal['kind'] . '|' . ($signal['url'] !== '' ? $signal['url'] : 'site');
     }
     return $signals;
 }
@@ -1033,7 +1160,9 @@ function gscBuildInventory(array $rows): array
         'checked' => 0,
         'indexed' => 0,
         'notIndexed' => 0,
+        'unchecked' => 0,
         'blocked' => 0,
+        'critical' => false,
     ];
 
     foreach ($rows as $row) {
@@ -1048,6 +1177,7 @@ function gscBuildInventory(array $rows): array
         }
         $tone = (string) ($row['indexStatus']['tone'] ?? '');
         if ($tone === '') {
+            $inventory['unchecked']++;
             continue;
         }
         $inventory['checked']++;
@@ -1055,9 +1185,12 @@ function gscBuildInventory(array $rows): array
             $inventory['indexed']++;
         } elseif ($tone === 'issue') {
             $inventory['notIndexed']++;
+        } else {
+            $inventory['unchecked']++;
         }
     }
 
+    $inventory['critical'] = $inventory['notIndexed'] > 0 || $inventory['blocked'] > 0;
     return $inventory;
 }
 
@@ -1481,6 +1614,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
                     'label' => 'Sin inspección',
                     'tone' => 'neutral',
                     'coverage' => gscJobError($res, 'No se pudo inspeccionar la URL'),
+                    'reason' => gscJobError($res, 'No se pudo inspeccionar la URL'),
+                    'robots' => '',
+                    'fetch' => '',
+                    'indexing' => '',
                     'lastCrawl' => '',
                 ];
             }

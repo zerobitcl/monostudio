@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Mono Studio OS — base de operaciones diaria" />
   <title>Mono Studio OS</title>
-  <link rel="stylesheet" href="styles.css?v=20260820" />
+  <link rel="stylesheet" href="styles.css?v=20260906" />
 </head>
 <body>
 
@@ -143,12 +143,14 @@
       <div class="panel-head">
         <h2>SEO</h2>
         <span class="panel-head__count" id="seoRange">Últimos 28 días</span>
+        <button class="btn btn--ghost" id="btnSeoBrief" type="button" hidden>Exportar críticos</button>
         <button class="btn btn--ghost" id="btnGscRefresh" type="button">Actualizar</button>
       </div>
 
       <div class="site-picker" id="seoClients" role="tablist" aria-label="Sitios de clientes"></div>
 
       <p class="notice" id="seoNotice" hidden></p>
+      <div class="notice notice--critical" id="seoCritical" hidden></div>
 
       <div class="seo-kpis" id="seoKpis" hidden>
         <article class="seo-kpi">
@@ -368,7 +370,9 @@
     </div>
   </div>
 
-  <script src="app.js?v=20260820"></script>
+  <div class="seo-brief" id="seoBrief" hidden aria-hidden="true"></div>
+
+  <script src="app.js?v=20260906"></script>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </body>

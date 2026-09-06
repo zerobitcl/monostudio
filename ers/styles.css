@@ -2381,6 +2381,28 @@ body {
   background: rgba(255, 204, 102, 0.06);
 }
 
+.notice--critical {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 14px;
+  color: #ff8fa3;
+  border-color: rgba(255, 59, 92, 0.45);
+  background: linear-gradient(135deg, rgba(255, 59, 92, 0.14), rgba(255, 59, 92, 0.04));
+  box-shadow: inset 0 0 0 1px rgba(255, 59, 92, 0.12);
+}
+
+.notice--critical strong {
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--danger);
+}
+
+.notice--critical span {
+  color: var(--txt-secondary);
+}
+
 .spark {
   display: flex;
   align-items: flex-end;
@@ -2430,6 +2452,239 @@ body {
 .inventory__cell.is-ok strong { color: var(--neon-green); }
 .inventory__cell.is-warn strong { color: #ffcc66; }
 .inventory__cell.is-bad strong { color: var(--danger); }
+
+.inventory__cell.is-critical {
+  border-color: rgba(255, 59, 92, 0.45);
+  background: rgba(255, 59, 92, 0.08);
+  animation: criticalPulse 2.4s ease-in-out infinite;
+}
+
+@keyframes criticalPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 59, 92, 0); }
+  50% { box-shadow: 0 0 0 4px rgba(255, 59, 92, 0.12); }
+}
+
+.site-chip.is-critical {
+  border-color: rgba(255, 59, 92, 0.4);
+}
+
+.seo-index-reason {
+  display: block;
+  margin-top: 4px;
+  max-width: 220px;
+  white-space: normal;
+  font-size: 0.66rem;
+  line-height: 1.35;
+  color: var(--txt-dim);
+}
+
+/* ==========================================================
+   Informe PDF / print (críticos)
+   ========================================================== */
+.seo-brief {
+  display: none;
+}
+
+body.is-printing-brief .seo-brief {
+  display: block;
+}
+
+@media print {
+  @page {
+    margin: 14mm 12mm;
+    size: A4;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  body.is-printing-brief .seo-brief,
+  body.is-printing-brief .seo-brief * {
+    visibility: visible !important;
+  }
+
+  body.is-printing-brief .seo-brief {
+    display: block !important;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    padding: 0;
+    color: #111 !important;
+    background: #fff !important;
+    font-family: "Segoe UI", system-ui, sans-serif;
+  }
+
+  .brief__head {
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    padding-bottom: 16px;
+    border-bottom: 2px solid #111;
+    margin-bottom: 18px;
+  }
+
+  .brief__brand {
+    margin: 0 0 4px;
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #666;
+  }
+
+  .brief__head h1 {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 700;
+  }
+
+  .brief__meta {
+    margin: 6px 0 0;
+    font-size: 11px;
+    color: #555;
+  }
+
+  .brief__score {
+    text-align: center;
+    min-width: 88px;
+    padding: 10px 14px;
+    border: 2px solid #c1121f;
+    border-radius: 8px;
+  }
+
+  .brief__score strong {
+    display: block;
+    font-size: 28px;
+    line-height: 1;
+    color: #c1121f;
+  }
+
+  .brief__score span {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #666;
+  }
+
+  .brief__kpis,
+  .brief__inv {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+
+  .brief__kpis div,
+  .brief__inv div {
+    padding: 10px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+  }
+
+  .brief__kpis em,
+  .brief__inv span {
+    display: block;
+    font-style: normal;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #777;
+    margin-bottom: 4px;
+  }
+
+  .brief__kpis strong,
+  .brief__inv strong {
+    font-size: 16px;
+  }
+
+  .brief__kpis small {
+    display: block;
+    margin-top: 2px;
+    font-size: 10px;
+    color: #666;
+  }
+
+  .brief__inv .is-bad {
+    border-color: #c1121f;
+    background: #fff5f5;
+  }
+
+  .brief__inv .is-bad strong {
+    color: #c1121f;
+  }
+
+  .brief__section {
+    margin-bottom: 16px;
+    break-inside: avoid;
+  }
+
+  .brief__section h2 {
+    margin: 0 0 8px;
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .brief__section table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+  }
+
+  .brief__section th,
+  .brief__section td {
+    padding: 8px 6px;
+    border-bottom: 1px solid #ddd;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .brief__section th {
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #666;
+  }
+
+  .brief__section td strong {
+    display: block;
+    margin-bottom: 2px;
+  }
+
+  .brief__section td small {
+    color: #555;
+    font-size: 10px;
+  }
+
+  .brief-sev {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: #c1121f;
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+  }
+
+  .brief__section ol {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 11px;
+    line-height: 1.45;
+  }
+
+  .brief__section li {
+    margin-bottom: 6px;
+  }
+
+  .brief__foot {
+    margin-top: 20px;
+    padding-top: 10px;
+    border-top: 1px solid #ddd;
+    font-size: 10px;
+    color: #888;
+  }
+}
 
 .signal-list {
   list-style: none;

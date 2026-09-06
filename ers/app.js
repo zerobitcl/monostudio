@@ -499,8 +499,15 @@ class Agenda {
     SeoStore.data.forEach((cached, host) => {
       if (!cached?.signals?.length) return;
       const client = clients.find((c) => GscModule.hostOf(c.siteUrl) === host);
+      // Prioriza críticos (indexación, caídas fuertes) en la agenda del día.
+      const ranked = [...cached.signals].sort((a, b) => {
+        const aSite = a.kind === "site-noindex" ? 1 : 0;
+        const bSite = b.kind === "site-noindex" ? 1 : 0;
+        if (aSite !== bSite) return bSite - aSite;
+        return (Number(b.severity) || 0) - (Number(a.severity) || 0);
+      });
 
-      cached.signals.slice(0, 6).forEach((signal) => {
+      ranked.slice(0, 6).forEach((signal) => {
         items.push({
           id: `seo:${host}:${signal.id}`,
           group: "seo",
@@ -571,12 +578,12 @@ class AppController {
       "cashChartWrap", "chartBars", "chartAxis", "chartPeriodTotal", "chartRangeLabel",
       "btnViewOrbit", "btnViewList", "btnOrbitExpand",
       "requestList", "requestsEmpty",
-      "seoClients", "seoNotice", "seoKpis", "seoSpark", "seoInventory",
+      "seoClients", "seoNotice", "seoCritical", "seoKpis", "seoSpark", "seoInventory",
       "seoSignals", "seoSignalsEmpty", "seoPagesDrawer", "seoPagesCount",
-      "seoTableBody", "seoDiagDrawer", "seoDiag", "seoRange",
+      "seoTableBody", "seoDiagDrawer", "seoDiag", "seoRange", "seoBrief",
       "seoClicks", "seoImpressions", "seoCtr", "seoPosition",
       "seoClicksDelta", "seoImpressionsDelta", "seoCtrDelta", "seoPositionDelta",
-      "btnGscRefresh", "gscConfigForm", "gscSitemapUrl", "gscPages",
+      "btnGscRefresh", "btnSeoBrief", "gscConfigForm", "gscSitemapUrl", "gscPages",
       "clientModal", "requestModal", "taskModal", "notebookModal",
       "clientForm", "clientModalTitle", "clientSubmitBtn", "btnDeleteClient", "clientIdField",
       "clientName", "clientValue", "clientValueLabel", "clientValueHint",
@@ -684,6 +691,7 @@ class AppController {
     });
     this.dom.seoSignals.addEventListener("click", (e) => this.handleAgendaClick(e));
     this.dom.btnGscRefresh.addEventListener("click", () => this.loadSeoHost(this.seoHost, true));
+    this.dom.btnSeoBrief.addEventListener("click", () => this.exportSeoBrief());
     this.dom.gscConfigForm.addEventListener("submit", (e) => this.handleGscConfig(e));
 
     this.dom.btnViewOrbit.addEventListener("click", () => this.setView("orbit"));
@@ -1151,35 +1159,45 @@ class AppController {
 
     const data = this.seoHost ? SeoStore.get(this.seoHost) : null;
     const hasMetrics = Boolean(data?.totals);
+    const criticalSignals = (data?.signals || []).filter((s) => Number(s.severity) >= 3);
+    const notIndexed = Number(data?.inventory?.notIndexed || 0);
 
     this.dom.seoKpis.hidden = !hasMetrics;
     this.dom.seoInventory.hidden = !data?.inventory?.total;
     this.dom.seoPagesDrawer.hidden = !data?.pages?.length;
+    this.dom.btnSeoBrief.hidden = criticalSignals.length === 0;
 
     if (this.seoConnection && !this.seoConnection.connected) {
       this.#seoNotice(
         "Falta la cuenta de servicio en el servidor (ers/data/gsc-service-account.json).",
         "warn"
       );
+      this.#seoCritical(null);
     } else if (!hosts.length) {
       this.#seoNotice(
         "Ningún sitio disponible. Agrega el sitio web de un cliente en la pestaña Clientes.",
         "warn"
       );
+      this.#seoCritical(null);
       this.dom.seoSignals.innerHTML = "";
       this.dom.seoSignalsEmpty.hidden = true;
+      this.dom.btnSeoBrief.hidden = true;
       return;
     } else if (data?.error) {
       this.#seoNotice(data.error, "warn");
+      this.#seoCritical(null);
     } else if (!data) {
       this.#seoNotice("Sin datos cargados para este sitio.", "");
+      this.#seoCritical(null);
     } else if (data.partial) {
       this.#seoNotice(
         "Análisis abreviado por tiempo: faltan keywords y estado de indexación en algunas páginas. Pulsa Actualizar para completarlo.",
         "warn"
       );
+      this.#seoCritical({ notIndexed, criticalSignals, partial: true });
     } else {
       this.dom.seoNotice.hidden = true;
+      this.#seoCritical({ notIndexed, criticalSignals, partial: false });
     }
 
     if (hasMetrics) this.renderSeoMetrics(data);
@@ -1196,6 +1214,46 @@ class AppController {
     this.dom.seoNotice.textContent = text;
   }
 
+  /** Banner sticky cuando hay páginas fuera del índice u otros críticos. */
+  #seoCritical(state) {
+    const el = this.dom.seoCritical;
+    if (!state || (!state.notIndexed && !state.criticalSignals?.length)) {
+      el.hidden = true;
+      el.innerHTML = "";
+      return;
+    }
+
+    const parts = [];
+    if (state.notIndexed > 0) {
+      parts.push(
+        state.notIndexed === 1
+          ? "1 página fuera del índice"
+          : `${state.notIndexed} páginas fuera del índice`
+      );
+    }
+    const other = (state.criticalSignals || []).filter(
+      (s) => s.kind !== "site-noindex" && s.kind !== "noindex"
+    );
+    if (other.length && !state.notIndexed) {
+      parts.push(
+        `${other.length} alerta${other.length === 1 ? "" : "s"} crítica${other.length === 1 ? "" : "s"}`
+      );
+    }
+    if (state.partial) parts.push("inspección incompleta");
+
+    const closing = state.notIndexed > 0
+      ? "Sin indexación no hay tráfico orgánico."
+      : "Revisar antes de cerrar el día.";
+
+    el.hidden = false;
+    el.innerHTML = "";
+    const title = document.createElement("strong");
+    title.textContent = "Incidente grave";
+    const detail = document.createElement("span");
+    detail.textContent = `${parts.join(" · ")}. ${closing}`;
+    el.append(title, detail);
+  }
+
   renderSeoPicker(hosts) {
     this.dom.seoClients.innerHTML = "";
     const fragment = document.createDocumentFragment();
@@ -1203,10 +1261,11 @@ class AppController {
     hosts.forEach(({ host, label }) => {
       const data = SeoStore.get(host);
       const critical = (data?.signals || []).filter((s) => s.severity >= 3).length;
+      const notIndexed = Number(data?.inventory?.notIndexed || 0);
 
       const btn = document.createElement("button");
       btn.type = "button";
-      btn.className = `site-chip${host === this.seoHost ? " is-active" : ""}`;
+      btn.className = `site-chip${host === this.seoHost ? " is-active" : ""}${notIndexed ? " is-critical" : ""}`;
       btn.dataset.host = host;
       btn.setAttribute("role", "tab");
       btn.setAttribute("aria-selected", String(host === this.seoHost));
@@ -1224,7 +1283,7 @@ class AppController {
         btn.appendChild(badge);
       } else if (critical) {
         const badge = document.createElement("span");
-        badge.className = "site-chip__badge";
+        badge.className = `site-chip__badge${notIndexed ? " site-chip__badge--issue" : ""}`;
         badge.textContent = String(critical);
         btn.appendChild(badge);
       } else if (!data) {
@@ -1295,15 +1354,23 @@ class AppController {
       { label: "Con tráfico", value: inv.withData, tone: "ok" },
       { label: "Sin impresiones", value: inv.noData, tone: inv.noData ? "warn" : "" },
       { label: "Indexadas", value: `${inv.indexed}/${inv.checked || 0}`, tone: "ok" },
-      { label: "Fuera del índice", value: inv.notIndexed, tone: inv.notIndexed ? "bad" : "" },
+      {
+        label: "Fuera del índice",
+        value: inv.notIndexed,
+        tone: inv.notIndexed ? "bad" : "",
+        critical: inv.notIndexed > 0,
+      },
     ];
+    if (inv.unchecked > 0) {
+      cells.push({ label: "Sin inspeccionar", value: inv.unchecked, tone: "warn" });
+    }
 
     this.dom.seoInventory.hidden = false;
     this.dom.seoInventory.innerHTML = "";
     const fragment = document.createDocumentFragment();
     cells.forEach((cell) => {
       const box = document.createElement("div");
-      box.className = `inventory__cell${cell.tone ? ` is-${cell.tone}` : ""}`;
+      box.className = `inventory__cell${cell.tone ? ` is-${cell.tone}` : ""}${cell.critical ? " is-critical" : ""}`;
       const value = document.createElement("strong");
       value.textContent = String(cell.value);
       const label = document.createElement("span");
@@ -1408,6 +1475,13 @@ class AppController {
         badge.className = `seo-index is-${row.indexStatus.tone || "neutral"}`;
         badge.textContent = row.indexStatus.label;
         state.appendChild(badge);
+        const reason = row.indexStatus.reason || row.indexStatus.coverage;
+        if (reason && row.indexStatus.tone === "issue") {
+          const tip = document.createElement("small");
+          tip.className = "seo-index-reason";
+          tip.textContent = reason;
+          state.appendChild(tip);
+        }
       } else {
         state.textContent = "—";
       }
@@ -1468,6 +1542,120 @@ class AppController {
     this.dom.gscSitemapUrl.value = data?.diagnostics?.sitemapUrl || "";
     const manual = (data?.pages || []).filter((p) => p.label && p.label !== p.url);
     this.dom.gscPages.value = GscModule.serializePages(manual);
+  }
+
+  /** Resumen de 1 página listo para PDF vía diálogo de impresión del navegador. */
+  exportSeoBrief() {
+    const data = this.seoHost ? SeoStore.get(this.seoHost) : null;
+    if (!data?.signals?.length) {
+      this.showToast("Sin puntos críticos para exportar");
+      return;
+    }
+
+    const criticals = (data.signals || []).filter((s) => Number(s.severity) >= 3);
+    if (!criticals.length) {
+      this.showToast("Sin puntos críticos para exportar");
+      return;
+    }
+
+    const client = this.clients.find((c) => GscModule.hostOf(c.siteUrl) === this.seoHost);
+    const inv = data.inventory || {};
+    const totals = data.totals || {};
+    const delta = data.totalsDelta || {};
+    const range = data.range
+      ? `${data.range.start} → ${data.range.end}`
+      : "Últimos 28 días";
+    const generated = new Date().toLocaleString("es-CL", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+
+    const esc = (s) =>
+      String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+
+    const deltaLabel = (n, invert = false) => {
+      if (n == null || Number(n) === 0) return "sin cambio";
+      const v = Number(n);
+      const up = invert ? v < 0 : v > 0;
+      const sign = v > 0 ? "+" : "";
+      return `${up ? "▲" : "▼"} ${sign}${Math.abs(v) >= 10 ? GscModule.fmt(v) : v.toFixed?.(1) ?? v}`;
+    };
+
+    const nextSteps = criticals
+      .filter((s) => s.kind !== "site-noindex")
+      .slice(0, 5)
+      .map((s, i) => `<li><strong>${i + 1}. ${esc(s.title)}</strong> — ${esc(s.detail)}</li>`)
+      .join("");
+
+    const criticalRows = criticals
+      .map(
+        (s) => `
+      <tr>
+        <td><span class="brief-sev">S${esc(s.severity)}</span></td>
+        <td>
+          <strong>${esc(s.title)}</strong>
+          <small>${esc(s.detail)}</small>
+        </td>
+        <td>${esc(s.metric || "—")}</td>
+      </tr>`
+      )
+      .join("");
+
+    this.dom.seoBrief.innerHTML = `
+      <header class="brief__head">
+        <div>
+          <p class="brief__brand">Mono Studio · Informe SEO</p>
+          <h1>${esc(client?.name || this.seoHost)}</h1>
+          <p class="brief__meta">${esc(this.seoHost)} · ${esc(range)} · Generado ${esc(generated)}</p>
+        </div>
+        <div class="brief__score">
+          <strong>${criticals.length}</strong>
+          <span>críticos</span>
+        </div>
+      </header>
+
+      <section class="brief__kpis">
+        <div><em>Clics</em><strong>${esc(GscModule.fmt(totals.clicks))}</strong><small>${esc(deltaLabel(delta.clicks))}</small></div>
+        <div><em>Impresiones</em><strong>${esc(GscModule.fmt(totals.impressions))}</strong><small>${esc(deltaLabel(delta.impressions))}</small></div>
+        <div><em>CTR</em><strong>${esc(GscModule.pct(totals.ctr))}</strong><small>${esc(deltaLabel(delta.ctr != null ? delta.ctr * 100 : null))}</small></div>
+        <div><em>Posición</em><strong>${esc(GscModule.pos(totals.position))}</strong><small>${esc(deltaLabel(delta.position, true))}</small></div>
+      </section>
+
+      <section class="brief__inv">
+        <div><strong>${esc(inv.indexed ?? 0)}/${esc(inv.checked || 0)}</strong><span>Indexadas</span></div>
+        <div class="${inv.notIndexed ? "is-bad" : ""}"><strong>${esc(inv.notIndexed ?? 0)}</strong><span>Fuera del índice</span></div>
+        <div><strong>${esc(inv.blocked ?? 0)}</strong><span>Bloqueadas</span></div>
+        <div><strong>${esc(inv.withData ?? 0)}</strong><span>Con tráfico</span></div>
+      </section>
+
+      <section class="brief__section">
+        <h2>Puntos críticos</h2>
+        <table>
+          <thead><tr><th>Sev.</th><th>Hallazgo</th><th>Métrica</th></tr></thead>
+          <tbody>${criticalRows}</tbody>
+        </table>
+      </section>
+
+      ${nextSteps ? `<section class="brief__section"><h2>Próximos pasos</h2><ol>${nextSteps}</ol></section>` : ""}
+
+      <footer class="brief__foot">Mono Studio OS · Uso interno / entrega a cliente</footer>
+    `;
+
+    this.dom.seoBrief.hidden = false;
+    document.body.classList.add("is-printing-brief");
+    const cleanup = () => {
+      document.body.classList.remove("is-printing-brief");
+      this.dom.seoBrief.hidden = true;
+      window.removeEventListener("afterprint", cleanup);
+    };
+    window.addEventListener("afterprint", cleanup);
+    window.print();
+    // Safari a veces no dispara afterprint de inmediato.
+    setTimeout(cleanup, 1500);
   }
 
   async handleGscConfig(e) {

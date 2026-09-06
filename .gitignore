@@ -1,6 +1,10 @@
 # Credenciales de acceso HTTP Basic (nunca subir a GitHub)
 ers/.htpasswd
 
+# Persistencia operativa (vive en el servidor; el deploy no debe pisarla)
+ers/data/store.json
+ers/data/gsc.json
+
 # Search Console: cuenta de servicio, token y caché
 ers/data/gsc-service-account.json
 ers/data/gsc-secrets.json
@@ -9,6 +13,6 @@ ers/data/gsc-cache.json
 ers/data/gsc-oauth-state.txt
 ers/data/*.tmp
 ers/data/*-*.json
-!ers/data/gsc.json
-!ers/data/store.json
 !ers/data/gsc-service-account.example.json
+!ers/data/store.example.json
+!ers/data/gsc.example.json
