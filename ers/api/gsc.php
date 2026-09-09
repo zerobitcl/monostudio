@@ -6,6 +6,7 @@
  * GET  action=sites            → propiedades que ve el bot
  * GET  action=site&host=x.cl   → métricas, señales e inventario de un cliente
  * POST action=config           → override de sitemap/URLs para un host
+ * POST action=index            → reenvía sitemap + inspecciona URLs (pedir rastreo)
  *
  * Credenciales: data/gsc-service-account.json (el JSON que baja Google Cloud)
  */
@@ -25,7 +26,10 @@ const GSC_MAX_MANUAL_PAGES = 40;
 const GSC_MAX_SITEMAP_URLS = 120;
 const GSC_MAX_QUERY_PROBES = 12;
 const GSC_MAX_URL_INSPECTIONS = 18;
-const GSC_TREND_DAYS = 90;
+const GSC_MAX_INDEX_URLS = 8;
+const GSC_SITEMAP_SUBMIT_TTL = 900;
+const GSC_TREND_DAYS = 180;
+const GSC_HISTORY_DAYS = 360;
 
 /** Peticiones simultáneas a Google. Más alto arriesga rate limiting. */
 const GSC_CONCURRENCY = 6;
@@ -37,7 +41,7 @@ const GSC_CONCURRENCY = 6;
 const GSC_TIME_BUDGET = 40;
 
 /** Sube al cambiar la lógica de resolución de propiedad; sirve para saber qué versión está viva en el server. */
-const GSC_VERSION = '2026.09.06-criticals';
+const GSC_VERSION = '2026.09.08-report';
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
@@ -815,6 +819,85 @@ function gscListSitemaps(string $token, string $siteUrl): array
     return is_array($items) ? $items : [];
 }
 
+function gscUrlBelongsToHost(string $url, string $host): bool
+{
+    return $host !== '' && gscHost($url) === $host && (bool) preg_match('#^https?://#i', $url);
+}
+
+/**
+ * Notifica a Google el sitemap. Es el único canal oficial masivo: no existe API
+ * de «solicitar indexación» para sitios normales (esa cuota de ~10/día es solo UI).
+ */
+function gscSubmitSitemap(string $token, string $property, string $sitemapUrl): array
+{
+    $endpoint = 'https://www.googleapis.com/webmasters/v3/sites/'
+        . rawurlencode($property)
+        . '/sitemaps/'
+        . rawurlencode($sitemapUrl);
+    $res = gscHttp('PUT', $endpoint, null, ['Authorization: Bearer ' . $token]);
+    if ($res['ok'] || (int) ($res['status'] ?? 0) === 204) {
+        return ['ok' => true, 'error' => ''];
+    }
+    $msg = $res['data']['error']['message'] ?? $res['error'] ?? 'No se pudo reenviar el sitemap';
+    return ['ok' => false, 'error' => (string) $msg];
+}
+
+function gscPendingIndexUrls(array $cached): array
+{
+    $urls = [];
+    foreach ($cached['pages'] ?? [] as $row) {
+        if (!is_array($row) || !empty($row['error'])) {
+            continue;
+        }
+        if ((string) ($row['indexStatus']['tone'] ?? '') === 'indexed') {
+            continue;
+        }
+        $url = (string) ($row['url'] ?? '');
+        if ($url !== '') {
+            $urls[] = $url;
+        }
+    }
+    return $urls;
+}
+
+function gscApplyIndexToCache(string $cacheFile, array $results, array $sitemapMeta): array
+{
+    $cached = gscReadJson($cacheFile, []);
+    if (!is_array($cached['pages'] ?? null)) {
+        return $cached;
+    }
+
+    $byUrl = [];
+    foreach ($results as $item) {
+        $url = (string) ($item['url'] ?? '');
+        if ($url !== '') {
+            $byUrl[$url] = $item;
+        }
+    }
+
+    foreach ($cached['pages'] as $i => $row) {
+        $url = (string) ($row['url'] ?? '');
+        if (!isset($byUrl[$url])) {
+            continue;
+        }
+        $item = $byUrl[$url];
+        if (!empty($item['indexStatus'])) {
+            $cached['pages'][$i]['indexStatus'] = $item['indexStatus'];
+        }
+        $cached['pages'][$i]['indexRequest'] = $item['indexRequest'] ?? null;
+    }
+
+    if ($sitemapMeta !== []) {
+        $diag = is_array($cached['diagnostics'] ?? null) ? $cached['diagnostics'] : [];
+        $cached['diagnostics'] = array_merge($diag, $sitemapMeta);
+    }
+
+    $cached['inventory'] = gscBuildInventory($cached['pages']);
+    $cached['signals'] = gscBuildSignals($cached['pages']);
+    gscWriteJson($cacheFile, $cached);
+    return $cached;
+}
+
 function gscAggregateWeekdays(array $daily): array
 {
     $buckets = [];
@@ -870,7 +953,7 @@ function gscAggregateMonths(array $daily): array
             'impressions' => $bucket['impressions'],
         ];
     }
-    return array_slice($out, -4);
+    return array_slice($out, -6);
 }
 
 function gscMergeDailyBucket(array &$bucket, array $rows): void
@@ -889,6 +972,185 @@ function gscMergeDailyBucket(array &$bucket, array $rows): void
             $bucket[$date]['position'] += ((float) ($row['position'] ?? 0)) * ((int) ($row['impressions'] ?? 0));
         }
     }
+}
+
+function gscDailyInRange(array $rows, string $start, string $end): array
+{
+    return array_values(array_filter(
+        $rows,
+        static fn ($row) => ($row['date'] ?? '') >= $start && ($row['date'] ?? '') <= $end
+    ));
+}
+
+function gscTotalsFromDaily(array $rows): array
+{
+    $clicks = 0;
+    $impressions = 0;
+    $posWeight = 0.0;
+    foreach ($rows as $row) {
+        $c = (int) ($row['clicks'] ?? 0);
+        $i = (int) ($row['impressions'] ?? 0);
+        $clicks += $c;
+        $impressions += $i;
+        $posWeight += ((float) ($row['position'] ?? 0)) * $i;
+    }
+    return [
+        'clicks' => $clicks,
+        'impressions' => $impressions,
+        'ctr' => $impressions > 0 ? $clicks / $impressions : 0,
+        'position' => $impressions > 0 ? $posWeight / $impressions : 0,
+    ];
+}
+
+function gscBuildPeriods(array $daily, DateTimeImmutable $end): array
+{
+    $defs = [
+        ['id' => '28d', 'label' => '28 días', 'days' => 28],
+        ['id' => '90d', 'label' => '3 meses', 'days' => 90],
+        ['id' => '180d', 'label' => '6 meses', 'days' => 180],
+    ];
+    $out = [];
+    foreach ($defs as $def) {
+        $start = $end->modify('-' . ($def['days'] - 1) . ' days');
+        $prevEnd = $start->modify('-1 day');
+        $prevStart = $prevEnd->modify('-' . ($def['days'] - 1) . ' days');
+        $now = gscTotalsFromDaily(gscDailyInRange($daily, $start->format('Y-m-d'), $end->format('Y-m-d')));
+        $prev = gscTotalsFromDaily(gscDailyInRange($daily, $prevStart->format('Y-m-d'), $prevEnd->format('Y-m-d')));
+        $out[] = [
+            'id' => $def['id'],
+            'label' => $def['label'],
+            'days' => $def['days'],
+            'range' => ['start' => $start->format('Y-m-d'), 'end' => $end->format('Y-m-d')],
+            'totals' => $now,
+            'previous' => $prev,
+            'delta' => gscDelta($now, $prev),
+        ];
+    }
+    return $out;
+}
+
+function gscClicksPct(array $period): ?float
+{
+    $prev = (int) ($period['previous']['clicks'] ?? 0);
+    $now = (int) ($period['totals']['clicks'] ?? 0);
+    if ($prev <= 0) {
+        return null;
+    }
+    return (($now - $prev) / $prev) * 100;
+}
+
+/**
+ * Lectura de operador, no un dump de métricas. Máximo 6 puntos para que el PDF
+ * se pueda entregar al cliente sin reescribirlo.
+ */
+function gscBuildAnalysis(array $periods, array $inventory, array $pages, array $trend): array
+{
+    $byId = [];
+    foreach ($periods as $period) {
+        $byId[(string) ($period['id'] ?? '')] = $period;
+    }
+    $p28 = $byId['28d'] ?? null;
+    $p90 = $byId['90d'] ?? null;
+    $p180 = $byId['180d'] ?? null;
+    $out = [];
+
+    $fmtPct = static function (?float $n): string {
+        if ($n === null) {
+            return 'sin base comparable';
+        }
+        $sign = $n > 0 ? '+' : '';
+        return $sign . round($n) . '% clics';
+    };
+
+    if ($p28 && $p90 && $p180) {
+        $c28 = gscClicksPct($p28);
+        $c90 = gscClicksPct($p90);
+        $c180 = gscClicksPct($p180);
+        $tone = ($c28 ?? 0) >= 0 ? 'up' : 'down';
+        $out[] = [
+            'tone' => $tone,
+            'title' => 'Clics por horizonte',
+            'body' => '28 días: ' . $fmtPct($c28) . ' · 3 meses: ' . $fmtPct($c90) . ' · 6 meses: ' . $fmtPct($c180) . ', siempre vs el tramo anterior igual de largo.',
+        ];
+        if ($c28 !== null && $c180 !== null && $c28 > 8 && $c180 < -5) {
+            $out[] = [
+                'tone' => 'up',
+                'title' => 'Rebote reciente',
+                'body' => 'El último mes recupera clics sobre una caída de 6 meses. Hay que sostener lo que se movió ahora (titles, internos, páginas nuevas) antes de que se enfríe.',
+            ];
+        } elseif ($c28 !== null && $c180 !== null && $c28 < -8 && $c180 > 5) {
+            $out[] = [
+                'tone' => 'down',
+                'title' => 'Frenazo de corto plazo',
+                'body' => 'El semestre es positivo, pero los últimos 28 días se desinflaron. Prioriza las URLs que más clicaban y perdieron posición.',
+            ];
+        }
+    }
+
+    $not = (int) ($inventory['notIndexed'] ?? 0);
+    if ($not > 0) {
+        $out[] = [
+            'tone' => 'bad',
+            'title' => 'Cobertura',
+            'body' => $not === 1
+                ? '1 página fuera del índice. Sin índice no hay impresiones: indexar esa URL vale más que reescribir copy.'
+                : $not . ' páginas fuera del índice. Sin cobertura no hay tráfico orgánico; sitemap e Indexar primero.',
+        ];
+    }
+
+    if ($p28) {
+        $dImp = (int) ($p28['delta']['impressions'] ?? 0);
+        $dCtr = (float) ($p28['delta']['ctr'] ?? 0);
+        $dPos = (float) ($p28['delta']['position'] ?? 0);
+        $dClk = (int) ($p28['delta']['clicks'] ?? 0);
+        if ($dImp >= 200 && $dCtr < -0.002) {
+            $out[] = [
+                'tone' => 'warn',
+                'title' => 'Más visibilidad, peor CTR',
+                'body' => 'Las impresiones subieron y el CTR bajó. Títulos y meta descriptions no están convirtiendo la demanda nueva.',
+            ];
+        }
+        if ($dPos >= 0.8 && $dClk < 0) {
+            $out[] = [
+                'tone' => 'warn',
+                'title' => 'Mejor posición, menos clics',
+                'body' => 'El ranking mejoró y aun así cayeron los clics. Suele ser estacionalidad o un mix de queries con menos intención.',
+            ];
+        }
+    }
+
+    $losers = array_values(array_filter(
+        $pages,
+        static fn ($row) => (int) (($row['delta']['clicks'] ?? 0)) <= -5
+    ));
+    usort($losers, static fn ($a, $b) => ((int) ($a['delta']['clicks'] ?? 0)) <=> (int) ($b['delta']['clicks'] ?? 0));
+    if ($losers !== []) {
+        $lost = abs((int) ($losers[0]['delta']['clicks'] ?? 0));
+        $out[] = [
+            'tone' => 'down',
+            'title' => 'Mayor caída',
+            'body' => gscPageTitle($losers[0]) . ' perdió ' . $lost . ' clics vs los 28 días previos.',
+        ];
+    }
+
+    $weekdays = $trend['weekdays'] ?? [];
+    if (isset($weekdays[0]['label'])) {
+        $out[] = [
+            'tone' => 'ok',
+            'title' => 'Mejor día',
+            'body' => $weekdays[0]['label'] . ' concentra más clics. Publica o empuja contenidos con ese lead time.',
+        ];
+    }
+
+    if ($out === []) {
+        $out[] = [
+            'tone' => 'ok',
+            'title' => 'Sin incidentes graves',
+            'body' => 'El sitio está estable en el rango medido. El siguiente palanca es CTR en las URLs con más impresiones y poco clic.',
+        ];
+    }
+
+    return array_slice($out, 0, 6);
 }
 
 /**
@@ -1324,6 +1586,192 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'config') {
     gscJson(['ok' => true, 'host' => $host] + $config['hosts'][$host]);
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'index') {
+    if ($serviceAccount === []) {
+        gscJson([
+            'error' => 'No hay cuenta de servicio. Sube el JSON a ers/data/gsc-service-account.json.',
+        ], 400);
+    }
+
+    $input = json_decode((string) file_get_contents('php://input'), true);
+    if (!is_array($input)) {
+        gscJson(['error' => 'JSON inválido'], 400);
+    }
+
+    $host = gscSanitizeHost((string) ($input['host'] ?? ''));
+    if ($host === '') {
+        gscJson(['error' => 'Indica el dominio del cliente'], 400);
+    }
+
+    $cacheFile = gscHostCacheFile($dataDir, $host);
+    $cached = gscReadJson($cacheFile, []);
+
+    $requested = [];
+    if (is_array($input['urls'] ?? null)) {
+        $requested = $input['urls'];
+    } elseif (isset($input['url'])) {
+        $requested = [$input['url']];
+    }
+    $requested = array_values(array_filter(array_map(
+        static fn ($u) => is_string($u) ? trim($u) : '',
+        $requested
+    )));
+
+    if ($requested === []) {
+        $requested = gscPendingIndexUrls($cached);
+    }
+    if ($requested === []) {
+        gscJson(['error' => 'No hay páginas pendientes. Abre el sitio en SEO primero.'], 400);
+    }
+
+    $urls = [];
+    foreach ($requested as $url) {
+        if (!gscUrlBelongsToHost($url, $host)) {
+            gscJson(['error' => 'La URL no pertenece a ' . $host], 400);
+        }
+        if (!in_array($url, $urls, true)) {
+            $urls[] = $url;
+        }
+        if (count($urls) >= GSC_MAX_INDEX_URLS) {
+            break;
+        }
+    }
+
+    try {
+        $token = gscAccessToken($serviceAccount, $tokenFile);
+        $sites = [];
+        try {
+            $sites = gscListSites($token);
+        } catch (Throwable $e) {
+            // gscResolveProperty prueba candidatos aunque list sites falle.
+        }
+
+        $seedUrl = 'https://' . $host . '/';
+        $resolved = gscResolveProperty($token, $seedUrl, $sites);
+        $property = (string) ($resolved['property'] ?? '');
+        if ($property === '') {
+            gscJson([
+                'error' => (string) ($resolved['error'] ?? 'Search Console no ve este dominio.'),
+            ], 400);
+        }
+
+        $override = is_array($config['hosts'][$host] ?? null) ? $config['hosts'][$host] : [];
+        $sitemapUrl = gscSanitizeSitemapUrl((string) ($override['sitemapUrl'] ?? ''));
+        if ($sitemapUrl === '') {
+            $sitemapUrl = gscSanitizeSitemapUrl((string) ($cached['diagnostics']['sitemapUrl'] ?? ''));
+        }
+        if ($sitemapUrl === '') {
+            try {
+                foreach (gscListSitemaps($token, $property) as $item) {
+                    $candidate = gscSanitizeSitemapUrl((string) ($item['path'] ?? ''));
+                    if ($candidate !== '' && gscHost($candidate) === $host) {
+                        $sitemapUrl = $candidate;
+                        break;
+                    }
+                }
+            } catch (Throwable $e) {
+                // Sin sitemap igual inspeccionamos: el operador ve el estado real.
+            }
+        }
+
+        $lastSubmit = (int) ($cached['diagnostics']['lastSitemapSubmitAt'] ?? 0);
+        $sameFeed = (string) ($cached['diagnostics']['lastSitemapSubmitted'] ?? '') === $sitemapUrl;
+        $sitemapOk = false;
+        $sitemapSkipped = false;
+        $sitemapError = '';
+
+        if ($sitemapUrl === '') {
+            $sitemapError = 'No hay sitemap conocido para reenviar.';
+        } elseif ($sameFeed && $lastSubmit > time() - GSC_SITEMAP_SUBMIT_TTL) {
+            $sitemapOk = true;
+            $sitemapSkipped = true;
+        } else {
+            $put = gscSubmitSitemap($token, $property, $sitemapUrl);
+            $sitemapOk = $put['ok'];
+            $sitemapError = $put['error'];
+        }
+
+        $jobs = [];
+        foreach ($urls as $idx => $url) {
+            $jobs[$idx] = gscInspectJob($token, $property, $url);
+        }
+
+        $now = time();
+        $results = [];
+        $indexed = 0;
+        foreach (gscMultiFetch($jobs) as $idx => $res) {
+            $url = $urls[$idx];
+            if ($res['ok']) {
+                $index = $res['data']['inspectionResult']['indexStatusResult'] ?? [];
+                $status = gscIndexLabel(is_array($index) ? $index : []);
+            } else {
+                $msg = gscJobError($res, 'No se pudo inspeccionar la URL');
+                if (stripos($msg, 'quota') !== false) {
+                    $msg = 'Se acabó la cuota diaria de inspección (2.000/propiedad). Mañana puedes seguir.';
+                }
+                $status = [
+                    'label' => 'Sin inspección',
+                    'tone' => 'neutral',
+                    'coverage' => $msg,
+                    'reason' => $msg,
+                    'robots' => '',
+                    'fetch' => '',
+                    'indexing' => '',
+                    'lastCrawl' => '',
+                ];
+            }
+            if (($status['tone'] ?? '') === 'indexed') {
+                $indexed++;
+            }
+            $results[] = [
+                'url' => $url,
+                'indexStatus' => $status,
+                'indexRequest' => [
+                    'at' => $now,
+                    'sitemap' => $sitemapOk,
+                ],
+            ];
+        }
+
+        $sitemapMeta = [
+            'sitemapUrl' => $sitemapUrl,
+            'lastSitemapSubmitAt' => $sitemapSkipped ? $lastSubmit : ($sitemapOk ? $now : $lastSubmit),
+            'lastSitemapSubmitted' => $sitemapOk ? $sitemapUrl : (string) ($cached['diagnostics']['lastSitemapSubmitted'] ?? ''),
+        ];
+        $updated = gscApplyIndexToCache($cacheFile, $results, $sitemapMeta);
+
+        $count = count($results);
+        if ($indexed === $count) {
+            $message = $count === 1 ? 'Google ya la tiene en el índice.' : 'Google ya las tiene en el índice.';
+        } elseif ($sitemapOk) {
+            $message = $sitemapSkipped
+                ? 'Sitemap ya estaba enviado. Estado actualizado; el rastreo lo encola Google.'
+                : 'Sitemap reenviado. Google encola el rastreo; no es instantáneo.';
+        } elseif ($sitemapError !== '') {
+            $message = 'Estado actualizado. Sitemap: ' . $sitemapError;
+        } else {
+            $message = 'Estado actualizado.';
+        }
+
+        gscJson([
+            'ok' => true,
+            'host' => $host,
+            'property' => $property,
+            'sitemapUrl' => $sitemapUrl,
+            'sitemapSubmitted' => $sitemapOk && !$sitemapSkipped,
+            'sitemapSkipped' => $sitemapSkipped,
+            'sitemapError' => $sitemapError,
+            'message' => $message,
+            'results' => $results,
+            'inventory' => $updated['inventory'] ?? null,
+            'signals' => $updated['signals'] ?? null,
+            'pages' => $updated['pages'] ?? null,
+        ]);
+    } catch (Throwable $e) {
+        gscJson(['error' => $e->getMessage()], 500);
+    }
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === 'query')) {
     try {
         if ($serviceAccount === []) {
@@ -1410,13 +1858,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
         $start = $end->modify('-27 days');
         $prevEnd = $start->modify('-1 day');
         $prevStart = $prevEnd->modify('-27 days');
-        $trendStart = $end->modify('-' . (GSC_TREND_DAYS - 1) . ' days');
+        $historyStart = $end->modify('-' . (GSC_HISTORY_DAYS - 1) . ' days');
+        $visibleStart = $end->modify('-' . (GSC_TREND_DAYS - 1) . ' days');
 
         $startIso = $start->format('Y-m-d');
         $endIso = $end->format('Y-m-d');
         $prevStartIso = $prevStart->format('Y-m-d');
         $prevEndIso = $prevEnd->format('Y-m-d');
-        $trendStartIso = $trendStart->format('Y-m-d');
+        $historyStartIso = $historyStart->format('Y-m-d');
+        $visibleStartIso = $visibleStart->format('Y-m-d');
 
         $groups = [];
         $unmatched = [];
@@ -1453,9 +1903,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
                 'previous' => gscAnalyticsJob($token, $property, $prevStartIso, $prevEndIso, ['dimensions' => ['page']]),
                 'totalsNow' => gscAnalyticsJob($token, $property, $startIso, $endIso),
                 'totalsPrev' => gscAnalyticsJob($token, $property, $prevStartIso, $prevEndIso),
-                'daily' => gscAnalyticsJob($token, $property, $trendStartIso, $endIso, [
+                'daily' => gscAnalyticsJob($token, $property, $historyStartIso, $endIso, [
                     'dimensions' => ['date'],
-                    'rowLimit' => GSC_TREND_DAYS + 10,
+                    'rowLimit' => GSC_HISTORY_DAYS + 10,
                 ]),
             ]);
 
@@ -1637,6 +2087,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             return $row;
         }, $dailyBucket));
 
+        $periods = gscBuildPeriods($dailyRows, $end);
+        foreach ($periods as &$period) {
+            if (($period['id'] ?? '') === '28d') {
+                $period['totals'] = $totals;
+                $period['previous'] = $totalsBefore;
+                $period['delta'] = gscDelta($totals, $totalsBefore);
+                $period['range'] = ['start' => $startIso, 'end' => $endIso];
+            }
+        }
+        unset($period);
+        $periods = array_values(array_filter(
+            $periods,
+            static function (array $period): bool {
+                if (($period['id'] ?? '') === '28d') {
+                    return true;
+                }
+                return ((int) ($period['totals']['impressions'] ?? 0) > 0)
+                    || ((int) ($period['previous']['impressions'] ?? 0) > 0);
+            }
+        ));
+
+        $dailyVisible = gscDailyInRange($dailyRows, $visibleStartIso, $endIso);
+        $inventory = gscBuildInventory($pageRows);
+        $signals = gscBuildSignals($pageRows);
+        $trend = [
+            'weekdays' => gscAggregateWeekdays($dailyVisible),
+            'months' => gscAggregateMonths($dailyVisible),
+        ];
+
         $diagnostics = [
             'property' => $primaryProperty,
             'sitemapSource' => $sitemapDiscovery['source'] ?? '',
@@ -1683,17 +2162,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             'range' => ['start' => $startIso, 'end' => $endIso],
             'totals' => $totals,
             'totalsDelta' => gscDelta($totals, $totalsBefore),
+            'periods' => $periods,
+            'analysis' => gscBuildAnalysis($periods, $inventory, $pageRows, $trend),
             'daily' => array_map(static fn ($row) => [
                 'date' => $row['date'],
                 'clicks' => (int) $row['clicks'],
                 'impressions' => (int) $row['impressions'],
-            ], array_slice($dailyRows, -56)),
-            'trend' => [
-                'weekdays' => gscAggregateWeekdays($dailyRows),
-                'months' => gscAggregateMonths($dailyRows),
-            ],
-            'inventory' => gscBuildInventory($pageRows),
-            'signals' => gscBuildSignals($pageRows),
+            ], $dailyVisible),
+            'trend' => $trend,
+            'inventory' => $inventory,
+            'signals' => $signals,
             'diagnostics' => $diagnostics,
             'pages' => $pageRows,
         ];

@@ -32,6 +32,7 @@ class Store {
     expanded: "monoStudio.expanded",
     module: "monoStudio.module",
     seoHost: "monoStudio.seoHost",
+    seoPeriod: "monoStudio.seoPeriod",
     seoCache: "monoStudio.seoCache",
   };
 
@@ -285,6 +286,18 @@ class GscModule {
     return data;
   }
 
+  static async indexUrls(payload) {
+    const res = await fetch(GscModule.#url("index"), {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || GscModule.#gatewayMessage(res.status));
+    return data;
+  }
+
   static hostOf(url) {
     try {
       return new URL(String(url)).hostname.replace(/^www\./i, "").toLowerCase();
@@ -334,6 +347,41 @@ class GscModule {
     else if (position) text = `${value > 0 ? "↑" : "↓"} ${Math.abs(value).toFixed(1)}`;
     else text = `${sign}${GscModule.fmt(value)}`;
     return { text, cls: up ? "is-up" : "is-down" };
+  }
+
+  static PERIODS = [
+    { id: "28d", label: "28 días", days: 28 },
+    { id: "90d", label: "3 meses", days: 90 },
+    { id: "180d", label: "6 meses", days: 180 },
+  ];
+
+  static periodsOf(data) {
+    if (Array.isArray(data?.periods) && data.periods.length) return data.periods;
+    if (!data?.totals) return [];
+    return [
+      {
+        id: "28d",
+        label: "28 días",
+        days: 28,
+        range: data.range,
+        totals: data.totals,
+        delta: data.totalsDelta || {},
+      },
+    ];
+  }
+
+  static periodOf(data, id) {
+    const list = GscModule.periodsOf(data);
+    return list.find((p) => p.id === id) || list[0] || null;
+  }
+
+  static pagePath(url) {
+    try {
+      const path = new URL(String(url)).pathname || "/";
+      return path === "/" ? "/" : path.replace(/\/$/, "");
+    } catch {
+      return String(url || "");
+    }
   }
 }
 
@@ -517,7 +565,11 @@ class Agenda {
           clientId: client?.id || "",
           clientName: client?.name || host,
           actions: [
-            { label: "Anotar tarea", act: "signal-task", value: `${host}|${signal.id}`, primary: true },
+            ...(signal.kind === "noindex" && signal.url
+              ? [{ label: "Indexar", act: "index-url", value: `${host}|${signal.url}`, primary: true }]
+              : signal.kind === "site-noindex"
+                ? [{ label: "Indexar pendientes", act: "index-pending", value: host, primary: true }]
+                : [{ label: "Anotar tarea", act: "signal-task", value: `${host}|${signal.id}`, primary: true }]),
             ...(signal.url ? [{ label: "Ver página", act: "link", value: signal.url }] : []),
             { label: "Ver sitio", act: "open-seo", value: host },
           ],
@@ -550,10 +602,12 @@ class AppController {
     this.isSaving = false;
     this.agendaFilter = "all";
     this.seoHost = localStorage.getItem(Store.KEYS.seoHost) || "";
+    this.seoPeriod = localStorage.getItem(Store.KEYS.seoPeriod) || "28d";
     this.seoProperties = [];
     this.seoConnection = null;
     this.seoLoading = false;
     this.warming = false;
+    this.indexing = false;
 
     this.isLite = AppController.isLiteDevice();
     this.module = localStorage.getItem(Store.KEYS.module) || "today";
@@ -580,10 +634,11 @@ class AppController {
       "requestList", "requestsEmpty",
       "seoClients", "seoNotice", "seoCritical", "seoKpis", "seoSpark", "seoInventory",
       "seoSignals", "seoSignalsEmpty", "seoPagesDrawer", "seoPagesCount",
-      "seoTableBody", "seoDiagDrawer", "seoDiag", "seoRange", "seoBrief",
+      "seoTableBody", "seoDiagDrawer", "seoDiag", "seoRange", "seoBrief", "seoBriefBody",
+      "seoPeriodToggle",
       "seoClicks", "seoImpressions", "seoCtr", "seoPosition",
       "seoClicksDelta", "seoImpressionsDelta", "seoCtrDelta", "seoPositionDelta",
-      "btnGscRefresh", "btnSeoBrief", "gscConfigForm", "gscSitemapUrl", "gscPages",
+      "btnGscRefresh", "btnSeoIndex", "btnSeoBrief", "btnSeoPrint", "btnSeoBriefClose", "gscConfigForm", "gscSitemapUrl", "gscPages",
       "clientModal", "requestModal", "taskModal", "notebookModal",
       "clientForm", "clientModalTitle", "clientSubmitBtn", "btnDeleteClient", "clientIdField",
       "clientName", "clientValue", "clientValueLabel", "clientValueHint",
@@ -668,6 +723,7 @@ class AppController {
     );
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
+      this.closeSeoReport();
       ["clientModal", "requestModal", "taskModal", "notebookModal"].forEach((id) => this.closeModal(id));
     });
 
@@ -690,8 +746,22 @@ class AppController {
       if (chip) this.selectSeoHost(chip.dataset.host);
     });
     this.dom.seoSignals.addEventListener("click", (e) => this.handleAgendaClick(e));
+    this.dom.seoTableBody.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-index-url]");
+      if (btn) this.requestIndex(this.seoHost, btn.dataset.indexUrl);
+    });
     this.dom.btnGscRefresh.addEventListener("click", () => this.loadSeoHost(this.seoHost, true));
-    this.dom.btnSeoBrief.addEventListener("click", () => this.exportSeoBrief());
+    this.dom.btnSeoIndex.addEventListener("click", () => this.requestIndex(this.seoHost));
+    this.dom.btnSeoBrief.addEventListener("click", () => this.openSeoReport());
+    this.dom.btnSeoPrint.addEventListener("click", () => this.printSeoReport());
+    this.dom.btnSeoBriefClose.addEventListener("click", () => this.closeSeoReport());
+    this.dom.seoPeriodToggle.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-period]");
+      if (!btn || btn.disabled) return;
+      this.seoPeriod = btn.dataset.period;
+      localStorage.setItem(Store.KEYS.seoPeriod, this.seoPeriod);
+      this.renderSeo();
+    });
     this.dom.gscConfigForm.addEventListener("submit", (e) => this.handleGscConfig(e));
 
     this.dom.btnViewOrbit.addEventListener("click", () => this.setView("orbit"));
@@ -775,6 +845,15 @@ class AppController {
       case "signal-task":
         this.taskFromSignal(value);
         break;
+      case "index-url": {
+        const pipe = value.indexOf("|");
+        if (pipe === -1) break;
+        this.requestIndex(value.slice(0, pipe), value.slice(pipe + 1));
+        break;
+      }
+      case "index-pending":
+        this.requestIndex(value);
+        break;
       case "open-seo":
         this.selectSeoHost(value);
         this.setModule("seo");
@@ -828,13 +907,13 @@ class AppController {
     this.applyExpanded();
   }
 
-  showToast(message) {
+  showToast(message, ms = 2800) {
     this.dom.toast.textContent = message;
     this.dom.toast.hidden = false;
     clearTimeout(this.toastTimer);
     this.toastTimer = setTimeout(() => {
       this.dom.toast.hidden = true;
-    }, 2800);
+    }, ms);
   }
 
   openModal(id) {
@@ -942,6 +1021,9 @@ class AppController {
       btn.dataset.act = action.act;
       btn.dataset.value = action.value;
       btn.textContent = action.label;
+      if (this.indexing && (action.act === "index-url" || action.act === "index-pending")) {
+        btn.disabled = true;
+      }
       actions.appendChild(btn);
     });
 
@@ -1165,7 +1247,12 @@ class AppController {
     this.dom.seoKpis.hidden = !hasMetrics;
     this.dom.seoInventory.hidden = !data?.inventory?.total;
     this.dom.seoPagesDrawer.hidden = !data?.pages?.length;
-    this.dom.btnSeoBrief.hidden = criticalSignals.length === 0;
+    this.dom.btnSeoBrief.hidden = !hasMetrics;
+    this.dom.seoPeriodToggle.hidden = !hasMetrics;
+    const pending = notIndexed + Number(data?.inventory?.unchecked || 0);
+    this.dom.btnSeoIndex.hidden = pending === 0;
+    this.dom.btnSeoIndex.disabled = this.indexing;
+    this.dom.btnSeoIndex.textContent = this.indexing ? "Pidiendo rastreo…" : "Indexar pendientes";
 
     if (this.seoConnection && !this.seoConnection.connected) {
       this.#seoNotice(
@@ -1182,6 +1269,8 @@ class AppController {
       this.dom.seoSignals.innerHTML = "";
       this.dom.seoSignalsEmpty.hidden = true;
       this.dom.btnSeoBrief.hidden = true;
+      this.dom.seoPeriodToggle.hidden = true;
+      this.dom.btnSeoIndex.hidden = true;
       return;
     } else if (data?.error) {
       this.#seoNotice(data.error, "warn");
@@ -1300,11 +1389,20 @@ class AppController {
   }
 
   renderSeoMetrics(data) {
-    const totals = data.totals;
-    const delta = data.totalsDelta || {};
+    const periods = GscModule.periodsOf(data);
+    if (!periods.some((p) => p.id === this.seoPeriod)) {
+      this.seoPeriod = periods[0]?.id || "28d";
+    }
+    this.renderSeoPeriodToggle(periods);
 
-    if (data.range) {
-      this.dom.seoRange.textContent = `${data.range.start} → ${data.range.end}${data.cached ? " · caché" : ""}`;
+    const period = GscModule.periodOf(data, this.seoPeriod);
+    const totals = period?.totals || data.totals || {};
+    const delta = period?.delta || data.totalsDelta || {};
+    const range = period?.range || data.range;
+
+    if (range?.start) {
+      const label = period?.label || "28 días";
+      this.dom.seoRange.textContent = `${label} · ${range.start} → ${range.end}${data.cached ? " · caché" : ""}`;
     }
 
     this.dom.seoClicks.textContent = GscModule.fmt(totals.clicks);
@@ -1324,15 +1422,26 @@ class AppController {
       el.className = cls;
     });
 
-    this.renderSpark(data.daily || []);
+    this.renderSpark(data.daily || [], period?.days || 28);
   }
 
-  renderSpark(daily) {
+  renderSeoPeriodToggle(periods) {
+    const available = new Set(periods.map((p) => p.id));
+    this.dom.seoPeriodToggle.querySelectorAll("[data-period]").forEach((btn) => {
+      const id = btn.dataset.period;
+      btn.classList.toggle("is-active", id === this.seoPeriod);
+      btn.disabled = !available.has(id);
+      btn.title = available.has(id) ? "" : "Pulsa Actualizar para cargar este rango";
+    });
+  }
+
+  renderSpark(daily, days = 28) {
     this.dom.seoSpark.innerHTML = "";
     if (!daily.length) return;
-    const max = Math.max(...daily.map((d) => d.clicks), 1);
+    const rows = this.#sparkRows(daily, days);
+    const max = Math.max(...rows.map((d) => d.clicks), 1);
     const fragment = document.createDocumentFragment();
-    daily.forEach((day) => {
+    rows.forEach((day) => {
       const bar = document.createElement("span");
       bar.className = "spark__bar";
       bar.style.setProperty("--h", `${Math.max((day.clicks / max) * 100, 2)}%`);
@@ -1340,6 +1449,22 @@ class AppController {
       fragment.appendChild(bar);
     });
     this.dom.seoSpark.appendChild(fragment);
+  }
+
+  #sparkRows(daily, days) {
+    const sliced = daily.slice(-Math.max(days, 1));
+    if (sliced.length <= 64) return sliced;
+    const weeks = new Map();
+    sliced.forEach((day) => {
+      const dt = new Date(`${day.date}T00:00:00Z`);
+      if (Number.isNaN(dt.getTime())) return;
+      dt.setUTCDate(dt.getUTCDate() - dt.getUTCDay());
+      const key = dt.toISOString().slice(0, 10);
+      const prev = weeks.get(key) || { date: key, clicks: 0 };
+      prev.clicks += Number(day.clicks) || 0;
+      weeks.set(key, prev);
+    });
+    return [...weeks.values()];
   }
 
   renderSeoInventory(data) {
@@ -1397,12 +1522,11 @@ class AppController {
           detail: signal.detail,
           clientName: signal.metric,
           actions: [
-            {
-              label: "Anotar tarea",
-              act: "signal-task",
-              value: `${this.seoHost}|${signal.id}`,
-              primary: true,
-            },
+            ...(signal.kind === "noindex" && signal.url
+              ? [{ label: this.indexing ? "Pidiendo…" : "Indexar", act: "index-url", value: `${this.seoHost}|${signal.url}`, primary: true }]
+              : signal.kind === "site-noindex"
+                ? [{ label: this.indexing ? "Pidiendo…" : "Indexar pendientes", act: "index-pending", value: this.seoHost, primary: true }]
+                : [{ label: "Anotar tarea", act: "signal-task", value: `${this.seoHost}|${signal.id}`, primary: true }]),
             ...(signal.url ? [{ label: "Abrir", act: "link", value: signal.url }] : []),
           ],
         })
@@ -1468,6 +1592,7 @@ class AppController {
       };
 
       const state = document.createElement("td");
+      state.className = "seo-index-cell";
       if (row.error) {
         state.textContent = "—";
       } else if (row.indexStatus?.label) {
@@ -1482,8 +1607,24 @@ class AppController {
           tip.textContent = reason;
           state.appendChild(tip);
         }
+        if (row.indexStatus.tone !== "indexed") {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "chip-btn chip-btn--index";
+          btn.dataset.indexUrl = row.url;
+          btn.disabled = this.indexing;
+          const recent = Number(row.indexRequest?.at || 0) > Date.now() / 1000 - 86400;
+          btn.textContent = this.indexing ? "…" : recent ? "Reenviar" : "Indexar";
+          state.appendChild(btn);
+        }
       } else {
-        state.textContent = "—";
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "chip-btn chip-btn--index";
+        btn.dataset.indexUrl = row.url;
+        btn.disabled = this.indexing;
+        btn.textContent = this.indexing ? "…" : "Indexar";
+        state.appendChild(btn);
       }
 
       tr.append(
@@ -1516,9 +1657,17 @@ class AppController {
           "ninguna"),
       ],
       ["Versión API", data?.version || this.seoConnection?.version || "—"],
+      [
+        "Indexar",
+        "Reenvía el sitemap (camino oficial). La cuota de «solicitar indexación» de Search Console es solo de la interfaz (~10/día) y no tiene API pública.",
+      ],
     ];
     if (diag.sitemapError) rows.push(["Error de sitemap", diag.sitemapError]);
     if (diag.sitemapApiError) rows.push(["Error de la API de sitemaps", diag.sitemapApiError]);
+    if (diag.lastSitemapSubmitAt) {
+      const when = new Date(Number(diag.lastSitemapSubmitAt) * 1000);
+      rows.push(["Último sitemap enviado", Number.isNaN(when.getTime()) ? "—" : when.toLocaleString("es-CL")]);
+    }
 
     this.dom.seoDiag.innerHTML = "";
     const fragment = document.createDocumentFragment();
@@ -1544,27 +1693,87 @@ class AppController {
     this.dom.gscPages.value = GscModule.serializePages(manual);
   }
 
-  /** Resumen de 1 página listo para PDF vía diálogo de impresión del navegador. */
-  exportSeoBrief() {
-    const data = this.seoHost ? SeoStore.get(this.seoHost) : null;
-    if (!data?.signals?.length) {
-      this.showToast("Sin puntos críticos para exportar");
+  #mergeIndexResult(host, data) {
+    const current = SeoStore.get(host);
+    if (!current) {
+      if (data.pages) SeoStore.set(host, data);
       return;
     }
+    if (Array.isArray(data.pages) && data.pages.length) {
+      current.pages = data.pages;
+    } else if (Array.isArray(data.results)) {
+      const byUrl = new Map(data.results.map((item) => [item.url, item]));
+      current.pages = (current.pages || []).map((row) => {
+        const hit = byUrl.get(row.url);
+        return hit ? { ...row, indexStatus: hit.indexStatus, indexRequest: hit.indexRequest } : row;
+      });
+    }
+    if (data.inventory) current.inventory = data.inventory;
+    if (data.signals) current.signals = data.signals;
+    if (current.diagnostics && data.sitemapUrl) {
+      current.diagnostics.sitemapUrl = data.sitemapUrl;
+      if (data.sitemapSubmitted) {
+        current.diagnostics.lastSitemapSubmitAt = Math.floor(Date.now() / 1000);
+        current.diagnostics.lastSitemapSubmitted = data.sitemapUrl;
+      }
+    }
+    SeoStore.set(host, current);
+  }
 
-    const criticals = (data.signals || []).filter((s) => Number(s.severity) >= 3);
-    if (!criticals.length) {
-      this.showToast("Sin puntos críticos para exportar");
+  async requestIndex(host, url = "") {
+    if (!host || this.indexing) return;
+    this.indexing = true;
+    this.renderSeo();
+    this.showToast("Pidiendo rastreo a Google…");
+    try {
+      const payload = url ? { host, urls: [url] } : { host };
+      const data = await GscModule.indexUrls(payload);
+      this.#mergeIndexResult(host, data);
+      this.showToast(data.message || "Pedido enviado", 4200);
+    } catch (err) {
+      this.showToast(err.message || "No se pudo pedir el rastreo", 4200);
+    } finally {
+      this.indexing = false;
+      this.renderSeo();
+      this.renderAgenda();
+      this.renderStats();
+    }
+  }
+
+  closeSeoReport() {
+    if (!this.dom.seoBrief || this.dom.seoBrief.hidden) return;
+    document.body.classList.remove("is-printing-brief");
+    this.dom.seoBrief.hidden = true;
+    this.dom.seoBrief.setAttribute("aria-hidden", "true");
+  }
+
+  printSeoReport() {
+    if (this.dom.seoBrief.hidden) this.openSeoReport();
+    if (this.dom.seoBrief.hidden) return;
+    document.body.classList.add("is-printing-brief");
+    const cleanup = () => {
+      document.body.classList.remove("is-printing-brief");
+      window.removeEventListener("afterprint", cleanup);
+    };
+    window.addEventListener("afterprint", cleanup);
+    window.print();
+    setTimeout(cleanup, 1500);
+  }
+
+  openSeoReport() {
+    const data = this.seoHost ? SeoStore.get(this.seoHost) : null;
+    if (!data?.totals && !GscModule.periodsOf(data).length) {
+      this.showToast("Aún no hay números para exportar");
       return;
     }
 
     const client = this.clients.find((c) => GscModule.hostOf(c.siteUrl) === this.seoHost);
     const inv = data.inventory || {};
-    const totals = data.totals || {};
-    const delta = data.totalsDelta || {};
-    const range = data.range
-      ? `${data.range.start} → ${data.range.end}`
-      : "Últimos 28 días";
+    const periods = GscModule.periodsOf(data);
+    const analysis = Array.isArray(data.analysis) && data.analysis.length
+      ? data.analysis
+      : [];
+    const criticals = (data.signals || []).filter((s) => Number(s.severity) >= 3);
     const generated = new Date().toLocaleString("es-CL", {
       dateStyle: "medium",
       timeStyle: "short",
@@ -1585,10 +1794,86 @@ class AppController {
       return `${up ? "▲" : "▼"} ${sign}${Math.abs(v) >= 10 ? GscModule.fmt(v) : v.toFixed?.(1) ?? v}`;
     };
 
-    const nextSteps = criticals
-      .filter((s) => s.kind !== "site-noindex")
-      .slice(0, 5)
-      .map((s, i) => `<li><strong>${i + 1}. ${esc(s.title)}</strong> — ${esc(s.detail)}</li>`)
+    const periodCards = periods
+      .map((period) => {
+        const t = period.totals || {};
+        const d = period.delta || {};
+        const range = period.range
+          ? `${period.range.start} → ${period.range.end}`
+          : period.label;
+        return `
+        <article class="brief-period">
+          <h3>${esc(period.label)}</h3>
+          <p class="brief-period__range">${esc(range)}</p>
+          <dl>
+            <div><dt>Clics</dt><dd>${esc(GscModule.fmt(t.clicks))}<small>${esc(deltaLabel(d.clicks))}</small></dd></div>
+            <div><dt>Impresiones</dt><dd>${esc(GscModule.fmt(t.impressions))}<small>${esc(deltaLabel(d.impressions))}</small></dd></div>
+            <div><dt>CTR</dt><dd>${esc(GscModule.pct(t.ctr))}<small>${esc(deltaLabel(d.ctr != null ? d.ctr * 100 : null))}</small></dd></div>
+            <div><dt>Posición</dt><dd>${esc(GscModule.pos(t.position))}<small>${esc(deltaLabel(d.position, true))}</small></dd></div>
+          </dl>
+        </article>`;
+      })
+      .join("");
+
+    const analysisHtml = analysis
+      .map(
+        (item) => `
+      <li class="brief-insight is-${esc(item.tone || "ok")}">
+        <strong>${esc(item.title)}</strong>
+        <span>${esc(item.body)}</span>
+      </li>`
+      )
+      .join("");
+
+    const pageRows = (data.pages || [])
+      .slice(0, 8)
+      .map((row) => {
+        const path = GscModule.pagePath(row.url);
+        const index = row.indexStatus?.label || "—";
+        const tone = row.indexStatus?.tone || "neutral";
+        return `
+        <tr>
+          <td><strong>${esc(path)}</strong></td>
+          <td>${esc(GscModule.fmt(row.current?.clicks))}</td>
+          <td>${esc(deltaLabel(row.delta?.clicks))}</td>
+          <td>${esc(GscModule.pos(row.current?.position))}</td>
+          <td><span class="brief-index is-${esc(tone)}">${esc(index)}</span></td>
+        </tr>`;
+      })
+      .join("");
+
+    const queries = [];
+    const seenQ = new Set();
+    (data.pages || []).forEach((row) => {
+      (row.queries || []).forEach((item) => {
+        const q = String(item.query || "").trim();
+        if (!q || seenQ.has(q)) return;
+        seenQ.add(q);
+        queries.push(item);
+      });
+    });
+    queries.sort((a, b) => (Number(b.clicks) || 0) - (Number(a.clicks) || 0));
+    const queryRows = queries
+      .slice(0, 8)
+      .map(
+        (item) => `
+        <tr>
+          <td>${esc(item.query)}</td>
+          <td>${esc(GscModule.fmt(item.clicks))}</td>
+          <td>${esc(GscModule.fmt(item.impressions))}</td>
+        </tr>`
+      )
+      .join("");
+
+    const monthRows = (data.trend?.months || [])
+      .map(
+        (m) => `
+        <tr>
+          <td>${esc(m.label)}</td>
+          <td>${esc(GscModule.fmt(m.clicks))}</td>
+          <td>${esc(GscModule.fmt(m.impressions))}</td>
+        </tr>`
+      )
       .join("");
 
     const criticalRows = criticals
@@ -1605,25 +1890,30 @@ class AppController {
       )
       .join("");
 
-    this.dom.seoBrief.innerHTML = `
+    const nextSteps = (criticals.length ? criticals : analysis)
+      .filter((s) => s.kind !== "site-noindex")
+      .slice(0, 5)
+      .map((s, i) => {
+        const title = s.title || "";
+        const detail = s.detail || s.body || "";
+        return `<li><strong>${i + 1}. ${esc(title)}</strong> — ${esc(detail)}</li>`;
+      })
+      .join("");
+
+    this.dom.seoBriefBody.innerHTML = `
       <header class="brief__head">
         <div>
           <p class="brief__brand">Mono Studio · Informe SEO</p>
-          <h1>${esc(client?.name || this.seoHost)}</h1>
-          <p class="brief__meta">${esc(this.seoHost)} · ${esc(range)} · Generado ${esc(generated)}</p>
+          <h1 id="seoReportTitle">${esc(client?.name || this.seoHost)}</h1>
+          <p class="brief__meta">${esc(this.seoHost)} · 28 días / 3 meses / 6 meses · Generado ${esc(generated)}</p>
         </div>
-        <div class="brief__score">
-          <strong>${criticals.length}</strong>
-          <span>críticos</span>
+        <div class="brief__score ${criticals.length ? "" : "is-ok"}">
+          <strong>${criticals.length || "0"}</strong>
+          <span>${criticals.length ? "críticos" : "sin críticos"}</span>
         </div>
       </header>
 
-      <section class="brief__kpis">
-        <div><em>Clics</em><strong>${esc(GscModule.fmt(totals.clicks))}</strong><small>${esc(deltaLabel(delta.clicks))}</small></div>
-        <div><em>Impresiones</em><strong>${esc(GscModule.fmt(totals.impressions))}</strong><small>${esc(deltaLabel(delta.impressions))}</small></div>
-        <div><em>CTR</em><strong>${esc(GscModule.pct(totals.ctr))}</strong><small>${esc(deltaLabel(delta.ctr != null ? delta.ctr * 100 : null))}</small></div>
-        <div><em>Posición</em><strong>${esc(GscModule.pos(totals.position))}</strong><small>${esc(deltaLabel(delta.position, true))}</small></div>
-      </section>
+      <section class="brief-periods">${periodCards}</section>
 
       <section class="brief__inv">
         <div><strong>${esc(inv.indexed ?? 0)}/${esc(inv.checked || 0)}</strong><span>Indexadas</span></div>
@@ -1632,30 +1922,40 @@ class AppController {
         <div><strong>${esc(inv.withData ?? 0)}</strong><span>Con tráfico</span></div>
       </section>
 
-      <section class="brief__section">
-        <h2>Puntos críticos</h2>
+      ${analysisHtml ? `<section class="brief__section"><h2>Lectura</h2><ul class="brief-insights">${analysisHtml}</ul></section>` : ""}
+
+      ${pageRows ? `<section class="brief__section"><h2>Páginas que mueven el tráfico</h2>
+        <table>
+          <thead><tr><th>URL</th><th>Clics 28d</th><th>Δ</th><th>Pos.</th><th>Índice</th></tr></thead>
+          <tbody>${pageRows}</tbody>
+        </table></section>` : ""}
+
+      ${queryRows ? `<section class="brief__section"><h2>Queries que ya convierten</h2>
+        <table>
+          <thead><tr><th>Query</th><th>Clics</th><th>Imp.</th></tr></thead>
+          <tbody>${queryRows}</tbody>
+        </table></section>` : ""}
+
+      ${monthRows ? `<section class="brief__section"><h2>Mes a mes</h2>
+        <table>
+          <thead><tr><th>Mes</th><th>Clics</th><th>Impresiones</th></tr></thead>
+          <tbody>${monthRows}</tbody>
+        </table></section>` : ""}
+
+      ${criticalRows ? `<section class="brief__section"><h2>Puntos críticos</h2>
         <table>
           <thead><tr><th>Sev.</th><th>Hallazgo</th><th>Métrica</th></tr></thead>
           <tbody>${criticalRows}</tbody>
-        </table>
-      </section>
+        </table></section>` : ""}
 
       ${nextSteps ? `<section class="brief__section"><h2>Próximos pasos</h2><ol>${nextSteps}</ol></section>` : ""}
 
-      <footer class="brief__foot">Mono Studio OS · Uso interno / entrega a cliente</footer>
+      <footer class="brief__foot">Mono Studio OS · Los deltas comparan cada rango contra el tramo anterior igual de largo. Uso interno / entrega a cliente.</footer>
     `;
 
     this.dom.seoBrief.hidden = false;
-    document.body.classList.add("is-printing-brief");
-    const cleanup = () => {
-      document.body.classList.remove("is-printing-brief");
-      this.dom.seoBrief.hidden = true;
-      window.removeEventListener("afterprint", cleanup);
-    };
-    window.addEventListener("afterprint", cleanup);
-    window.print();
-    // Safari a veces no dispara afterprint de inmediato.
-    setTimeout(cleanup, 1500);
+    this.dom.seoBrief.setAttribute("aria-hidden", "false");
+    this.dom.seoBrief.scrollTop = 0;
   }
 
   async handleGscConfig(e) {

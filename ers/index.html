@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Mono Studio OS — base de operaciones diaria" />
   <title>Mono Studio OS</title>
-  <link rel="stylesheet" href="styles.css?v=20260906" />
+  <link rel="stylesheet" href="styles.css?v=20260908b" />
 </head>
 <body>
 
@@ -143,11 +143,18 @@
       <div class="panel-head">
         <h2>SEO</h2>
         <span class="panel-head__count" id="seoRange">Últimos 28 días</span>
-        <button class="btn btn--ghost" id="btnSeoBrief" type="button" hidden>Exportar críticos</button>
+        <button class="btn btn--ghost" id="btnSeoBrief" type="button" hidden>Exportar</button>
+        <button class="btn btn--neon" id="btnSeoIndex" type="button" hidden>Indexar pendientes</button>
         <button class="btn btn--ghost" id="btnGscRefresh" type="button">Actualizar</button>
       </div>
 
       <div class="site-picker" id="seoClients" role="tablist" aria-label="Sitios de clientes"></div>
+
+      <div class="period-toggle" id="seoPeriodToggle" role="tablist" aria-label="Rango de métricas" hidden>
+        <button class="period-toggle__btn is-active" type="button" data-period="28d">28 días</button>
+        <button class="period-toggle__btn" type="button" data-period="90d">3 meses</button>
+        <button class="period-toggle__btn" type="button" data-period="180d">6 meses</button>
+      </div>
 
       <p class="notice" id="seoNotice" hidden></p>
       <div class="notice notice--critical" id="seoCritical" hidden></div>
@@ -370,9 +377,16 @@
     </div>
   </div>
 
-  <div class="seo-brief" id="seoBrief" hidden aria-hidden="true"></div>
+  <div class="seo-brief" id="seoBrief" hidden aria-hidden="true">
+    <div class="brief-toolbar no-print">
+      <strong>Informe SEO</strong>
+      <button type="button" class="btn btn--neon" id="btnSeoPrint">Imprimir / PDF</button>
+      <button type="button" class="btn btn--ghost" id="btnSeoBriefClose">Cerrar</button>
+    </div>
+    <div class="seo-brief__body" id="seoBriefBody"></div>
+  </div>
 
-  <script src="app.js?v=20260906"></script>
+  <script src="app.js?v=20260908b"></script>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </body>
