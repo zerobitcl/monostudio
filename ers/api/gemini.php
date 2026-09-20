@@ -91,8 +91,9 @@ ESTRUCTURA SITIO SEO
 
 TOOLS
 - Check-in: setCheckIn (ok | follow_up | blocked) + nota.
-- Notas: addNote.
-- Si el usuario TE CUENTA un hecho operativo (rank&rent a cobro, deadline, “acordamos X el día Y”): addWatch con dueDate y type (rank_rent_billing, billing_start, follow_up, deadline, seo, content, custom). Así el cron de las 8am lo aprieta.
+- Notas: addNote (pasá clientId o name + body). No hace falta getClient antes si ya tenés el nombre.
+- Si el usuario TE CUENTA un hecho operativo (rank&rent a cobro, deadline, “acordamos X el día Y”): addWatch con title, dueDate y type (rank_rent_billing, billing_start, follow_up, deadline, seo, content, custom). Pasá name o clientId. Así el cron de las 8am lo aprieta.
+- No llames getClient + addNote/addWatch en paralelo: o pasá el nombre directo, o esperá el id.
 - Cobro / valor plan / cerrar solicitud: llamá la tool; el sistema pide confirmación.
 - Informe largo de un sitio: generarInformeSeo y en el chat solo un resumen corto.
 
@@ -217,9 +218,47 @@ function ersNormalizeGeminiParts(array $parts): array
 
 function ersGeminiArgs(mixed $args): array
 {
-    if (!is_array($args) || array_is_list($args)) {
+    if (is_string($args) && $args !== '') {
+        $decoded = json_decode($args, true);
+        $args = is_array($decoded) ? $decoded : [];
+    } elseif ($args instanceof stdClass) {
+        $args = json_decode(json_encode($args), true) ?? [];
+    }
+    if (!is_array($args) || ($args !== [] && array_is_list($args))) {
         return [];
     }
+    return $args;
+}
+
+function ersHydrateToolArgs(string $name, array $args, array $context): array
+{
+    $hasClient = trim((string) ($args['clientId'] ?? '')) !== ''
+        || trim((string) ($args['name'] ?? '')) !== '';
+    $ctxId = trim((string) ($context['clientId'] ?? ''));
+    $ctxName = trim((string) ($context['clientName'] ?? ''));
+    $ctxHost = trim((string) ($context['host'] ?? ''));
+
+    $needsClient = in_array($name, [
+        'getClient', 'listNotes', 'getSeoSummary', 'generarInformeSeo',
+        'addNote', 'setCheckIn', 'addWatch', 'listWatches',
+        'updateBillingDate', 'updatePlanValue', 'addTask',
+    ], true);
+
+    if ($needsClient && !$hasClient && $ctxId !== '') {
+        $args['clientId'] = $ctxId;
+        if ($ctxName !== '') {
+            $args['name'] = $ctxName;
+        }
+    }
+
+    if (
+        in_array($name, ['getSeoSummary', 'generarInformeSeo'], true)
+        && trim((string) ($args['host'] ?? '')) === ''
+        && $ctxHost !== ''
+    ) {
+        $args['host'] = $ctxHost;
+    }
+
     return $args;
 }
 
@@ -312,10 +351,13 @@ try {
         $payload = $payloadBase;
         $payload['contents'] = $contents;
         $response = ersGeminiHttp($url, $payload);
-        $parts = ersNormalizeGeminiParts(ersExtractModelParts($response));
+        $rawParts = ersExtractModelParts($response);
+        // args se extraen de raw: normalize convierte objects a stdClass y
+        // ersGeminiArgs los tiraba como [].
+        $parts = ersNormalizeGeminiParts($rawParts);
 
         $functionCalls = [];
-        foreach ($parts as $part) {
+        foreach ($rawParts as $part) {
             if (isset($part['functionCall']) && is_array($part['functionCall'])) {
                 $functionCalls[] = $part['functionCall'];
             }
@@ -334,7 +376,7 @@ try {
         $fnResponses = [];
         foreach ($functionCalls as $call) {
             $name = (string) ($call['name'] ?? '');
-            $args = ersGeminiArgs($call['args'] ?? []);
+            $args = ersHydrateToolArgs($name, ersGeminiArgs($call['args'] ?? []), $context);
 
             $run = ersRunAction($name, $args, 'gemini', false);
             $toolTrace[] = [
@@ -342,6 +384,7 @@ try {
                 'args' => $args,
                 'ok' => $run['ok'] ?? false,
                 'pending' => !empty($run['pending']),
+                'error' => ($run['ok'] ?? false) ? null : ($run['error'] ?? null),
             ];
 
             if (!empty($run['pending'])) {

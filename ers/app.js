@@ -1391,7 +1391,8 @@ class AppController {
       if (Array.isArray(data.tools) && data.tools.length) {
         const lines = data.tools.map((t) => {
           const mark = t.pending ? "⏳" : t.ok ? "✓" : "✗";
-          return `${mark} ${t.tool}`;
+          const err = !t.ok && t.error ? ` — ${t.error}` : "";
+          return `${mark} ${t.tool}${err}`;
         });
         this.appendChatMessage("tools", lines.join("\n"));
       }
@@ -1461,7 +1462,8 @@ class AppController {
       const lines = entries.slice(0, 12).map((row) => {
         const when = row.ts ? new Date(row.ts).toLocaleString("es-CL") : "—";
         const ok = row.ok === false ? "✗" : "✓";
-        return `${ok} ${when} · ${row.actor || "?"} · ${row.tool || "?"}`;
+        const err = row.ok === false && row.error ? ` — ${row.error}` : "";
+        return `${ok} ${when} · ${row.actor || "?"} · ${row.tool || "?"}${err}`;
       });
       this.appendChatMessage("tools", lines.join("\n"));
     } catch (err) {

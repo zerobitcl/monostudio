@@ -687,24 +687,48 @@ function ersActionListClients(): array
     return array_map('ersClientPublic', $store['clients']);
 }
 
+function ersLooksLikeUuid(string $value): bool
+{
+    return (bool) preg_match(
+        '/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i',
+        $value
+    );
+}
+
 function ersActionGetClient(array $args): array
 {
-    $id = trim((string) ($args['clientId'] ?? ''));
-    $name = trim((string) ($args['name'] ?? ''));
+    $id = trim((string) ($args['clientId'] ?? $args['id'] ?? $args['client_id'] ?? ''));
+    $name = trim((string) ($args['name'] ?? $args['clientName'] ?? $args['cliente'] ?? ''));
+    if ($name === '' && $id !== '' && !ersLooksLikeUuid($id)) {
+        $name = $id;
+        $id = '';
+    }
+    if ($id === '' && $name === '') {
+        throw new InvalidArgumentException('Falta el cliente (id o nombre)');
+    }
+
     $store = ersReadStore();
+    $partial = null;
 
     foreach ($store['clients'] as $client) {
         if ($id !== '' && ($client['id'] ?? '') === $id) {
             return ersClientPublic($client);
         }
-        if ($name !== '' && strcasecmp((string) ($client['name'] ?? ''), $name) === 0) {
+        if ($name === '') {
+            continue;
+        }
+        $clientName = (string) ($client['name'] ?? '');
+        if ($clientName !== '' && strcasecmp($clientName, $name) === 0) {
             return ersClientPublic($client);
         }
-        if ($name !== '' && stripos((string) ($client['name'] ?? ''), $name) !== false) {
-            return ersClientPublic($client);
+        if ($partial === null && $clientName !== '' && stripos($clientName, $name) !== false) {
+            $partial = $client;
         }
     }
-    throw new RuntimeException('Cliente no encontrado');
+    if ($partial !== null) {
+        return ersClientPublic($partial);
+    }
+    throw new RuntimeException('Cliente no encontrado: ' . ($name !== '' ? $name : $id));
 }
 
 function ersActionListNotes(array $args): array
@@ -879,11 +903,12 @@ function ersActionGenerarInformeSeo(array $args, string $actor): array
 
 function ersActionAddNote(array $args, string $actor): array
 {
-    $clientId = trim((string) ($args['clientId'] ?? ''));
-    $body = trim((string) ($args['body'] ?? ''));
-    if ($clientId === '' || $body === '') {
-        throw new InvalidArgumentException('clientId y body son obligatorios');
+    $body = trim((string) ($args['body'] ?? $args['note'] ?? $args['text'] ?? ''));
+    if ($body === '') {
+        throw new InvalidArgumentException('body es obligatorio');
     }
+    $client = ersActionGetClient($args);
+    $clientId = (string) $client['id'];
 
     $store = ersReadStore();
     $idx = ersFindClientIndex($store, $clientId);
@@ -920,15 +945,13 @@ function ersActionAddNote(array $args, string $actor): array
 
 function ersActionSetCheckIn(array $args, string $actor): array
 {
-    $clientId = trim((string) ($args['clientId'] ?? ''));
     $status = strtolower(trim((string) ($args['status'] ?? 'ok')));
     $note = trim((string) ($args['note'] ?? ''));
-    if ($clientId === '') {
-        throw new InvalidArgumentException('clientId obligatorio');
-    }
     if (!in_array($status, ['ok', 'follow_up', 'blocked'], true)) {
         throw new InvalidArgumentException('status inválido (ok|follow_up|blocked)');
     }
+    $client = ersActionGetClient($args);
+    $clientId = (string) $client['id'];
 
     $store = ersReadStore();
     $idx = ersFindClientIndex($store, $clientId);
@@ -988,6 +1011,10 @@ function ersActionAddTask(array $args, string $actor): array
         throw new InvalidArgumentException('title obligatorio');
     }
     $clientId = trim((string) ($args['clientId'] ?? ''));
+    $name = trim((string) ($args['name'] ?? ''));
+    if ($clientId !== '' || $name !== '') {
+        $clientId = (string) ersActionGetClient($args)['id'];
+    }
     $dueDate = (string) ($args['dueDate'] ?? '');
     if ($dueDate !== '' && !preg_match('#^\d{4}-\d{2}-\d{2}$#', $dueDate)) {
         throw new InvalidArgumentException('dueDate inválida');
@@ -1176,11 +1203,12 @@ function ersActionListWatches(array $args): array
 
 function ersActionAddWatch(array $args, string $actor): array
 {
-    $clientId = trim((string) ($args['clientId'] ?? ''));
     $title = trim((string) ($args['title'] ?? ''));
-    if ($clientId === '' || $title === '') {
-        throw new InvalidArgumentException('clientId y title son obligatorios');
+    if ($title === '') {
+        throw new InvalidArgumentException('title es obligatorio');
     }
+    $client = ersActionGetClient($args);
+    $clientId = (string) $client['id'];
 
     $store = ersReadStore();
     $idx = ersFindClientIndex($store, $clientId);
@@ -1590,11 +1618,12 @@ function ersGeminiToolDeclarations(): array
         ],
         [
             'name' => 'addWatch',
-            'description' => 'Guarda un recordatorio/hecho operativo del cliente (rank&rent a cobro, deadline, follow-up). Usá esto cuando el usuario TE CUENTA algo para que después el sistema lo apriete.',
+            'description' => 'Guarda un recordatorio/hecho operativo del cliente (rank&rent a cobro, deadline, follow-up). Usá esto cuando el usuario TE CUENTA algo para que después el sistema lo apriete. Podés pasar name en vez de UUID.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
-                    'clientId' => $str('UUID del cliente'),
+                    'clientId' => $str('UUID del cliente si lo tenés'),
+                    'name' => $str('Nombre del cliente si no hay UUID'),
                     'title' => $str('Qué hay que vigilar'),
                     'type' => $str('rank_rent_billing | billing_start | follow_up | content | seo | deadline | custom'),
                     'detail' => $str('Contexto breve'),
@@ -1602,7 +1631,7 @@ function ersGeminiToolDeclarations(): array
                     'dueDate' => $str('YYYY-MM-DD cuando hay que actuar'),
                     'priority' => $num('1-3, default 2'),
                 ],
-                'required' => ['clientId', 'title'],
+                'required' => ['title'],
             ],
         ],
         [
@@ -1631,27 +1660,29 @@ function ersGeminiToolDeclarations(): array
         ],
         [
             'name' => 'addNote',
-            'description' => 'Agrega una nota al cuaderno del cliente',
+            'description' => 'Agrega una nota al cuaderno del cliente. Pasá name o clientId.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
-                    'clientId' => $str('UUID del cliente'),
+                    'clientId' => $str('UUID del cliente si lo tenés'),
+                    'name' => $str('Nombre del cliente si no hay UUID'),
                     'body' => $str('Texto de la nota'),
                 ],
-                'required' => ['clientId', 'body'],
+                'required' => ['body'],
             ],
         ],
         [
             'name' => 'setCheckIn',
-            'description' => 'Deja check-in del cliente: ok, follow_up o blocked, con nota opcional',
+            'description' => 'Deja check-in del cliente: ok, follow_up o blocked, con nota opcional. Pasá name o clientId.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
-                    'clientId' => $str('UUID del cliente'),
+                    'clientId' => $str('UUID del cliente si lo tenés'),
+                    'name' => $str('Nombre del cliente si no hay UUID'),
                     'status' => $str('ok | follow_up | blocked'),
                     'note' => $str('Contexto breve'),
                 ],
-                'required' => ['clientId', 'status'],
+                'required' => ['status'],
             ],
         ],
         [
@@ -1662,6 +1693,7 @@ function ersGeminiToolDeclarations(): array
                 'properties' => [
                     'title' => $str('Qué hay que hacer'),
                     'clientId' => $str('UUID opcional'),
+                    'name' => $str('Nombre del cliente si no hay UUID'),
                     'dueDate' => $str('YYYY-MM-DD opcional'),
                 ],
                 'required' => ['title'],
