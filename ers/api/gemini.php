@@ -165,6 +165,64 @@ function ersExtractModelParts(array $response): array
     return is_array($parts) ? $parts : [];
 }
 
+/**
+ * PHP convierte {} en []. Gemini exige Struct (objeto) en functionCall.args
+ * y en functionResponse.response — nunca una lista.
+ */
+function ersJsonStruct(mixed $value): mixed
+{
+    if (!is_array($value)) {
+        return $value;
+    }
+    if ($value === []) {
+        return new stdClass();
+    }
+    if (array_is_list($value)) {
+        return array_map('ersJsonStruct', $value);
+    }
+    $out = new stdClass();
+    foreach ($value as $key => $item) {
+        $out->{$key} = ersJsonStruct($item);
+    }
+    return $out;
+}
+
+function ersNormalizeGeminiParts(array $parts): array
+{
+    foreach ($parts as $i => $part) {
+        if (!is_array($part)) {
+            continue;
+        }
+        if (isset($part['functionCall']) && is_array($part['functionCall'])) {
+            $args = $part['functionCall']['args'] ?? [];
+            if (!is_array($args) || $args === [] || array_is_list($args)) {
+                $parts[$i]['functionCall']['args'] = new stdClass();
+            } else {
+                $parts[$i]['functionCall']['args'] = ersJsonStruct($args);
+            }
+        }
+        if (isset($part['functionResponse']) && is_array($part['functionResponse'])) {
+            $response = $part['functionResponse']['response'] ?? [];
+            if (!is_array($response) || array_is_list($response)) {
+                $parts[$i]['functionResponse']['response'] = ersJsonStruct(
+                    is_array($response) && !array_is_list($response) ? $response : ['ok' => true]
+                );
+            } else {
+                $parts[$i]['functionResponse']['response'] = ersJsonStruct($response);
+            }
+        }
+    }
+    return $parts;
+}
+
+function ersGeminiArgs(mixed $args): array
+{
+    if (!is_array($args) || array_is_list($args)) {
+        return [];
+    }
+    return $args;
+}
+
 function ersPartsToText(array $parts): string
 {
     $chunks = [];
@@ -254,7 +312,7 @@ try {
         $payload = $payloadBase;
         $payload['contents'] = $contents;
         $response = ersGeminiHttp($url, $payload);
-        $parts = ersExtractModelParts($response);
+        $parts = ersNormalizeGeminiParts(ersExtractModelParts($response));
 
         $functionCalls = [];
         foreach ($parts as $part) {
@@ -276,10 +334,7 @@ try {
         $fnResponses = [];
         foreach ($functionCalls as $call) {
             $name = (string) ($call['name'] ?? '');
-            $args = $call['args'] ?? [];
-            if (!is_array($args)) {
-                $args = [];
-            }
+            $args = ersGeminiArgs($call['args'] ?? []);
 
             $run = ersRunAction($name, $args, 'gemini', false);
             $toolTrace[] = [
@@ -330,7 +385,7 @@ try {
             if ($mutating) {
                 $storeDirty = true;
             }
-            $resultPayload = $run['result'] ?? [];
+            $resultPayload = $run['result'] ?? new stdClass();
             // Evitar mandar markdown enorme completo si no hace falta: truncar en respuesta a Gemini
             if (is_array($resultPayload) && isset($resultPayload['markdown'])) {
                 $md = (string) $resultPayload['markdown'];
@@ -339,6 +394,9 @@ try {
                 $toolTrace[count($toolTrace) - 1]['markdown'] = $md;
                 unset($resultPayload['markdown']);
                 unset($resultPayload['summary']);
+            }
+            if (is_array($resultPayload) && $resultPayload === []) {
+                $resultPayload = new stdClass();
             }
 
             $fnResponses[] = [
