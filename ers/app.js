@@ -22,6 +22,7 @@ const URGENT_DAYS = 3;
 const TASK_LOOKAHEAD_DAYS = 7;
 
 const TIMER_TICK_MS = 60 * 1000;
+const TIMER_TICK_LITE_MS = 5 * 60 * 1000;
 
 /* ------------------------------------------------------------
    Persistencia
@@ -170,6 +171,7 @@ class BillingModule {
       client.nextBillingDate = BillingModule.toISODate(d);
     }
     if (!Array.isArray(client.notes)) client.notes = [];
+    if (!Array.isArray(client.watches)) client.watches = [];
     if (typeof client.siteUrl !== "string") client.siteUrl = "";
     return client;
   }
@@ -392,24 +394,57 @@ class GscModule {
 class SeoStore {
   static data = new Map();
 
+  /** En sessionStorage solo guardamos un recorte: el payload GSC completo congela móviles. */
+  static slim(value) {
+    if (!value || typeof value !== "object") return value;
+    const pages = Array.isArray(value.pages) ? value.pages.slice(0, 12) : [];
+    return {
+      version: value.version,
+      fetchedAt: value.fetchedAt,
+      error: value.error,
+      totals: value.totals,
+      totalsDelta: value.totalsDelta,
+      range: value.range,
+      periods: value.periods,
+      inventory: value.inventory,
+      analysis: value.analysis,
+      signals: Array.isArray(value.signals) ? value.signals.slice(0, 20) : value.signals,
+      diagnostics: value.diagnostics,
+      trend: value.trend?.months ? { months: value.trend.months } : undefined,
+      pages: pages.map((p) => ({
+        url: p.url,
+        current: p.current,
+        delta: p.delta,
+        thermometer: p.thermometer,
+        indexStatus: p.indexStatus
+          ? {
+              label: p.indexStatus.label,
+              tone: p.indexStatus.tone,
+              reason: p.indexStatus.reason,
+              coverage: p.indexStatus.coverage,
+            }
+          : null,
+        queries: Array.isArray(p.queries) ? p.queries.slice(0, 3) : [],
+      })),
+    };
+  }
+
   static load() {
     try {
       const raw = sessionStorage.getItem(Store.KEYS.seoCache);
       if (!raw) return;
       Object.entries(JSON.parse(raw)).forEach(([host, value]) => SeoStore.data.set(host, value));
     } catch {
-      /* caché corrupta: se reconstruye sola */
+      try { sessionStorage.removeItem(Store.KEYS.seoCache); } catch { /* ignore */ }
     }
   }
 
   static persist() {
     try {
-      sessionStorage.setItem(
-        Store.KEYS.seoCache,
-        JSON.stringify(Object.fromEntries(SeoStore.data))
-      );
+      const slimEntries = [...SeoStore.data.entries()].map(([host, value]) => [host, SeoStore.slim(value)]);
+      sessionStorage.setItem(Store.KEYS.seoCache, JSON.stringify(Object.fromEntries(slimEntries)));
     } catch {
-      /* cuota llena: seguimos solo en memoria */
+      try { sessionStorage.removeItem(Store.KEYS.seoCache); } catch { /* ignore */ }
     }
   }
 
@@ -481,6 +516,7 @@ class Agenda {
   static build({ clients, requests, tasks }) {
     return [
       ...Agenda.#fromBilling(clients),
+      ...Agenda.#fromWatches(clients),
       ...Agenda.#fromRequests(requests, clients),
       ...Agenda.#fromTasks(tasks, clients),
       ...Agenda.#fromSeo(clients),
@@ -531,6 +567,52 @@ class Agenda {
   static #contactActions(client) {
     const wa = ContactModule.waLink(client.phone, client.name);
     return wa ? [{ label: "WhatsApp", act: "link", value: wa }] : [];
+  }
+
+
+  static #fromWatches(clients) {
+    const items = [];
+    const moneyTypes = new Set(["rank_rent_billing", "billing_start"]);
+    clients.forEach((client) => {
+      (client.watches || []).forEach((watch) => {
+        if ((watch.status || "open") !== "open") return;
+        const due = watch.dueDate || "";
+        let days = null;
+        if (due) {
+          days = BillingModule.daysUntil(due);
+          if (days > TASK_LOOKAHEAD_DAYS) return;
+        }
+        const overdue = days != null && days < 0;
+        const dueToday = days === 0;
+        const prio = Number(watch.priority) || 2;
+        let severity = prio >= 3 ? 2 : 1;
+        if (overdue) severity = 3;
+        else if (dueToday) severity = Math.max(severity, 2);
+
+        const type = watch.type || "custom";
+        const group = moneyTypes.has(type) ? "money" : "task";
+        const when = due
+          ? overdue
+            ? `Vencido · ${BillingModule.relativeLabel(days)}`
+            : BillingModule.relativeLabel(days)
+          : "Sin fecha";
+        items.push({
+          id: `watch:${watch.id}`,
+          group,
+          severity,
+          title: watch.title,
+          detail: `${client.name} · ${when}${watch.detail ? ` · ${watch.detail}` : ""}`,
+          clientId: client.id,
+          clientName: client.name,
+          actions: [
+            { label: "Hecho", act: "watch-done", value: `${client.id}|${watch.id}`, primary: true },
+            ...(watch.url ? [{ label: "Abrir", act: "link", value: watch.url }] : []),
+            ...Agenda.#contactActions(client),
+          ],
+        });
+      });
+    });
+    return items;
   }
 
   static #fromRequests(requests, clients) {
@@ -635,7 +717,11 @@ class Agenda {
    ------------------------------------------------------------ */
 class AppController {
   static isLiteDevice() {
-    return window.matchMedia("(max-width: 760px), (pointer: coarse)").matches;
+    if (window.matchMedia("(max-width: 900px), (pointer: coarse)").matches) return true;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return true;
+    if (navigator.connection?.saveData) return true;
+    if ((navigator.hardwareConcurrency || 8) <= 4) return true;
+    return false;
   }
 
   constructor({ clients, requests, tasks }) {
@@ -701,7 +787,7 @@ class AppController {
       "planAnual", "planMensual", "contactActions", "linkWhatsApp", "linkCall",
       "requestForm", "requestClientSelect",
       "taskForm", "taskTitle", "taskClientSelect", "taskDueDate",
-      "notebookTitle", "notebookSite", "notebookList", "notebookEmpty", "notebookForm", "notebookBody",
+      "notebookTitle", "notebookSite", "notebookList", "notebookWatches", "notebookEmpty", "notebookForm", "notebookBody",
       "btnNotebookChat",
       "nodeTooltip", "toast",
       "btnChatOpen", "chatDrawer", "chatBackdrop", "chatMessages", "chatPending", "chatForm", "chatInput",
@@ -726,18 +812,21 @@ class AppController {
     if (this.clients.some((c) => !c.nextBillingDate)) await this.persistState();
 
     this.renderAll();
-    this.timerId = setInterval(() => this.renderAgenda(), TIMER_TICK_MS);
+    this.timerId = setInterval(() => this.renderAgenda(), this.isLite ? TIMER_TICK_LITE_MS : TIMER_TICK_MS);
     this.warmSeo();
     this.initChat();
   }
 
   applyRemoteStore(store) {
     if (!store || !Array.isArray(store.clients)) return;
-    this.clients = store.clients;
+    this.clients = store.clients.map(BillingModule.migrateClient);
     this.requests = Array.isArray(store.requests) ? store.requests : this.requests;
     this.tasks = Array.isArray(store.tasks) ? store.tasks : this.tasks;
     Store.cache = { clients: this.clients, requests: this.requests, tasks: this.tasks };
     this.renderAll();
+    if (this.notebookClientId && this.dom.notebookModal && !this.dom.notebookModal.hidden) {
+      this.renderNotebook();
+    }
   }
 
   async initChat() {
@@ -854,6 +943,13 @@ class AppController {
       const btn = e.target.closest("[data-delete-note]");
       if (btn) this.deleteNote(btn.dataset.deleteNote);
     });
+    if (this.dom.notebookWatches) {
+      this.dom.notebookWatches.addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-watch-done]");
+        if (!btn || !this.notebookClientId) return;
+        this.completeWatch(this.notebookClientId, btn.dataset.watchDone);
+      });
+    }
 
     this.dom.seoClients.addEventListener("click", (e) => {
       const chip = e.target.closest("[data-host]");
@@ -953,6 +1049,12 @@ class AppController {
       case "task-done":
         this.toggleTask(value);
         break;
+      case "watch-done": {
+        const pipe = value.indexOf("|");
+        if (pipe === -1) break;
+        this.completeWatch(value.slice(0, pipe), value.slice(pipe + 1));
+        break;
+      }
       case "task-delete":
         this.deleteTask(value);
         break;
@@ -1097,21 +1199,96 @@ class AppController {
         : this.notebookClientId
           ? this.clients.find((c) => c.id === this.notebookClientId)
           : null;
+    const seoHosts = [
+      ...new Set(
+        this.clients
+          .map((c) => GscModule.hostOf(c.siteUrl))
+          .filter(Boolean)
+      ),
+    ];
     return {
       module: this.module,
       clientId: client?.id || this.chatFocusClientId || "",
       clientName: client?.name || "",
       host: this.seoHost || (client ? GscModule.hostOf(client.siteUrl) : ""),
+      seoHosts,
     };
   }
 
   appendChatMessage(role, text) {
     const el = document.createElement("div");
-    el.className = `chat-msg chat-msg--${role === "user" ? "user" : role === "tools" ? "tools" : role === "system" ? "system" : "bot"}`;
-    el.textContent = text;
+    const kind =
+      role === "user" ? "user" : role === "tools" ? "tools" : role === "system" ? "system" : "bot";
+    el.className = `chat-msg chat-msg--${kind}`;
+    if (kind === "bot") {
+      el.innerHTML = AppController.renderChatMarkdown(text);
+    } else {
+      el.textContent = text;
+    }
     this.dom.chatMessages.appendChild(el);
     this.dom.chatMessages.scrollTop = this.dom.chatMessages.scrollHeight;
     return el;
+  }
+
+  /** Markdown mínimo y seguro para el chat (sin HTML crudo del modelo). */
+  static renderChatMarkdown(raw) {
+    const esc = (s) =>
+      String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+
+    const inline = (s) =>
+      esc(s)
+        .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+        .replace(/`([^`]+)`/g, "<code>$1</code>");
+
+    const lines = String(raw || "").replace(/\r\n/g, "\n").split("\n");
+    const out = [];
+    let listOpen = false;
+
+    const closeList = () => {
+      if (listOpen) {
+        out.push("</ul>");
+        listOpen = false;
+      }
+    };
+
+    lines.forEach((line) => {
+      const trimmed = line.trim();
+      if (trimmed === "" || /^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+        closeList();
+        return;
+      }
+      if (/^###\s+/.test(trimmed)) {
+        closeList();
+        out.push(`<h4>${inline(trimmed.replace(/^###\s+/, ""))}</h4>`);
+        return;
+      }
+      if (/^##\s+/.test(trimmed)) {
+        closeList();
+        out.push(`<h3>${inline(trimmed.replace(/^##\s+/, ""))}</h3>`);
+        return;
+      }
+      if (/^#\s+/.test(trimmed)) {
+        closeList();
+        out.push(`<h3>${inline(trimmed.replace(/^#\s+/, ""))}</h3>`);
+        return;
+      }
+      if (/^[-*•]\s+/.test(trimmed)) {
+        if (!listOpen) {
+          out.push("<ul>");
+          listOpen = true;
+        }
+        out.push(`<li>${inline(trimmed.replace(/^[-*•]\s+/, ""))}</li>`);
+        return;
+      }
+      closeList();
+      out.push(`<p>${inline(trimmed)}</p>`);
+    });
+    closeList();
+    return out.join("") || `<p>${inline(raw)}</p>`;
   }
 
   setChatBusy(busy) {
@@ -1544,7 +1721,7 @@ class AppController {
     return [...seen.values()];
   }
 
-  /** Precarga secuencial: la caché de 15 min del servidor hace baratas las recargas. */
+  /** Precarga liviana: en lite solo el host activo; en desktop máx. 3 y un solo re-render al final. */
   async warmSeo() {
     if (this.warming) return;
     this.warming = true;
@@ -1559,17 +1736,29 @@ class AppController {
     if (this.module === "seo") this.renderSeo();
 
     try {
-      for (const { host } of this.seoHosts()) {
-        if (SeoStore.get(host)) continue;
+      const hosts = this.seoHosts().map((h) => h.host).filter(Boolean);
+      let queue = [];
+      if (this.isLite) {
+        if (this.seoHost && !SeoStore.get(this.seoHost)) queue = [this.seoHost];
+      } else {
+        queue = hosts.filter((h) => !SeoStore.get(h)).slice(0, 3);
+        if (this.seoHost && !SeoStore.get(this.seoHost) && !queue.includes(this.seoHost)) {
+          queue.unshift(this.seoHost);
+          queue = queue.slice(0, 3);
+        }
+      }
+
+      for (const host of queue) {
         try {
           SeoStore.set(host, await GscModule.site(host));
         } catch (err) {
           SeoStore.set(host, { error: err.message, signals: [] });
         }
-        this.renderStats();
-        this.renderAgenda();
-        if (this.module === "seo") this.renderSeo();
+        await new Promise((r) => setTimeout(r, this.isLite ? 80 : 40));
       }
+      this.renderStats();
+      this.renderAgenda();
+      if (this.module === "seo") this.renderSeo();
     } finally {
       this.warming = false;
     }
@@ -2448,7 +2637,7 @@ class AppController {
       if (idx === -1) return;
       this.clients[idx] = { ...this.clients[idx], ...payload };
     } else {
-      this.clients.push({ id: crypto.randomUUID(), notes: [], ...payload });
+      this.clients.push({ id: crypto.randomUUID(), notes: [], watches: [], ...payload });
     }
 
     try {
@@ -2602,6 +2791,31 @@ class AppController {
     list.appendChild(fragment);
   }
 
+
+  async completeWatch(clientId, watchId) {
+    const client = this.clients.find((c) => c.id === clientId);
+    if (!client) return;
+    const watch = (client.watches || []).find((w) => w.id === watchId);
+    if (!watch) return;
+    const prevStatus = watch.status;
+    const prevDone = watch.doneAt;
+    watch.status = "done";
+    watch.doneAt = Date.now();
+    (this.tasks || []).forEach((t) => {
+      if ((t.ref === `watch:${watchId}` || t.ref === `watch-alarm:${watchId}`) && !t.doneAt) {
+        t.doneAt = Date.now();
+      }
+    });
+    try {
+      await this.persistState();
+      this.renderAll();
+      this.showToast("Watch cerrado");
+    } catch {
+      watch.status = prevStatus;
+      watch.doneAt = prevDone;
+    }
+  }
+
   /* ---------- Cuaderno ---------- */
   openNotebook(id) {
     const client = this.clients.find((c) => c.id === id);
@@ -2621,7 +2835,8 @@ class AppController {
   renderNotebook() {
     const client = this.clients.find((c) => c.id === this.notebookClientId);
     const notes = [...(client?.notes || [])].sort((a, b) => b.createdAt - a.createdAt);
-    this.dom.notebookEmpty.hidden = notes.length > 0;
+    const watches = (client?.watches || []).filter((w) => (w.status || "open") === "open");
+    this.dom.notebookEmpty.hidden = notes.length > 0 || watches.length > 0;
     this.dom.notebookList.innerHTML = "";
 
     const stamp = new Intl.DateTimeFormat("es-CL", {
@@ -2631,6 +2846,40 @@ class AppController {
       minute: "2-digit",
     });
     const fragment = document.createDocumentFragment();
+
+    if (watches.length && this.dom.notebookWatches) {
+      this.dom.notebookWatches.hidden = false;
+      this.dom.notebookWatches.innerHTML = "";
+      watches.forEach((watch) => {
+        const li = document.createElement("li");
+        li.className = "notebook__watch";
+        const main = document.createElement("div");
+        const title = document.createElement("strong");
+        title.textContent = watch.title;
+        const meta = document.createElement("span");
+        meta.className = "notebook__watch-meta";
+        const bits = [watch.type || "custom"];
+        if (watch.dueDate) bits.push(BillingModule.formatShort(watch.dueDate));
+        meta.textContent = bits.join(" · ");
+        main.append(title, meta);
+        if (watch.detail) {
+          const d = document.createElement("p");
+          d.textContent = watch.detail;
+          main.appendChild(d);
+        }
+        const done = document.createElement("button");
+        done.type = "button";
+        done.className = "btn btn--ghost btn--sm";
+        done.dataset.watchDone = watch.id;
+        done.textContent = "Hecho";
+        li.append(main, done);
+        this.dom.notebookWatches.appendChild(li);
+      });
+    } else if (this.dom.notebookWatches) {
+      this.dom.notebookWatches.hidden = true;
+      this.dom.notebookWatches.innerHTML = "";
+    }
+
     notes.forEach((note) => {
       const li = document.createElement("li");
       li.className = "notebook__item";

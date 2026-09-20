@@ -78,6 +78,63 @@ function ersSanitizeCheckIn($raw): ?array
     ];
 }
 
+function ersWatchTypes(): array
+{
+    return ['rank_rent_billing', 'billing_start', 'follow_up', 'content', 'seo', 'deadline', 'custom'];
+}
+
+function ersSanitizeWatches($watches): array
+{
+    if (!is_array($watches)) {
+        return [];
+    }
+
+    $out = [];
+    foreach (array_slice($watches, 0, 100) as $watch) {
+        if (!is_array($watch)) {
+            continue;
+        }
+        $title = trim((string) ($watch['title'] ?? ''));
+        if ($title === '') {
+            continue;
+        }
+        $type = strtolower(trim((string) ($watch['type'] ?? 'custom')));
+        if (!in_array($type, ersWatchTypes(), true)) {
+            $type = 'custom';
+        }
+        $status = strtolower(trim((string) ($watch['status'] ?? 'open')));
+        if (!in_array($status, ['open', 'done'], true)) {
+            $status = 'open';
+        }
+        $priority = (int) ($watch['priority'] ?? 2);
+        if ($priority < 1) {
+            $priority = 1;
+        }
+        if ($priority > 3) {
+            $priority = 3;
+        }
+        $due = (string) ($watch['dueDate'] ?? '');
+        if ($due !== '' && !preg_match('#^\d{4}-\d{2}-\d{2}$#', $due)) {
+            $due = '';
+        }
+        $out[] = [
+            'id' => ersClip((string) ($watch['id'] ?? ''), 64) ?: ersUuid(),
+            'type' => $type,
+            'title' => ersClip($title, 240),
+            'detail' => ersClip(trim((string) ($watch['detail'] ?? '')), 2000),
+            'url' => ersClip(trim((string) ($watch['url'] ?? '')), 500),
+            'dueDate' => $due,
+            'priority' => $priority,
+            'status' => $status,
+            'createdAt' => (int) ($watch['createdAt'] ?? 0),
+            'doneAt' => (int) ($watch['doneAt'] ?? 0),
+            'by' => ersClip((string) ($watch['by'] ?? 'user'), 24),
+            'alarmedAt' => (int) ($watch['alarmedAt'] ?? 0),
+        ];
+    }
+    return $out;
+}
+
 function ersSanitizeClients($clients): array
 {
     if (!is_array($clients)) {
@@ -90,6 +147,7 @@ function ersSanitizeClients($clients): array
             continue;
         }
         $client['notes'] = ersSanitizeNotes($client['notes'] ?? []);
+        $client['watches'] = ersSanitizeWatches($client['watches'] ?? []);
         $client['siteUrl'] = ersClip(trim((string) ($client['siteUrl'] ?? '')), 300);
         $checkIn = ersSanitizeCheckIn($client['lastCheckIn'] ?? null);
         if ($checkIn) {
@@ -265,6 +323,10 @@ function ersHostOf(string $url): string
 function ersClientPublic(array $client): array
 {
     $notes = array_slice(array_reverse($client['notes'] ?? []), 0, 8);
+    $watches = array_values(array_filter(
+        $client['watches'] ?? [],
+        static fn($w) => ($w['status'] ?? '') === 'open'
+    ));
     return [
         'id' => $client['id'] ?? '',
         'name' => $client['name'] ?? '',
@@ -285,6 +347,8 @@ function ersClientPublic(array $client): array
             ];
         }, $notes),
         'noteCount' => count($client['notes'] ?? []),
+        'watches' => array_slice($watches, 0, 20),
+        'watchCount' => count($watches),
     ];
 }
 
@@ -578,9 +642,13 @@ function ersRunAction(string $tool, array $args, string $actor = 'user', bool $c
             'listNotes' => ersActionListNotes($args),
             'listAgenda' => ersActionListAgenda(),
             'getSeoSummary' => ersActionGetSeoSummary($args),
+            'getPortfolioSeo' => ersActionGetPortfolioSeo($args),
             'generarInformeSeo' => ersActionGenerarInformeSeo($args, $actor),
             'addNote' => ersActionAddNote($args, $actor),
             'setCheckIn' => ersActionSetCheckIn($args, $actor),
+            'addWatch' => ersActionAddWatch($args, $actor),
+            'completeWatch' => ersActionCompleteWatch($args, $actor),
+            'listWatches' => ersActionListWatches($args),
             'addTask' => ersActionAddTask($args, $actor),
             'completeTask' => ersActionCompleteTask($args, $actor),
             'updateBillingDate' => ersActionUpdateBillingDate($args, $actor),
@@ -663,6 +731,116 @@ function ersActionGetSeoSummary(array $args): array
         $host = ersHostOf((string) ($client['siteUrl'] ?? ''));
     }
     return ersSeoSummary($host);
+}
+
+/**
+ * Pantallazo SEO de toda la cartera (caché GSC por host).
+ * Ideal para "cómo va el SEO en general" sin estar parado en un cliente.
+ */
+function ersActionGetPortfolioSeo(array $args = []): array
+{
+    $store = ersReadStore();
+    $limit = max(1, min(40, (int) ($args['limit'] ?? 25)));
+    $sites = [];
+    $seen = [];
+
+    foreach ($store['clients'] as $client) {
+        $host = ersHostOf((string) ($client['siteUrl'] ?? ''));
+        if ($host === '' || isset($seen[$host])) {
+            continue;
+        }
+        $seen[$host] = true;
+
+        $summary = ersSeoSummary($host);
+        $row = [
+            'clientId' => $client['id'] ?? '',
+            'name' => $client['name'] ?? '',
+            'host' => $host,
+            'available' => !empty($summary['available']),
+        ];
+
+        if (empty($summary['available'])) {
+            $row['message'] = $summary['message'] ?? 'Sin caché';
+            $row['severity'] = 1;
+            $sites[] = $row;
+            continue;
+        }
+
+        $t = $summary['period28']['totals'] ?? [];
+        $d = $summary['period28']['delta'] ?? [];
+        $signals = is_array($summary['signals'] ?? null) ? $summary['signals'] : [];
+        $critical = 0;
+        $topSignal = '';
+        foreach ($signals as $s) {
+            $sev = (int) ($s['severity'] ?? 0);
+            if ($sev >= 3) {
+                $critical++;
+            }
+            if ($topSignal === '' && ($s['title'] ?? '') !== '') {
+                $topSignal = (string) $s['title'];
+            }
+        }
+
+        $clicksDelta = (float) ($d['clicks'] ?? 0);
+        $priority = $critical * 3;
+        if ($clicksDelta <= -3) {
+            $priority += 2;
+        } elseif ($clicksDelta < 0) {
+            $priority += 1;
+        }
+
+        $inv = $summary['inventory'] ?? [];
+        $row += [
+            'clicks28' => (int) ($t['clicks'] ?? 0),
+            'clicksDelta' => $clicksDelta,
+            'impressions28' => (int) ($t['impressions'] ?? 0),
+            'position28' => isset($t['position']) ? round((float) $t['position'], 1) : null,
+            'signals' => count($signals),
+            'critical' => $critical,
+            'topSignal' => $topSignal,
+            'notIndexed' => (int) ($inv['notIndexed'] ?? 0),
+            'priority' => $priority,
+        ];
+        $sites[] = $row;
+    }
+
+    usort($sites, static function ($a, $b) {
+        $pa = (int) ($a['priority'] ?? 0);
+        $pb = (int) ($b['priority'] ?? 0);
+        if ($pa !== $pb) {
+            return $pb <=> $pa;
+        }
+        return ((int) ($b['clicks28'] ?? 0)) <=> ((int) ($a['clicks28'] ?? 0));
+    });
+
+    $withData = array_values(array_filter($sites, static fn($s) => !empty($s['available'])));
+    $without = array_values(array_filter($sites, static fn($s) => empty($s['available'])));
+    $attention = array_values(array_filter(
+        $withData,
+        static fn($s) => ((int) ($s['critical'] ?? 0)) > 0 || ((float) ($s['clicksDelta'] ?? 0)) < 0
+    ));
+
+    $totalClicks = 0;
+    $totalDelta = 0;
+    foreach ($withData as $s) {
+        $totalClicks += (int) ($s['clicks28'] ?? 0);
+        $totalDelta += (float) ($s['clicksDelta'] ?? 0);
+    }
+
+    return [
+        'siteCount' => count($sites),
+        'withCache' => count($withData),
+        'withoutCache' => count($without),
+        'totals28' => [
+            'clicks' => $totalClicks,
+            'clicksDelta' => $totalDelta,
+        ],
+        'needsAttention' => array_slice($attention, 0, 8),
+        'sites' => array_slice($sites, 0, $limit),
+        'hint' => count($without)
+            ? 'Algunos sitios no tienen caché: abrí SEO y pulsá Actualizar en esos hosts.'
+            : '',
+    ];
 }
 
 function ersActionGenerarInformeSeo(array $args, string $actor): array
@@ -974,6 +1152,370 @@ function ersActionCompleteRequest(array $args, string $actor): array
     throw new RuntimeException('Solicitud no encontrada');
 }
 
+
+function ersActionListWatches(array $args): array
+{
+    $client = ersActionGetClient($args);
+    $store = ersReadStore();
+    $idx = ersFindClientIndex($store, (string) $client['id']);
+    $all = $idx >= 0 ? ($store['clients'][$idx]['watches'] ?? []) : [];
+    $includeDone = !empty($args['includeDone']);
+    $list = [];
+    foreach ($all as $w) {
+        if (!$includeDone && ($w['status'] ?? '') !== 'open') {
+            continue;
+        }
+        $list[] = $w;
+    }
+    return [
+        'clientId' => $client['id'],
+        'name' => $client['name'],
+        'watches' => $list,
+    ];
+}
+
+function ersActionAddWatch(array $args, string $actor): array
+{
+    $clientId = trim((string) ($args['clientId'] ?? ''));
+    $title = trim((string) ($args['title'] ?? ''));
+    if ($clientId === '' || $title === '') {
+        throw new InvalidArgumentException('clientId y title son obligatorios');
+    }
+
+    $store = ersReadStore();
+    $idx = ersFindClientIndex($store, $clientId);
+    if ($idx < 0) {
+        throw new RuntimeException('Cliente no encontrado');
+    }
+
+    $type = strtolower(trim((string) ($args['type'] ?? 'custom')));
+    if (!in_array($type, ersWatchTypes(), true)) {
+        $type = 'custom';
+    }
+    $due = trim((string) ($args['dueDate'] ?? ''));
+    if ($due !== '' && !preg_match('#^\d{4}-\d{2}-\d{2}$#', $due)) {
+        throw new InvalidArgumentException('dueDate inválida (YYYY-MM-DD)');
+    }
+    $priority = (int) ($args['priority'] ?? 2);
+    if ($priority < 1) {
+        $priority = 1;
+    }
+    if ($priority > 3) {
+        $priority = 3;
+    }
+
+    $watch = [
+        'id' => ersUuid(),
+        'type' => $type,
+        'title' => ersClip($title, 240),
+        'detail' => ersClip(trim((string) ($args['detail'] ?? '')), 2000),
+        'url' => ersClip(trim((string) ($args['url'] ?? '')), 500),
+        'dueDate' => $due,
+        'priority' => $priority,
+        'status' => 'open',
+        'createdAt' => (int) round(microtime(true) * 1000),
+        'doneAt' => 0,
+        'by' => $actor,
+        'alarmedAt' => 0,
+    ];
+
+    $store['clients'][$idx]['watches'] = $store['clients'][$idx]['watches'] ?? [];
+    $store['clients'][$idx]['watches'][] = $watch;
+
+    // Nota corta en cuaderno para trazabilidad humana
+    $noteBody = '[watch:' . $type . '] ' . $watch['title'];
+    if ($due !== '') {
+        $noteBody .= ' · vence ' . $due;
+    }
+    if ($watch['detail'] !== '') {
+        $noteBody .= ' — ' . $watch['detail'];
+    }
+    $store['clients'][$idx]['notes'] = $store['clients'][$idx]['notes'] ?? [];
+    $store['clients'][$idx]['notes'][] = [
+        'id' => ersUuid(),
+        'body' => ersClip($noteBody, 4000),
+        'createdAt' => $watch['createdAt'],
+        'kind' => 'watch',
+        'by' => $actor,
+    ];
+
+    if (!ersWriteStore($store)) {
+        throw new RuntimeException('No se pudo guardar');
+    }
+
+    ersAuditAppend([
+        'actor' => $actor,
+        'tool' => 'addWatch',
+        'args' => [
+            'clientId' => $clientId,
+            'type' => $type,
+            'title' => $watch['title'],
+            'dueDate' => $due,
+            'priority' => $priority,
+        ],
+        'clientId' => $clientId,
+        'ok' => true,
+        'undo' => ['type' => 'deleteWatch', 'clientId' => $clientId, 'watchId' => $watch['id']],
+        'result' => ['watchId' => $watch['id']],
+    ]);
+
+    return ['watch' => $watch, 'client' => ersClientPublic($store['clients'][$idx])];
+}
+
+function ersActionCompleteWatch(array $args, string $actor): array
+{
+    $clientId = trim((string) ($args['clientId'] ?? ''));
+    $watchId = trim((string) ($args['watchId'] ?? ''));
+    if ($watchId === '') {
+        throw new InvalidArgumentException('watchId obligatorio');
+    }
+
+    $store = ersReadStore();
+    if ($clientId === '') {
+        foreach ($store['clients'] as $c) {
+            foreach ($c['watches'] ?? [] as $w) {
+                if (($w['id'] ?? '') === $watchId) {
+                    $clientId = (string) ($c['id'] ?? '');
+                    break 2;
+                }
+            }
+        }
+    }
+    if ($clientId === '') {
+        throw new RuntimeException('Watch no encontrado');
+    }
+
+    $idx = ersFindClientIndex($store, $clientId);
+    if ($idx < 0) {
+        throw new RuntimeException('Cliente no encontrado');
+    }
+
+    $found = false;
+    foreach ($store['clients'][$idx]['watches'] as $i => $w) {
+        if (($w['id'] ?? '') !== $watchId) {
+            continue;
+        }
+        $store['clients'][$idx]['watches'][$i]['status'] = 'done';
+        $store['clients'][$idx]['watches'][$i]['doneAt'] = (int) round(microtime(true) * 1000);
+        $found = true;
+        $watch = $store['clients'][$idx]['watches'][$i];
+        break;
+    }
+    if (!$found) {
+        throw new RuntimeException('Watch no encontrado');
+    }
+
+    // Cierra tareas-alarma ligadas
+    foreach ($store['tasks'] as $ti => $task) {
+        if (($task['ref'] ?? '') === 'watch:' . $watchId && empty($task['doneAt'])) {
+            $store['tasks'][$ti]['doneAt'] = (int) round(microtime(true) * 1000);
+        }
+    }
+
+    if (!ersWriteStore($store)) {
+        throw new RuntimeException('No se pudo guardar');
+    }
+
+    ersAuditAppend([
+        'actor' => $actor,
+        'tool' => 'completeWatch',
+        'args' => ['clientId' => $clientId, 'watchId' => $watchId],
+        'clientId' => $clientId,
+        'ok' => true,
+        'result' => ['watchId' => $watchId],
+    ]);
+
+    return ['watch' => $watch, 'client' => ersClientPublic($store['clients'][$idx])];
+}
+
+function ersDailyStatePath(): string
+{
+    return ersDataDir() . '/daily-state.json';
+}
+
+function ersLoadDailySecret(): string
+{
+    foreach (['gemini.json', 'daily.json'] as $name) {
+        $path = ersDataDir() . '/' . $name;
+        if (!file_exists($path)) {
+            continue;
+        }
+        $raw = file_get_contents($path);
+        $data = is_string($raw) ? json_decode($raw, true) : null;
+        if (!is_array($data)) {
+            continue;
+        }
+        $secret = trim((string) ($data['dailySecret'] ?? $data['secret'] ?? ''));
+        if ($secret !== '') {
+            return $secret;
+        }
+    }
+    return '';
+}
+
+/**
+ * Cron diario: watches vencidos → alarma; due hoy/próximos → tarea en Hoy.
+ * @return array{ok:bool, date:string, createdTasks:int, alarms:int, items:array}
+ */
+function ersRunDailyBriefing(?string $tz = null): array
+{
+    $tzName = $tz ?: 'America/Santiago';
+    try {
+        $zone = new DateTimeZone($tzName);
+    } catch (Throwable) {
+        $zone = new DateTimeZone('America/Santiago');
+    }
+    $now = new DateTimeImmutable('now', $zone);
+    $today = $now->format('Y-m-d');
+    $yesterday = $now->modify('-1 day')->format('Y-m-d');
+    $lookahead = $now->modify('+2 days')->format('Y-m-d');
+
+    $store = ersReadStore();
+    $created = 0;
+    $alarms = 0;
+    $items = [];
+    $existingRefs = [];
+    foreach ($store['tasks'] as $task) {
+        if (!empty($task['doneAt'])) {
+            continue;
+        }
+        $ref = (string) ($task['ref'] ?? '');
+        if ($ref !== '') {
+            $existingRefs[$ref] = true;
+        }
+    }
+
+    $addTask = static function (array &$store, array &$existingRefs, string $title, string $clientId, string $kind, string $ref, string $dueDate, int $priority = 3) use (&$created): bool {
+        if (isset($existingRefs[$ref])) {
+            return false;
+        }
+        $task = [
+            'id' => ersUuid(),
+            'title' => ersClip($title, 240),
+            'clientId' => $clientId,
+            'kind' => ersClip($kind, 24),
+            'ref' => ersClip($ref, 500),
+            'dueDate' => $dueDate,
+            'createdAt' => (int) round(microtime(true) * 1000),
+            'doneAt' => 0,
+        ];
+        $store['tasks'][] = $task;
+        $existingRefs[$ref] = true;
+        $created++;
+        return true;
+    };
+
+    foreach ($store['clients'] as $ci => $client) {
+        $clientId = (string) ($client['id'] ?? '');
+        $name = (string) ($client['name'] ?? 'Cliente');
+        foreach ($client['watches'] ?? [] as $wi => $watch) {
+            if (($watch['status'] ?? '') !== 'open') {
+                continue;
+            }
+            $due = (string) ($watch['dueDate'] ?? '');
+            $watchId = (string) ($watch['id'] ?? '');
+            $title = (string) ($watch['title'] ?? 'Watch');
+            $prio = (int) ($watch['priority'] ?? 2);
+            $type = (string) ($watch['type'] ?? 'custom');
+
+            if ($due === '') {
+                continue;
+            }
+
+            // Alarma: venció ayer o antes y sigue abierto
+            if ($due <= $yesterday) {
+                $alarmRef = 'watch-alarm:' . $watchId;
+                $alarmTitle = 'ALARMA · no se cerró: ' . $title . ' (' . $name . ')';
+                if ($addTask($store, $existingRefs, $alarmTitle, $clientId, 'watch-alarm', $alarmRef, $today, 3)) {
+                    $alarms++;
+                    $store['clients'][$ci]['watches'][$wi]['alarmedAt'] = (int) round(microtime(true) * 1000);
+                    $items[] = ['kind' => 'alarm', 'client' => $name, 'title' => $title, 'dueDate' => $due, 'type' => $type];
+                }
+                continue;
+            }
+
+            // Due hoy o en 2 días → tarea operativa
+            if ($due >= $today && $due <= $lookahead) {
+                $ref = 'watch:' . $watchId;
+                $prefix = in_array($type, ['rank_rent_billing', 'billing_start'], true) ? 'Cobro/watch' : 'Watch';
+                $taskTitle = $prefix . ': ' . $title . ' (' . $name . ')';
+                if ($addTask($store, $existingRefs, $taskTitle, $clientId, 'watch', $ref, $due, $prio)) {
+                    $items[] = ['kind' => 'due', 'client' => $name, 'title' => $title, 'dueDate' => $due, 'type' => $type];
+                }
+            }
+        }
+    }
+
+    // Tareas manuales vencidas ayer sin cerrar → alarma (una vez)
+    foreach ($store['tasks'] as $task) {
+        if (!empty($task['doneAt'])) {
+            continue;
+        }
+        $due = (string) ($task['dueDate'] ?? '');
+        $kind = (string) ($task['kind'] ?? '');
+        if ($due !== $yesterday) {
+            continue;
+        }
+        if (str_starts_with($kind, 'watch')) {
+            continue;
+        }
+        $taskId = (string) ($task['id'] ?? '');
+        $alarmRef = 'task-alarm:' . $taskId;
+        $clientId = (string) ($task['clientId'] ?? '');
+        $clientName = '';
+        foreach ($store['clients'] as $c) {
+            if (($c['id'] ?? '') === $clientId) {
+                $clientName = (string) ($c['name'] ?? '');
+                break;
+            }
+        }
+        $alarmTitle = 'ALARMA · tarea de ayer: ' . ($task['title'] ?? '') . ($clientName !== '' ? ' (' . $clientName . ')' : '');
+        if ($addTask($store, $existingRefs, $alarmTitle, $clientId, 'task-alarm', $alarmRef, $today, 3)) {
+            $alarms++;
+            $items[] = [
+                'kind' => 'task-alarm',
+                'client' => $clientName,
+                'title' => (string) ($task['title'] ?? ''),
+                'dueDate' => $due,
+            ];
+        }
+    }
+
+    if (!ersWriteStore($store)) {
+        throw new RuntimeException('No se pudo guardar el briefing diario');
+    }
+
+    $state = [
+        'lastRun' => $today,
+        'lastRunAt' => $now->format(DateTimeInterface::ATOM),
+        'timezone' => $zone->getName(),
+        'createdTasks' => $created,
+        'alarms' => $alarms,
+        'items' => $items,
+    ];
+    @file_put_contents(
+        ersDailyStatePath(),
+        json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE),
+        LOCK_EX
+    );
+
+    ersAuditAppend([
+        'actor' => 'cron',
+        'tool' => 'dailyBriefing',
+        'args' => ['date' => $today],
+        'ok' => true,
+        'result' => ['createdTasks' => $created, 'alarms' => $alarms],
+    ]);
+
+    return [
+        'ok' => true,
+        'date' => $today,
+        'createdTasks' => $created,
+        'alarms' => $alarms,
+        'items' => $items,
+    ];
+}
+
 function ersGeminiToolDeclarations(): array
 {
     $str = static fn(string $desc) => ['type' => 'string', 'description' => $desc];
@@ -1014,13 +1556,23 @@ function ersGeminiToolDeclarations(): array
         ],
         [
             'name' => 'getSeoSummary',
-            'description' => 'Resumen SEO desde caché GSC (host o cliente)',
+            'description' => 'Resumen SEO de UN sitio (host o cliente). Usá esto solo cuando nombran un cliente/sitio concreto.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
                     'host' => $str('Hostname sin www'),
                     'clientId' => $str('UUID del cliente'),
                     'name' => $str('Nombre del cliente'),
+                ],
+            ],
+        ],
+        [
+            'name' => 'getPortfolioSeo',
+            'description' => 'Pantallazo SEO de TODA la cartera (todos los clientes con sitio). Usá esto para preguntas generales: cómo va el SEO, alertas, ranking de sitios, sin estar parado en un cliente.',
+            'parameters' => [
+                'type' => 'object',
+                'properties' => [
+                    'limit' => $num('Máximo de sitios a listar (default 25)'),
                 ],
             ],
         ],
@@ -1033,6 +1585,47 @@ function ersGeminiToolDeclarations(): array
                     'host' => $str('Hostname'),
                     'clientId' => $str('UUID'),
                     'name' => $str('Nombre'),
+                ],
+            ],
+        ],
+        [
+            'name' => 'addWatch',
+            'description' => 'Guarda un recordatorio/hecho operativo del cliente (rank&rent a cobro, deadline, follow-up). Usá esto cuando el usuario TE CUENTA algo para que después el sistema lo apriete.',
+            'parameters' => [
+                'type' => 'object',
+                'properties' => [
+                    'clientId' => $str('UUID del cliente'),
+                    'title' => $str('Qué hay que vigilar'),
+                    'type' => $str('rank_rent_billing | billing_start | follow_up | content | seo | deadline | custom'),
+                    'detail' => $str('Contexto breve'),
+                    'url' => $str('URL opcional de la página'),
+                    'dueDate' => $str('YYYY-MM-DD cuando hay que actuar'),
+                    'priority' => $num('1-3, default 2'),
+                ],
+                'required' => ['clientId', 'title'],
+            ],
+        ],
+        [
+            'name' => 'completeWatch',
+            'description' => 'Marca un watch como hecho',
+            'parameters' => [
+                'type' => 'object',
+                'properties' => [
+                    'watchId' => $str('UUID del watch'),
+                    'clientId' => $str('UUID del cliente (opcional)'),
+                ],
+                'required' => ['watchId'],
+            ],
+        ],
+        [
+            'name' => 'listWatches',
+            'description' => 'Lista watches abiertos de un cliente',
+            'parameters' => [
+                'type' => 'object',
+                'properties' => [
+                    'clientId' => $str('UUID'),
+                    'name' => $str('Nombre'),
+                    'includeDone' => $str('true para incluir cerrados'),
                 ],
             ],
         ],

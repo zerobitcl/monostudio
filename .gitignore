@@ -8,6 +8,8 @@ ers/data/audit.jsonl
 
 # Copiloto Gemini
 ers/data/gemini.json
+ers/data/daily.json
+ers/data/daily-state.json
 
 # Search Console: cuenta de servicio, token y caché
 ers/data/gsc-service-account.json
