@@ -21,7 +21,7 @@ $keyFilePreferred = $dataDir . '/gsc-service-account.json';
 $tokenFile = $dataDir . '/gsc-token.json';
 
 const GSC_SCOPE = 'https://www.googleapis.com/auth/webmasters';
-const GSC_CACHE_TTL = 900;
+const GSC_CACHE_TTL = 21600; // 6 h — "Actualizar" / fresh=1 fuerza refresh
 const GSC_MAX_MANUAL_PAGES = 40;
 const GSC_MAX_SITEMAP_URLS = 120;
 const GSC_MAX_QUERY_PROBES = 12;

@@ -34,7 +34,7 @@ class Store {
     module: "monoStudio.module",
     seoHost: "monoStudio.seoHost",
     seoPeriod: "monoStudio.seoPeriod",
-    seoCache: "monoStudio.seoCache",
+    seoCache: "monoStudio.seoCache.v2",
   };
 
   static API = "./api/store.php";
@@ -394,13 +394,14 @@ class GscModule {
 class SeoStore {
   static data = new Map();
 
-  /** En sessionStorage solo guardamos un recorte: el payload GSC completo congela móviles. */
+  /** Persistimos un recorte en localStorage (sobrevive al cerrar el tab). El full vive en el server. */
   static slim(value) {
     if (!value || typeof value !== "object") return value;
-    const pages = Array.isArray(value.pages) ? value.pages.slice(0, 12) : [];
+    const pages = Array.isArray(value.pages) ? value.pages.slice(0, 40) : [];
     return {
       version: value.version,
       fetchedAt: value.fetchedAt,
+      cached: value.cached,
       error: value.error,
       totals: value.totals,
       totalsDelta: value.totalsDelta,
@@ -429,22 +430,56 @@ class SeoStore {
     };
   }
 
+  static #readBucket() {
+    try {
+      const raw = localStorage.getItem(Store.KEYS.seoCache);
+      if (raw) return JSON.parse(raw);
+    } catch {
+      /* ignore */
+    }
+    // Migración one-shot desde sessionStorage viejo
+    try {
+      const legacy = sessionStorage.getItem("monoStudio.seoCache");
+      if (legacy) {
+        sessionStorage.removeItem("monoStudio.seoCache");
+        return JSON.parse(legacy);
+      }
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+
   static load() {
     try {
-      const raw = sessionStorage.getItem(Store.KEYS.seoCache);
-      if (!raw) return;
-      Object.entries(JSON.parse(raw)).forEach(([host, value]) => SeoStore.data.set(host, value));
+      const parsed = SeoStore.#readBucket();
+      if (!parsed || typeof parsed !== "object") return;
+      const maxAgeSec = 7 * 24 * 3600; // descarta basura de más de 7 días
+      const now = Date.now() / 1000;
+      Object.entries(parsed).forEach(([host, value]) => {
+        const at = Number(value?.fetchedAt || 0);
+        if (at && now - at > maxAgeSec) return;
+        SeoStore.data.set(host, value);
+      });
     } catch {
-      try { sessionStorage.removeItem(Store.KEYS.seoCache); } catch { /* ignore */ }
+      try {
+        localStorage.removeItem(Store.KEYS.seoCache);
+      } catch {
+        /* ignore */
+      }
     }
   }
 
   static persist() {
     try {
       const slimEntries = [...SeoStore.data.entries()].map(([host, value]) => [host, SeoStore.slim(value)]);
-      sessionStorage.setItem(Store.KEYS.seoCache, JSON.stringify(Object.fromEntries(slimEntries)));
+      localStorage.setItem(Store.KEYS.seoCache, JSON.stringify(Object.fromEntries(slimEntries)));
     } catch {
-      try { sessionStorage.removeItem(Store.KEYS.seoCache); } catch { /* ignore */ }
+      try {
+        localStorage.removeItem(Store.KEYS.seoCache);
+      } catch {
+        /* ignore */
+      }
     }
   }
 
@@ -455,6 +490,13 @@ class SeoStore {
   static set(host, value) {
     SeoStore.data.set(host, value);
     SeoStore.persist();
+  }
+
+  /** Edad de la caché en horas (null si no hay fetchedAt). */
+  static ageHours(host) {
+    const at = Number(SeoStore.get(host)?.fetchedAt || 0);
+    if (!at) return null;
+    return Math.max(0, (Date.now() / 1000 - at) / 3600);
   }
 }
 
@@ -1721,7 +1763,7 @@ class AppController {
     return [...seen.values()];
   }
 
-  /** Precarga liviana: en lite solo el host activo; en desktop máx. 3 y un solo re-render al final. */
+  /** Precarga en background: respeta caché local/server (6h). Solo pide a Google lo viejo o faltante. */
   async warmSeo() {
     if (this.warming) return;
     this.warming = true;
@@ -1737,16 +1779,24 @@ class AppController {
 
     try {
       const hosts = this.seoHosts().map((h) => h.host).filter(Boolean);
-      let queue = [];
-      if (this.isLite) {
-        if (this.seoHost && !SeoStore.get(this.seoHost)) queue = [this.seoHost];
-      } else {
-        queue = hosts.filter((h) => !SeoStore.get(h)).slice(0, 3);
-        if (this.seoHost && !SeoStore.get(this.seoHost) && !queue.includes(this.seoHost)) {
-          queue.unshift(this.seoHost);
-          queue = queue.slice(0, 3);
-        }
-      }
+      const freshLocalSec = 5.5 * 3600; // un poco bajo el TTL server de 6h
+      const now = Date.now() / 1000;
+      const missing = hosts.filter((h) => {
+        const cached = SeoStore.get(h);
+        if (!cached || cached.error) return true;
+        const at = Number(cached.fetchedAt || 0);
+        if (!at) return true;
+        return now - at > freshLocalSec;
+      });
+
+      const queue = [];
+      if (this.seoHost && missing.includes(this.seoHost)) queue.push(this.seoHost);
+      missing.forEach((h) => {
+        if (!queue.includes(h)) queue.push(h);
+      });
+
+      const pauseMs = this.isLite ? 220 : 90;
+      let loaded = 0;
 
       for (const host of queue) {
         try {
@@ -1754,8 +1804,14 @@ class AppController {
         } catch (err) {
           SeoStore.set(host, { error: err.message, signals: [] });
         }
-        await new Promise((r) => setTimeout(r, this.isLite ? 80 : 40));
+        loaded += 1;
+        if (loaded === 1 || loaded % 3 === 0 || loaded === queue.length) {
+          this.renderStats();
+          if (this.module === "seo" && host === this.seoHost) this.renderSeo();
+        }
+        await new Promise((r) => setTimeout(r, pauseMs));
       }
+
       this.renderStats();
       this.renderAgenda();
       if (this.module === "seo") this.renderSeo();
@@ -1964,7 +2020,19 @@ class AppController {
 
     if (range?.start) {
       const label = period?.label || "28 días";
-      this.dom.seoRange.textContent = `${label} · ${range.start} → ${range.end}${data.cached ? " · caché" : ""}`;
+      const ageH = SeoStore.ageHours(this.seoHost);
+      let cacheLabel = "";
+      if (ageH != null) {
+        cacheLabel =
+          ageH < 1
+            ? " · actualizado hace min"
+            : ageH < 24
+              ? ` · caché ${ageH.toFixed(ageH < 10 ? 1 : 0)}h`
+              : ` · caché ${Math.round(ageH / 24)}d`;
+      } else if (data.cached) {
+        cacheLabel = " · caché";
+      }
+      this.dom.seoRange.textContent = `${label} · ${range.start} → ${range.end}${cacheLabel}`;
     }
 
     this.dom.seoClicks.textContent = GscModule.fmt(totals.clicks);
