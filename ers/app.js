@@ -424,6 +424,55 @@ class SeoStore {
 }
 
 /* ------------------------------------------------------------
+   Copiloto Gemini
+   ------------------------------------------------------------ */
+class ChatModule {
+  static API = "./api/gemini.php";
+  static ACTIONS = "./api/actions.php";
+
+  static async status() {
+    const res = await fetch(ChatModule.API, { headers: { Accept: "application/json" }, cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Gemini status ${res.status}`);
+    return data;
+  }
+
+  static async send(message, history, context) {
+    const res = await fetch(ChatModule.API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ message, history, context }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Gemini ${res.status}`);
+    return data;
+  }
+
+  static async runAction(tool, args, { confirmed = false } = {}) {
+    const res = await fetch(ChatModule.ACTIONS, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ action: tool, args, confirmed, actor: "user" }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) throw new Error(data.error || `Acción falló (${res.status})`);
+    return data;
+  }
+
+  static async audit(limit = 30, clientId = "") {
+    const q = new URLSearchParams({ action: "audit", limit: String(limit) });
+    if (clientId) q.set("clientId", clientId);
+    const res = await fetch(`${ChatModule.ACTIONS}?${q}`, {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "No se pudo leer el audit");
+    return data.entries || [];
+  }
+}
+
+/* ------------------------------------------------------------
    Agenda: un solo modelo de item para todo lo pendiente
    ------------------------------------------------------------ */
 class Agenda {
@@ -608,6 +657,12 @@ class AppController {
     this.seoLoading = false;
     this.warming = false;
     this.indexing = false;
+    this.chatOpen = false;
+    this.chatBusy = false;
+    this.chatHistory = [];
+    this.chatPending = [];
+    this.chatFocusClientId = null;
+    this.geminiConfigured = null;
 
     this.isLite = AppController.isLiteDevice();
     this.module = localStorage.getItem(Store.KEYS.module) || "today";
@@ -647,7 +702,10 @@ class AppController {
       "requestForm", "requestClientSelect",
       "taskForm", "taskTitle", "taskClientSelect", "taskDueDate",
       "notebookTitle", "notebookSite", "notebookList", "notebookEmpty", "notebookForm", "notebookBody",
+      "btnNotebookChat",
       "nodeTooltip", "toast",
+      "btnChatOpen", "chatDrawer", "chatBackdrop", "chatMessages", "chatPending", "chatForm", "chatInput",
+      "chatSend", "chatContextLabel", "chatHint", "btnChatClose", "btnChatClear", "btnChatAudit",
     ];
     const dom = {};
     ids.forEach((id) => {
@@ -670,6 +728,35 @@ class AppController {
     this.renderAll();
     this.timerId = setInterval(() => this.renderAgenda(), TIMER_TICK_MS);
     this.warmSeo();
+    this.initChat();
+  }
+
+  applyRemoteStore(store) {
+    if (!store || !Array.isArray(store.clients)) return;
+    this.clients = store.clients;
+    this.requests = Array.isArray(store.requests) ? store.requests : this.requests;
+    this.tasks = Array.isArray(store.tasks) ? store.tasks : this.tasks;
+    Store.cache = { clients: this.clients, requests: this.requests, tasks: this.tasks };
+    this.renderAll();
+  }
+
+  async initChat() {
+    if (!this.dom.chatDrawer) return;
+    this.renderChatWelcome();
+    try {
+      const status = await ChatModule.status();
+      this.geminiConfigured = !!status.configured;
+      if (!this.geminiConfigured) {
+        this.dom.chatHint.textContent =
+          "Configurá ers/data/gemini.json (copiá gemini.example.json) con tu apiKey de Google AI Studio.";
+      } else {
+        this.dom.chatHint.textContent = `Modelo ${status.model || "gemini"} · cobros piden confirmación · audit log activo.`;
+      }
+    } catch {
+      this.geminiConfigured = false;
+      this.dom.chatHint.textContent = "No se pudo contactar la API del copiloto.";
+    }
+    this.updateChatContextLabel();
   }
 
   async persistState() {
@@ -724,8 +811,25 @@ class AppController {
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
       this.closeSeoReport();
+      this.closeChat();
       ["clientModal", "requestModal", "taskModal", "notebookModal"].forEach((id) => this.closeModal(id));
     });
+
+    if (this.dom.btnChatOpen) {
+      this.dom.btnChatOpen.addEventListener("click", () => this.toggleChat());
+      this.dom.btnChatClose.addEventListener("click", () => this.closeChat());
+      this.dom.chatBackdrop.addEventListener("click", () => this.closeChat());
+      this.dom.btnChatClear.addEventListener("click", () => this.clearChat());
+      this.dom.btnChatAudit.addEventListener("click", () => this.showChatAudit());
+      this.dom.chatForm.addEventListener("submit", (e) => this.handleChatSubmit(e));
+      this.dom.chatInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          this.dom.chatForm.requestSubmit();
+        }
+      });
+      this.dom.chatPending.addEventListener("click", (e) => this.handleChatPendingClick(e));
+    }
 
     this.dom.clientForm.addEventListener("submit", (e) => this.handleClientSubmit(e));
     this.dom.clientForm.addEventListener("change", (e) => {
@@ -736,6 +840,16 @@ class AppController {
     this.dom.requestForm.addEventListener("submit", (e) => this.handleAddRequest(e));
     this.dom.taskForm.addEventListener("submit", (e) => this.handleAddTask(e));
     this.dom.notebookForm.addEventListener("submit", (e) => this.handleAddNote(e));
+    if (this.dom.btnNotebookChat) {
+      this.dom.btnNotebookChat.addEventListener("click", () => {
+        const id = this.notebookClientId;
+        this.closeModal("notebookModal");
+        this.openChat(id);
+        const name = this.clients.find((c) => c.id === id)?.name || "este cliente";
+        this.dom.chatInput.value = `¿Cómo está ${name}? Revisá cobro, SEO y notas.`;
+        this.dom.chatInput.focus();
+      });
+    }
     this.dom.notebookList.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-delete-note]");
       if (btn) this.deleteNote(btn.dataset.deleteNote);
@@ -884,6 +998,7 @@ class AppController {
 
     if (this.module === "clients") this.renderSwarm();
     if (this.module === "seo" && !silent) this.renderSeo();
+    this.updateChatContextLabel();
   }
 
   setView(view) {
@@ -914,6 +1029,261 @@ class AppController {
     this.toastTimer = setTimeout(() => {
       this.dom.toast.hidden = true;
     }, ms);
+  }
+
+  /* ---------- Copiloto ---------- */
+  toggleChat() {
+    if (this.chatOpen) this.closeChat();
+    else this.openChat();
+  }
+
+  openChat(clientId = null) {
+    if (clientId) this.chatFocusClientId = clientId;
+    this.chatOpen = true;
+    this.dom.chatDrawer.hidden = false;
+    this.dom.chatDrawer.setAttribute("aria-hidden", "false");
+    this.dom.chatBackdrop.hidden = false;
+    this.dom.btnChatOpen.setAttribute("aria-expanded", "true");
+    this.updateChatContextLabel();
+    this.dom.chatInput.focus();
+  }
+
+  closeChat() {
+    this.chatOpen = false;
+    this.dom.chatDrawer.hidden = true;
+    this.dom.chatDrawer.setAttribute("aria-hidden", "true");
+    this.dom.chatBackdrop.hidden = true;
+    this.dom.btnChatOpen.setAttribute("aria-expanded", "false");
+  }
+
+  clearChat() {
+    this.chatHistory = [];
+    this.chatPending = [];
+    this.dom.chatMessages.innerHTML = "";
+    this.dom.chatPending.hidden = true;
+    this.dom.chatPending.innerHTML = "";
+    this.renderChatWelcome();
+  }
+
+  renderChatWelcome() {
+    if (this.dom.chatMessages.children.length) return;
+    this.appendChatMessage(
+      "system",
+      "Preguntá por un cliente, pedí un check-in OK con nota, o un informe SEO. Las acciones de plata piden confirmación."
+    );
+  }
+
+  updateChatContextLabel() {
+    if (!this.dom.chatContextLabel) return;
+    const client = this.chatFocusClientId
+      ? this.clients.find((c) => c.id === this.chatFocusClientId)
+      : this.module === "seo"
+        ? this.clients.find((c) => GscModule.hostOf(c.siteUrl) === this.seoHost)
+        : null;
+    const parts = [];
+    if (this.module === "today") parts.push("Hoy");
+    else if (this.module === "clients") parts.push("Clientes");
+    else parts.push("SEO");
+    if (client) parts.push(client.name);
+    else if (this.seoHost && this.module === "seo") parts.push(this.seoHost);
+    this.dom.chatContextLabel.textContent = parts.join(" · ") || "Ops general";
+  }
+
+  chatContext() {
+    const client = this.chatFocusClientId
+      ? this.clients.find((c) => c.id === this.chatFocusClientId)
+      : this.module === "seo"
+        ? this.clients.find((c) => GscModule.hostOf(c.siteUrl) === this.seoHost)
+        : this.notebookClientId
+          ? this.clients.find((c) => c.id === this.notebookClientId)
+          : null;
+    return {
+      module: this.module,
+      clientId: client?.id || this.chatFocusClientId || "",
+      clientName: client?.name || "",
+      host: this.seoHost || (client ? GscModule.hostOf(client.siteUrl) : ""),
+    };
+  }
+
+  appendChatMessage(role, text) {
+    const el = document.createElement("div");
+    el.className = `chat-msg chat-msg--${role === "user" ? "user" : role === "tools" ? "tools" : role === "system" ? "system" : "bot"}`;
+    el.textContent = text;
+    this.dom.chatMessages.appendChild(el);
+    this.dom.chatMessages.scrollTop = this.dom.chatMessages.scrollHeight;
+    return el;
+  }
+
+  setChatBusy(busy) {
+    this.chatBusy = busy;
+    this.dom.chatDrawer.classList.toggle("is-busy", busy);
+    this.dom.chatSend.disabled = busy;
+  }
+
+  renderChatPending() {
+    const box = this.dom.chatPending;
+    box.innerHTML = "";
+    if (!this.chatPending.length) {
+      box.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    this.chatPending.forEach((item, index) => {
+      const card = document.createElement("div");
+      card.className = "chat-confirm";
+      const p = document.createElement("p");
+      p.textContent = item.label || item.tool;
+      const actions = document.createElement("div");
+      actions.className = "chat-confirm__actions";
+      const ok = document.createElement("button");
+      ok.type = "button";
+      ok.className = "btn btn--neon btn--sm";
+      ok.dataset.confirmIndex = String(index);
+      ok.textContent = "Confirmar";
+      const no = document.createElement("button");
+      no.type = "button";
+      no.className = "btn btn--ghost btn--sm";
+      no.dataset.rejectIndex = String(index);
+      no.textContent = "Cancelar";
+      actions.append(ok, no);
+      card.append(p, actions);
+      box.appendChild(card);
+    });
+  }
+
+  async handleChatSubmit(e) {
+    e.preventDefault();
+    const message = this.dom.chatInput.value.trim();
+    if (!message || this.chatBusy) return;
+    if (this.geminiConfigured === false) {
+      this.showToast("Configurá gemini.json primero");
+      return;
+    }
+
+    this.dom.chatInput.value = "";
+    this.appendChatMessage("user", message);
+    this.chatHistory.push({ role: "user", text: message });
+    this.setChatBusy(true);
+
+    try {
+      const data = await ChatModule.send(message, this.chatHistory.slice(0, -1), this.chatContext());
+      if (data.store) this.applyRemoteStore(data.store);
+
+      if (Array.isArray(data.tools) && data.tools.length) {
+        const lines = data.tools.map((t) => {
+          const mark = t.pending ? "⏳" : t.ok ? "✓" : "✗";
+          return `${mark} ${t.tool}`;
+        });
+        this.appendChatMessage("tools", lines.join("\n"));
+      }
+
+      const reply = data.reply || "Listo.";
+      this.appendChatMessage("bot", reply);
+      this.chatHistory.push({ role: "model", text: reply });
+
+      if (Array.isArray(data.pending) && data.pending.length) {
+        this.chatPending = [...this.chatPending, ...data.pending];
+        this.renderChatPending();
+      }
+
+      if (Array.isArray(data.reports) && data.reports.length) {
+        const md = data.reports[data.reports.length - 1].markdown;
+        this.openMarkdownBrief(md, data.reports[data.reports.length - 1].tool || "Informe");
+      }
+    } catch (err) {
+      this.appendChatMessage("bot", err.message || "Error del copiloto");
+      this.showToast(err.message || "Error del copiloto", 4000);
+    } finally {
+      this.setChatBusy(false);
+    }
+  }
+
+  async handleChatPendingClick(e) {
+    const confirmBtn = e.target.closest("[data-confirm-index]");
+    const rejectBtn = e.target.closest("[data-reject-index]");
+    if (!confirmBtn && !rejectBtn) return;
+
+    const index = Number(
+      confirmBtn ? confirmBtn.dataset.confirmIndex : rejectBtn.dataset.rejectIndex
+    );
+    const item = this.chatPending[index];
+    if (!item) return;
+
+    if (rejectBtn) {
+      this.chatPending.splice(index, 1);
+      this.renderChatPending();
+      this.appendChatMessage("system", `Cancelado: ${item.label || item.tool}`);
+      return;
+    }
+
+    this.setChatBusy(true);
+    try {
+      const data = await ChatModule.runAction(item.tool, item.args || {}, { confirmed: true });
+      if (data.store) this.applyRemoteStore(data.store);
+      this.chatPending.splice(index, 1);
+      this.renderChatPending();
+      this.appendChatMessage("system", `Confirmado: ${item.label || item.tool}`);
+      this.showToast("Acción confirmada");
+    } catch (err) {
+      this.showToast(err.message || "No se pudo confirmar");
+    } finally {
+      this.setChatBusy(false);
+    }
+  }
+
+  async showChatAudit() {
+    this.setChatBusy(true);
+    try {
+      const entries = await ChatModule.audit(20, this.chatContext().clientId || "");
+      if (!entries.length) {
+        this.appendChatMessage("system", "Audit vacío todavía.");
+        return;
+      }
+      const lines = entries.slice(0, 12).map((row) => {
+        const when = row.ts ? new Date(row.ts).toLocaleString("es-CL") : "—";
+        const ok = row.ok === false ? "✗" : "✓";
+        return `${ok} ${when} · ${row.actor || "?"} · ${row.tool || "?"}`;
+      });
+      this.appendChatMessage("tools", lines.join("\n"));
+    } catch (err) {
+      this.showToast(err.message || "No se pudo leer el historial");
+    } finally {
+      this.setChatBusy(false);
+    }
+  }
+
+  openMarkdownBrief(markdown, title = "Informe") {
+    const esc = (s) =>
+      String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    const html = markdown
+      .split("\n")
+      .map((line) => {
+        if (line.startsWith("# ")) return `<h1>${esc(line.slice(2))}</h1>`;
+        if (line.startsWith("## ")) return `<h2>${esc(line.slice(3))}</h2>`;
+        if (line.startsWith("- ")) return `<li>${esc(line.slice(2))}</li>`;
+        if (line.trim() === "") return "";
+        return `<p>${esc(line)}</p>`;
+      })
+      .join("\n");
+    this.dom.seoBriefBody.innerHTML = `
+      <header class="brief__head">
+        <div>
+          <p class="brief__brand">Mono Studio · Copiloto</p>
+          <h1>${esc(title)}</h1>
+        </div>
+      </header>
+      <section class="brief__section brief__section--md">${html}</section>
+    `;
+    this.dom.seoBrief.hidden = false;
+    this.dom.seoBrief.setAttribute("aria-hidden", "false");
+    this.dom.seoBrief.scrollTop = 0;
+  }
+
+  static checkInLabel(status) {
+    return { ok: "OK", follow_up: "Seguimiento", blocked: "Bloqueado" }[status] || status;
   }
 
   openModal(id) {
@@ -1208,6 +1578,9 @@ class AppController {
   selectSeoHost(host) {
     this.seoHost = host;
     localStorage.setItem(Store.KEYS.seoHost, host);
+    const client = this.clients.find((c) => GscModule.hostOf(c.siteUrl) === host);
+    if (client) this.chatFocusClientId = client.id;
+    this.updateChatContextLabel();
     this.renderSeo();
     if (!SeoStore.get(host)) this.loadSeoHost(host);
   }
@@ -2234,6 +2607,8 @@ class AppController {
     const client = this.clients.find((c) => c.id === id);
     if (!client) return;
     this.notebookClientId = id;
+    this.chatFocusClientId = id;
+    this.updateChatContextLabel();
     this.dom.notebookTitle.textContent = client.name;
     const site = (client.siteUrl || "").trim();
     this.dom.notebookSite.hidden = !site;
@@ -2541,6 +2916,18 @@ class AppController {
       value.textContent = FinanceModule.formatCLP(client.valueCLP);
       sub.append(countdown, value);
       meta.append(dateEl, nameEl, sub);
+
+      if (client.lastCheckIn?.status) {
+        const pill = document.createElement("span");
+        pill.className = `checkin-pill is-${client.lastCheckIn.status}`;
+        const age = client.lastCheckIn.at
+          ? Math.floor((Date.now() - Number(client.lastCheckIn.at)) / 86400000)
+          : null;
+        pill.textContent =
+          AppController.checkInLabel(client.lastCheckIn.status) +
+          (age === 0 ? " · hoy" : age != null ? ` · hace ${age}d` : "");
+        meta.appendChild(pill);
+      }
 
       const actions = document.createElement("div");
       actions.className = "timeline-row__actions";

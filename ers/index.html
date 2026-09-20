@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Mono Studio OS — base de operaciones diaria" />
   <title>Mono Studio OS</title>
-  <link rel="stylesheet" href="styles.css?v=20260908b" />
+  <link rel="stylesheet" href="styles.css?v=20260920a" />
 </head>
 <body>
 
@@ -49,6 +49,9 @@
           <span class="stat__label">Alertas SEO</span>
           <strong class="stat__value" id="statAlertsValue">—</strong>
           <em class="stat__meta" id="statAlertsMeta">Sin revisar</em>
+        </button>
+        <button class="icon-btn chat-launch" id="btnChatOpen" type="button" title="Copiloto" aria-label="Abrir copiloto" aria-expanded="false" aria-controls="chatDrawer">
+          ◈
         </button>
       </div>
     </header>
@@ -372,7 +375,10 @@
           <span>Nueva nota</span>
           <textarea name="body" id="notebookBody" required maxlength="4000" rows="3" placeholder="Acuerdos, pendientes…"></textarea>
         </label>
-        <button type="submit" class="btn btn--neon btn--block">Guardar</button>
+        <div class="notebook__actions">
+          <button type="button" class="btn btn--ghost" id="btnNotebookChat">Preguntar al copiloto</button>
+          <button type="submit" class="btn btn--neon">Guardar</button>
+        </div>
       </form>
     </div>
   </div>
@@ -386,7 +392,34 @@
     <div class="seo-brief__body" id="seoBriefBody"></div>
   </div>
 
-  <script src="app.js?v=20260908b"></script>
+  <!-- ============ COPILOTO ============ -->
+  <div class="chat-drawer" id="chatDrawer" hidden aria-hidden="true">
+    <header class="chat-drawer__head">
+      <div>
+        <p class="chat-drawer__kicker">Copiloto</p>
+        <h2>Mono Studio AI</h2>
+      </div>
+      <div class="chat-drawer__actions">
+        <button type="button" class="btn btn--ghost btn--sm" id="btnChatAudit" title="Historial de acciones">Historial</button>
+        <button type="button" class="btn btn--ghost btn--sm" id="btnChatClear" title="Limpiar chat">Limpiar</button>
+        <button type="button" class="modal__close" id="btnChatClose" aria-label="Cerrar">✕</button>
+      </div>
+    </header>
+    <p class="chat-drawer__context" id="chatContextLabel">Ops general</p>
+    <div class="chat-drawer__messages" id="chatMessages" role="log" aria-live="polite"></div>
+    <div class="chat-drawer__pending" id="chatPending" hidden></div>
+    <form class="chat-drawer__composer" id="chatForm">
+      <label class="field">
+        <span class="visually-hidden">Mensaje al copiloto</span>
+        <textarea id="chatInput" name="message" rows="2" maxlength="4000" required placeholder="Ej: ¿Cómo está Clínica Andes? Dejala OK…"></textarea>
+      </label>
+      <button type="submit" class="btn btn--neon" id="chatSend">Enviar</button>
+    </form>
+    <p class="chat-drawer__hint" id="chatHint">Las acciones de cobro piden confirmación. Todo queda en el audit log.</p>
+  </div>
+  <div class="chat-backdrop" id="chatBackdrop" hidden></div>
+
+  <script src="app.js?v=20260920a"></script>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </body>

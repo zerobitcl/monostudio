@@ -4,6 +4,10 @@ ers/.htpasswd
 # Persistencia operativa (vive en el servidor; el deploy no debe pisarla)
 ers/data/store.json
 ers/data/gsc.json
+ers/data/audit.jsonl
+
+# Copiloto Gemini
+ers/data/gemini.json
 
 # Search Console: cuenta de servicio, token y caché
 ers/data/gsc-service-account.json
@@ -16,3 +20,4 @@ ers/data/*-*.json
 !ers/data/gsc-service-account.example.json
 !ers/data/store.example.json
 !ers/data/gsc.example.json
+!ers/data/gemini.example.json
