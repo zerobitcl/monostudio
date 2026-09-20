@@ -20,7 +20,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $cfg = ersLoadGeminiConfig();
     echo json_encode([
         'configured' => ($cfg['apiKey'] ?? '') !== '',
-        'model' => $cfg['model'] ?? 'gemini-2.0-flash',
+        'model' => $cfg['model'] ?? 'gemini-3.6-flash',
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -35,16 +35,16 @@ function ersLoadGeminiConfig(): array
 {
     $path = ersDataDir() . '/gemini.json';
     if (!file_exists($path)) {
-        return ['apiKey' => '', 'model' => 'gemini-2.0-flash'];
+        return ['apiKey' => '', 'model' => 'gemini-3.6-flash'];
     }
     $raw = file_get_contents($path);
     $data = is_string($raw) ? json_decode($raw, true) : null;
     if (!is_array($data)) {
-        return ['apiKey' => '', 'model' => 'gemini-2.0-flash'];
+        return ['apiKey' => '', 'model' => 'gemini-3.6-flash'];
     }
     return [
         'apiKey' => trim((string) ($data['apiKey'] ?? $data['api_key'] ?? '')),
-        'model' => trim((string) ($data['model'] ?? 'gemini-2.0-flash')) ?: 'gemini-2.0-flash',
+        'model' => trim((string) ($data['model'] ?? 'gemini-3.6-flash')) ?: 'gemini-3.6-flash',
     ];
 }
 
