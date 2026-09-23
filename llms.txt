@@ -1,23 +1,35 @@
 # Mono Studio
-> Agencia de crecimiento digital y desarrollo web premium en Chile.
 
-## Quiénes somos
-Mono Studio integra diseño de autor (Andrea) e ingeniería web nativa (Eduardo). Construimos marcas, sitios y software a medida sin plantillas ni frameworks pesados. PageSpeed 95+, SEO técnico y conversión directa vía WhatsApp.
+> Estudio de diseño y desarrollo de páginas web en Chile. Hacemos sitios pensados para aparecer en Google, ser entendidos y recomendados por asistentes de IA, y convertir visitas en clientes.
 
-## Servicios principales
-- Diseño Web Profesional: https://monostudio.cl/diseno-web-profesional.html
-- Posicionamiento SEO Chile: https://monostudio.cl/posicionamiento-seo-chile.html
-- Identidad de Marca y Branding: https://monostudio.cl/identidad-de-marca-chile.html
-- Desarrollo de Aplicaciones Web: https://monostudio.cl/desarrollo-aplicaciones-web.html
-- Optimización de Velocidad (WPO): https://monostudio.cl/optimizacion-velocidad-wpo.html
+Sitio principal (una sola página): https://monostudio.cl/
+
+## Equipo
+- Andrea: diseño, identidad de marca y UI/UX.
+- Eduardo: ingeniería de software, SEO técnico y optimización para asistentes de IA.
+
+## Servicios
+- Diseño y desarrollo de páginas web a medida.
+- Posicionamiento en Google (SEO técnico y local).
+- Optimización para asistentes de IA (ChatGPT, Gemini, Perplexity): contenido claro y datos estructurados.
+- Aplicaciones web e identidad de marca.
+
+## Trabajos (webs hechas por Mono Studio)
+- https://abogadoricardohidalgo.cl/ — Abogado en La Serena
+- https://celius.cl/ — Climatización en Rancagua
+- https://casasprefabricadascoquimbo.cl/ — Casas prefabricadas en Coquimbo
+- https://felipecallegari.cl/ — Concesionario DFSK en Ovalle
+- https://hostalinfante.cl/ — Hostal en Canela
+- https://mantecalaunion.cl/ — Fábrica de mantecas y grasas
+- https://frescora.cl/ — Climatización en La Serena, Coquimbo y Ovalle
+- https://consilio.cl/ — Abogados de empresa
+- https://abogadoslegaltamaya.cl/ — Abogados en Ovalle y Copiapó
+- https://guayacanspa.cl/ — Constructora en La Serena y Coquimbo
+- https://kinorovalle.cl/ — Kinesiología en Ovalle
+
+## Cobertura
+Todo Chile, trabajo a distancia. Clientes desde Copiapó hasta Los Lagos.
 
 ## Contacto
 - WhatsApp: +56 9 9428 4048 — https://wa.me/56994284048
 - Email: hola@monostudio.cl
-- País: Chile (CL)
-
-## Tecnología
-HTML5, CSS3, JavaScript vanilla. Optimizado para Hostinger y Core Web Vitals.
-
-## Sitemap
-https://monostudio.cl/sitemap.xml

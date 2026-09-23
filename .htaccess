@@ -20,8 +20,8 @@
   RewriteCond %{THE_REQUEST} \s/index\.html[\s?] [NC]
   RewriteRule ^index\.html$ / [R=301,L]
 
-  # Bloquear archivo legacy (no indexar ni servir)
-  RewriteRule ^index_vak\.html$ - [F,L]
+  # Sitio de una sola página: las URLs antiguas transfieren su autoridad a la home
+  RewriteRule ^(diseno-web-profesional|desarrollo-aplicaciones-web|posicionamiento-seo-chile|identidad-de-marca-chile|optimizacion-velocidad-wpo|index_vak)\.html$ / [R=301,L]
 </IfModule>
 
 # ---- Página de error personalizada ----

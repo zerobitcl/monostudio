@@ -1,28 +1,37 @@
 # Mono Studio — https://monostudio.cl
-# Última actualización: 2026-06-26
 
 User-agent: *
 Allow: /
-Disallow: /index_vak.html
+Disallow: /ers/
 Disallow: /serve.log
 
-# Rastreadores de IA (opcional: permitir para visibilidad en asistentes)
+# Rastreadores de IA: permitidos a propósito, ser citados por asistentes es parte de la propuesta
 User-agent: GPTBot
 Allow: /
+Disallow: /ers/
+
+User-agent: OAI-SearchBot
+Allow: /
+Disallow: /ers/
 
 User-agent: ChatGPT-User
 Allow: /
+Disallow: /ers/
 
 User-agent: Google-Extended
 Allow: /
-
-User-agent: anthropic-ai
-Allow: /
+Disallow: /ers/
 
 User-agent: ClaudeBot
 Allow: /
+Disallow: /ers/
+
+User-agent: Claude-SearchBot
+Allow: /
+Disallow: /ers/
 
 User-agent: PerplexityBot
 Allow: /
+Disallow: /ers/
 
 Sitemap: https://monostudio.cl/sitemap.xml
