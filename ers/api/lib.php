@@ -160,6 +160,12 @@ function ersSanitizeClients($clients): array
     return $out;
 }
 
+/** 3 = alta, 2 = media, 1 = baja (misma escala que los watches). */
+function ersTaskPriority(mixed $value): int
+{
+    return max(1, min(3, (int) $value ?: 2));
+}
+
 function ersSanitizeTasks($tasks): array
 {
     if (!is_array($tasks)) {
@@ -167,7 +173,7 @@ function ersSanitizeTasks($tasks): array
     }
 
     $out = [];
-    foreach (array_slice($tasks, 0, 500) as $task) {
+    foreach (array_slice($tasks, 0, 1500) as $task) {
         if (!is_array($task)) {
             continue;
         }
@@ -179,6 +185,11 @@ function ersSanitizeTasks($tasks): array
             'id' => ersClip((string) ($task['id'] ?? ''), 64),
             'title' => ersClip($title, 240),
             'clientId' => ersClip((string) ($task['clientId'] ?? ''), 64),
+            'parentId' => ersClip((string) ($task['parentId'] ?? ''), 64),
+            'area' => ersClip(trim((string) ($task['area'] ?? '')), 40),
+            'priority' => ersTaskPriority($task['priority'] ?? 2),
+            'status' => ($task['status'] ?? '') === 'someday' ? 'someday' : 'open',
+            'notes' => ersClip(trim((string) ($task['notes'] ?? '')), 1000),
             'kind' => ersClip((string) ($task['kind'] ?? 'manual'), 24),
             'ref' => ersClip((string) ($task['ref'] ?? ''), 500),
             'dueDate' => preg_match('#^\d{4}-\d{2}-\d{2}$#', (string) ($task['dueDate'] ?? ''))
@@ -406,8 +417,16 @@ function ersBuildAgenda(array $store): array
         ];
     }
 
+    $openSubtasks = [];
     foreach ($store['tasks'] as $task) {
-        if (!empty($task['doneAt'])) {
+        $parentId = (string) ($task['parentId'] ?? '');
+        if ($parentId !== '' && empty($task['doneAt'])) {
+            $openSubtasks[$parentId][] = (string) ($task['title'] ?? '');
+        }
+    }
+
+    foreach ($store['tasks'] as $task) {
+        if (!empty($task['doneAt']) || ($task['parentId'] ?? '') !== '' || ($task['status'] ?? '') === 'someday') {
             continue;
         }
         $clientName = '';
@@ -417,15 +436,18 @@ function ersBuildAgenda(array $store): array
                 break;
             }
         }
+        $id = (string) ($task['id'] ?? '');
         $items[] = [
             'type' => 'task',
-            'id' => $task['id'] ?? '',
+            'id' => $id,
             'clientId' => $task['clientId'] ?? '',
             'clientName' => $clientName,
+            'area' => $task['area'] ?? '',
             'title' => $task['title'] ?? '',
             'dueDate' => $task['dueDate'] ?? '',
             'kind' => $task['kind'] ?? 'manual',
-            'priority' => 2,
+            'subtasks' => $openSubtasks[$id] ?? [],
+            'priority' => (int) ($task['priority'] ?? 2) + 1,
         ];
     }
 
@@ -1029,6 +1051,11 @@ function ersActionAddTask(array $args, string $actor): array
         'id' => ersUuid(),
         'title' => ersClip($title, 240),
         'clientId' => $clientId,
+        'parentId' => '',
+        'area' => ersClip(trim((string) ($args['area'] ?? '')), 40),
+        'priority' => ersTaskPriority($args['priority'] ?? 2),
+        'status' => ($args['someday'] ?? false) ? 'someday' : 'open',
+        'notes' => ersClip(trim((string) ($args['notes'] ?? '')), 1000),
         'kind' => 'manual',
         'ref' => '',
         'dueDate' => $dueDate,
@@ -1043,7 +1070,7 @@ function ersActionAddTask(array $args, string $actor): array
     ersAuditAppend([
         'actor' => $actor,
         'tool' => 'addTask',
-        'args' => ['title' => $task['title'], 'clientId' => $clientId, 'dueDate' => $dueDate],
+        'args' => ['title' => $task['title'], 'clientId' => $clientId, 'dueDate' => $dueDate, 'priority' => $task['priority'], 'area' => $task['area']],
         'clientId' => $clientId,
         'ok' => true,
         'undo' => ['type' => 'deleteTask', 'taskId' => $task['id']],
@@ -1381,6 +1408,86 @@ function ersLoadDailySecret(): string
     return '';
 }
 
+function ersLoadGeminiConfig(): array
+{
+    $path = ersDataDir() . '/gemini.json';
+    if (!file_exists($path)) {
+        return ['apiKey' => '', 'model' => 'gemini-3.6-flash'];
+    }
+    $raw = file_get_contents($path);
+    $data = is_string($raw) ? json_decode($raw, true) : null;
+    if (!is_array($data)) {
+        return ['apiKey' => '', 'model' => 'gemini-3.6-flash'];
+    }
+    return [
+        'apiKey' => trim((string) ($data['apiKey'] ?? $data['api_key'] ?? '')),
+        'model' => trim((string) ($data['model'] ?? 'gemini-3.6-flash')) ?: 'gemini-3.6-flash',
+    ];
+}
+
+function ersGeminiUrl(array $cfg): string
+{
+    return 'https://generativelanguage.googleapis.com/v1beta/models/' . rawurlencode($cfg['model'])
+        . ':generateContent?key=' . rawurlencode($cfg['apiKey']);
+}
+
+function ersGeminiHttp(string $url, array $payload, int $timeout = 60): array
+{
+    $body = json_encode($payload, JSON_UNESCAPED_UNICODE);
+    if ($body === false) {
+        throw new RuntimeException('No se pudo serializar el request a Gemini');
+    }
+
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+            CURLOPT_POSTFIELDS => $body,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => $timeout,
+        ]);
+        $raw = curl_exec($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+        if ($raw === false) {
+            throw new RuntimeException('Gemini: ' . ($err ?: 'sin respuesta'));
+        }
+        $data = json_decode($raw, true);
+        if ($code >= 400) {
+            $msg = is_array($data) ? ($data['error']['message'] ?? $raw) : $raw;
+            throw new RuntimeException('Gemini HTTP ' . $code . ': ' . ersClip((string) $msg, 400));
+        }
+        if (!is_array($data)) {
+            throw new RuntimeException('Respuesta Gemini inválida');
+        }
+        return $data;
+    }
+
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => 'POST',
+            'header' => "Content-Type: application/json\r\n",
+            'content' => $body,
+            'timeout' => $timeout,
+            'ignore_errors' => true,
+        ],
+    ]);
+    $raw = file_get_contents($url, false, $ctx);
+    if ($raw === false) {
+        throw new RuntimeException('Gemini: sin respuesta');
+    }
+    $data = json_decode($raw, true);
+    if (!is_array($data)) {
+        throw new RuntimeException('Respuesta Gemini inválida');
+    }
+    if (isset($data['error'])) {
+        throw new RuntimeException('Gemini: ' . ersClip((string) ($data['error']['message'] ?? 'error'), 400));
+    }
+    return $data;
+}
+
 /**
  * Cron diario: watches vencidos → alarma; due hoy/próximos → tarea en Hoy.
  * @return array{ok:bool, date:string, createdTasks:int, alarms:int, items:array}
@@ -1691,10 +1798,12 @@ function ersGeminiToolDeclarations(): array
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
-                    'title' => $str('Qué hay que hacer'),
+                    'title' => $str('Qué hay que hacer, empezando con verbo'),
                     'clientId' => $str('UUID opcional'),
                     'name' => $str('Nombre del cliente si no hay UUID'),
                     'dueDate' => $str('YYYY-MM-DD opcional'),
+                    'priority' => $num('3 alta, 2 media (default), 1 baja'),
+                    'area' => $str('Área: Personal, Mono Studio, Casa, etc. Vacío si es de un cliente'),
                 ],
                 'required' => ['title'],
             ],

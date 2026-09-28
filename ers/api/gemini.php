@@ -31,23 +31,6 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-function ersLoadGeminiConfig(): array
-{
-    $path = ersDataDir() . '/gemini.json';
-    if (!file_exists($path)) {
-        return ['apiKey' => '', 'model' => 'gemini-3.6-flash'];
-    }
-    $raw = file_get_contents($path);
-    $data = is_string($raw) ? json_decode($raw, true) : null;
-    if (!is_array($data)) {
-        return ['apiKey' => '', 'model' => 'gemini-3.6-flash'];
-    }
-    return [
-        'apiKey' => trim((string) ($data['apiKey'] ?? $data['api_key'] ?? '')),
-        'model' => trim((string) ($data['model'] ?? 'gemini-3.6-flash')) ?: 'gemini-3.6-flash',
-    ];
-}
-
 function ersGeminiSystemPrompt(array $context): string
 {
     $module = (string) ($context['module'] ?? 'today');
@@ -96,68 +79,13 @@ TOOLS
 - No llames getClient + addNote/addWatch en paralelo: o pasá el nombre directo, o esperá el id.
 - Cobro / valor plan / cerrar solicitud: llamá la tool; el sistema pide confirmación.
 - Informe largo de un sitio: generarInformeSeo y en el chat solo un resumen corto.
+- Tareas sueltas: addTask con title que empiece con verbo, priority (3 alta, 2 media, 1 baja) y area (Personal, Mono Studio…) si no es de un cliente.
+- Si el usuario vuelca MÁS DE 4 pendientes de una vez, no crees tareas una por una: decile que use el botón "Vaciar cabeza" en Hoy (ordena todo con jerarquía y lo revisa antes de guardar).
 
 Contexto UI: módulo={$module}; clienteId={$clientId}; clienteNombre={$clientName}; hostSEO={$host}.
 Hosts con sitio en cartera: {$hostsLine}.
 Si dice "este cliente" / "este sitio" y hay id/host, usalos. Si pregunta en general, ignorá hostSEO y usá getPortfolioSeo.
 TXT;
-}
-
-function ersGeminiHttp(string $url, array $payload, int $timeout = 60): array
-{
-    $body = json_encode($payload, JSON_UNESCAPED_UNICODE);
-    if ($body === false) {
-        throw new RuntimeException('No se pudo serializar el request a Gemini');
-    }
-
-    if (function_exists('curl_init')) {
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_POST => true,
-            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
-            CURLOPT_POSTFIELDS => $body,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => $timeout,
-        ]);
-        $raw = curl_exec($ch);
-        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $err = curl_error($ch);
-        curl_close($ch);
-        if ($raw === false) {
-            throw new RuntimeException('Gemini: ' . ($err ?: 'sin respuesta'));
-        }
-        $data = json_decode($raw, true);
-        if ($code >= 400) {
-            $msg = is_array($data) ? ($data['error']['message'] ?? $raw) : $raw;
-            throw new RuntimeException('Gemini HTTP ' . $code . ': ' . ersClip((string) $msg, 400));
-        }
-        if (!is_array($data)) {
-            throw new RuntimeException('Respuesta Gemini inválida');
-        }
-        return $data;
-    }
-
-    $ctx = stream_context_create([
-        'http' => [
-            'method' => 'POST',
-            'header' => "Content-Type: application/json\r\n",
-            'content' => $body,
-            'timeout' => $timeout,
-            'ignore_errors' => true,
-        ],
-    ]);
-    $raw = file_get_contents($url, false, $ctx);
-    if ($raw === false) {
-        throw new RuntimeException('Gemini: sin respuesta');
-    }
-    $data = json_decode($raw, true);
-    if (!is_array($data)) {
-        throw new RuntimeException('Respuesta Gemini inválida');
-    }
-    if (isset($data['error'])) {
-        throw new RuntimeException('Gemini: ' . ersClip((string) ($data['error']['message'] ?? 'error'), 400));
-    }
-    return $data;
 }
 
 function ersExtractModelParts(array $response): array
@@ -336,9 +264,7 @@ $payloadBase = [
     ],
 ];
 
-$model = rawurlencode($cfg['model']);
-$url = 'https://generativelanguage.googleapis.com/v1beta/models/' . $model . ':generateContent?key='
-    . rawurlencode($cfg['apiKey']);
+$url = ersGeminiUrl($cfg);
 
 $pending = [];
 $toolTrace = [];

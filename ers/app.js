@@ -21,6 +21,14 @@ const URGENT_DAYS = 3;
 /** Días de anticipación con que las tareas futuras entran a la agenda. */
 const TASK_LOOKAHEAD_DAYS = 7;
 
+/** Una tarea sin fecha que lleva este tiempo abierta se sugiere archivar o reprogramar. */
+const STALE_UNDATED_DAYS = 14;
+
+/** Una tarea vencida hace este tiempo ya no es "urgente": es una fecha mal puesta. */
+const STALE_OVERDUE_DAYS = 7;
+
+const PRIORITY_LABELS = { 3: "Alta", 2: "Media", 1: "Baja" };
+
 const TIMER_TICK_MS = 60 * 1000;
 const TIMER_TICK_LITE_MS = 5 * 60 * 1000;
 
@@ -35,6 +43,7 @@ class Store {
     seoHost: "monoStudio.seoHost",
     seoPeriod: "monoStudio.seoPeriod",
     seoCache: "monoStudio.seoCache.v2",
+    lastReview: "monoStudio.lastReview",
   };
 
   static API = "./api/store.php";
@@ -550,6 +559,84 @@ class ChatModule {
 }
 
 /* ------------------------------------------------------------
+   Tareas: jerarquía (1 nivel), estancamiento y reprogramación
+   ------------------------------------------------------------ */
+class TaskModule {
+  static childrenMap(tasks) {
+    const map = new Map();
+    tasks.forEach((t) => {
+      if (!t.parentId) return;
+      if (!map.has(t.parentId)) map.set(t.parentId, []);
+      map.get(t.parentId).push(t);
+    });
+    return map;
+  }
+
+  static isRoot(task) {
+    return !task.parentId;
+  }
+
+  static isOpenRoot(task) {
+    return !task.doneAt && !task.parentId;
+  }
+
+  static ageDays(task) {
+    if (!task.createdAt) return 0;
+    return Math.floor((Date.now() - Number(task.createdAt)) / 86400000);
+  }
+
+  /** Fecha efectiva: la más cercana entre la tarea y sus pasos abiertos. */
+  static effectiveDue(task, children = []) {
+    return [task.dueDate, ...children.filter((c) => !c.doneAt).map((c) => c.dueDate)]
+      .filter(Boolean)
+      .sort()[0] || "";
+  }
+
+  static isStale(task, children = []) {
+    if (task.doneAt || task.parentId || task.status === "someday") return false;
+    const due = TaskModule.effectiveDue(task, children);
+    if (due) return BillingModule.daysUntil(due) <= -STALE_OVERDUE_DAYS;
+    return TaskModule.ageDays(task) >= STALE_UNDATED_DAYS;
+  }
+
+  /** Lun–jue → viernes de esta semana; vie–dom → lunes siguiente. */
+  static rescheduleDate(now = new Date()) {
+    const d = BillingModule.startOfDay(now);
+    const dow = d.getDay();
+    const offset = dow >= 1 && dow <= 4 ? 5 - dow : (8 - dow) % 7;
+    d.setDate(d.getDate() + offset);
+    return BillingModule.toISODate(d);
+  }
+
+  static areas(tasks) {
+    const set = new Set();
+    tasks.forEach((t) => {
+      if (!t.doneAt && t.area) set.add(t.area);
+    });
+    return [...set].sort((a, b) => a.localeCompare(b, "es"));
+  }
+
+  static create(fields) {
+    return {
+      id: crypto.randomUUID(),
+      title: "",
+      clientId: "",
+      parentId: "",
+      area: "",
+      priority: 2,
+      status: "open",
+      notes: "",
+      kind: "manual",
+      ref: "",
+      dueDate: "",
+      createdAt: Date.now(),
+      doneAt: 0,
+      ...fields,
+    };
+  }
+}
+
+/* ------------------------------------------------------------
    Agenda: un solo modelo de item para todo lo pendiente
    ------------------------------------------------------------ */
 class Agenda {
@@ -562,7 +649,13 @@ class Agenda {
       ...Agenda.#fromRequests(requests, clients),
       ...Agenda.#fromTasks(tasks, clients),
       ...Agenda.#fromSeo(clients),
-    ].sort((a, b) => b.severity - a.severity || a.title.localeCompare(b.title));
+    ].sort(
+      (a, b) =>
+        b.severity - a.severity ||
+        (b.priority ?? 2) - (a.priority ?? 2) ||
+        (a.due || "9999").localeCompare(b.due || "9999") ||
+        a.title.localeCompare(b.title)
+    );
   }
 
   static #fromBilling(clients) {
@@ -681,31 +774,62 @@ class Agenda {
 
   static #fromTasks(tasks, clients) {
     const items = [];
+    const children = TaskModule.childrenMap(tasks);
+
     tasks
-      .filter((t) => !t.doneAt)
+      .filter((t) => TaskModule.isOpenRoot(t) && t.status !== "someday")
       .forEach((task) => {
         const client = clients.find((c) => c.id === task.clientId);
-        let severity = 2;
-        let detail = "Tarea sin fecha";
+        const subs = children.get(task.id) || [];
+        const due = TaskModule.effectiveDue(task, subs);
+        const priority = Number(task.priority) || 2;
+        const stale = TaskModule.isStale(task, subs);
 
-        if (task.dueDate) {
-          const days = BillingModule.daysUntil(task.dueDate);
+        // Sin fecha, la prioridad es la única señal de orden; con fecha, manda la fecha.
+        let severity = priority >= 3 ? 2 : 1;
+        let when = "Sin fecha";
+        if (due) {
+          const days = BillingModule.daysUntil(due);
           if (days > TASK_LOOKAHEAD_DAYS) return;
-          severity = days <= 0 ? 3 : days <= 2 ? 2 : 1;
-          detail = BillingModule.relativeLabel(days);
+          severity = days <= 0 ? 3 : days <= 2 ? 2 : Math.max(1, severity);
+          when = BillingModule.relativeLabel(days);
         }
+        if (stale) {
+          severity = 1;
+          when = due
+            ? `${when} · ¿sigue vigente?`
+            : `Sin movimiento hace ${TaskModule.ageDays(task)} días · ¿sigue vigente?`;
+        }
+
+        const doneSubs = subs.filter((s) => s.doneAt).length;
+        const detail = [
+          when,
+          subs.length ? `${doneSubs}/${subs.length} paso${subs.length === 1 ? "" : "s"}` : "",
+          task.notes || "",
+        ].filter(Boolean).join(" · ");
 
         items.push({
           id: `task:${task.id}`,
           group: "task",
           severity,
+          priority,
+          due,
+          stale,
           title: task.title,
           detail,
+          area: task.area || "",
           clientId: client?.id || "",
-          clientName: client?.name || "",
+          clientName: client?.name || task.area || "",
+          subtasks: subs.map((s) => ({ id: s.id, title: s.title, done: !!s.doneAt })),
           actions: [
             { label: "Hecho", act: "task-done", value: task.id, primary: true },
             ...(task.ref ? [{ label: "Abrir", act: "link", value: task.ref }] : []),
+            ...(stale
+              ? [
+                  { label: "Reprogramar", act: "task-reschedule", value: task.id },
+                  { label: "Algún día", act: "task-someday", value: task.id },
+                ]
+              : []),
             { label: "Quitar", act: "task-delete", value: task.id, subtle: true },
           ],
         });
@@ -802,6 +926,8 @@ class AppController {
     this.dom = AppController.#collectDom();
   }
 
+  static MODALS = ["clientModal", "requestModal", "taskModal", "notebookModal", "dumpModal", "reviewModal"];
+
   static #collectDom() {
     const ids = [
       "panelToday", "panelClients", "panelSeo",
@@ -828,7 +954,10 @@ class AppController {
       "clientBillingDate", "clientPhone", "clientSiteUrl", "clientDev",
       "planAnual", "planMensual", "contactActions", "linkWhatsApp", "linkCall",
       "requestForm", "requestClientSelect",
-      "taskForm", "taskTitle", "taskClientSelect", "taskDueDate",
+      "taskForm", "taskTitle", "taskClientSelect", "taskDueDate", "taskArea",
+      "dumpModal", "dumpForm", "dumpText", "btnDumpMic", "btnDumpPlan", "dumpPreview", "dumpSummary",
+      "dumpQuestion", "dumpList", "btnDumpBack", "btnDumpSave", "areaOptions",
+      "reviewModal", "reviewBody", "btnReviewDone", "reviewBanner", "reviewBannerText",
       "notebookTitle", "notebookSite", "notebookList", "notebookWatches", "notebookEmpty", "notebookForm", "notebookBody",
       "btnNotebookChat",
       "nodeTooltip", "toast",
@@ -844,7 +973,8 @@ class AppController {
   }
 
   async init() {
-    ["clientModal", "requestModal", "taskModal", "notebookModal"].forEach((id) => this.closeModal(id));
+    AppController.MODALS.forEach((id) => this.closeModal(id));
+    this.initDictation();
     this.dom.btnViewOrbit.classList.toggle("is-active", this.view === "orbit");
     this.dom.btnViewList.classList.toggle("is-active", this.view === "list");
     this.applyExpanded();
@@ -933,18 +1063,43 @@ class AppController {
     document.querySelectorAll("[data-close]").forEach((btn) =>
       btn.addEventListener("click", () => this.closeModal(btn.dataset.close))
     );
-    [this.dom.clientModal, this.dom.requestModal, this.dom.taskModal, this.dom.notebookModal].forEach(
-      (backdrop) =>
-        backdrop.addEventListener("click", (e) => {
-          if (e.target === backdrop) this.closeModal(backdrop.id);
-        })
-    );
+    AppController.MODALS.forEach((id) => {
+      const backdrop = this.dom[id];
+      backdrop.addEventListener("pointerdown", (e) => {
+        this.backdropPress = e.target === backdrop;
+      });
+      backdrop.addEventListener("click", (e) => {
+        // El dump puede tener mucho texto dictado: solo se cierra si el click empezó y terminó fuera.
+        if (e.target === backdrop && this.backdropPress && id !== "dumpModal") this.closeModal(id);
+      });
+    });
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
       this.closeSeoReport();
       this.closeChat();
-      ["clientModal", "requestModal", "taskModal", "notebookModal"].forEach((id) => this.closeModal(id));
+      AppController.MODALS.forEach((id) => this.closeModal(id));
     });
+
+    document.getElementById("btnOpenDump").addEventListener("click", () => this.openDump());
+    document.getElementById("btnOpenReview").addEventListener("click", () => this.openReview());
+    document.getElementById("btnReviewStart").addEventListener("click", () => this.openReview());
+    document.getElementById("btnReviewSnooze").addEventListener("click", () => this.snoozeReview());
+    this.dom.btnReviewDone.addEventListener("click", () => this.finishReview());
+    this.dom.reviewBody.addEventListener("click", (e) => this.handleAgendaClick(e));
+    this.dom.dumpForm.addEventListener("submit", (e) => this.handleDumpSubmit(e));
+    this.dom.dumpText.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) this.dom.dumpForm.requestSubmit();
+    });
+    this.dom.btnDumpMic.addEventListener("click", () => this.toggleDictation());
+    this.dom.btnDumpBack.addEventListener("click", () => {
+      this.dom.dumpPreview.hidden = true;
+      this.dom.dumpForm.hidden = false;
+      this.dom.dumpText.focus();
+    });
+    this.dom.btnDumpSave.addEventListener("click", () => this.saveDumpPlan());
+    this.dom.dumpList.addEventListener("input", (e) => this.handleDumpEdit(e));
+    this.dom.dumpList.addEventListener("change", (e) => this.handleDumpEdit(e));
+    this.dom.dumpList.addEventListener("click", (e) => this.handleDumpRemove(e));
 
     if (this.dom.btnChatOpen) {
       this.dom.btnChatOpen.addEventListener("click", () => this.toggleChat());
@@ -1099,6 +1254,15 @@ class AppController {
       }
       case "task-delete":
         this.deleteTask(value);
+        break;
+      case "task-reschedule":
+        this.rescheduleTask(value);
+        break;
+      case "task-someday":
+        this.somedayTask(value);
+        break;
+      case "task-activate":
+        this.activateTask(value);
         break;
       case "signal-task":
         this.taskFromSignal(value);
@@ -1513,6 +1677,7 @@ class AppController {
   }
 
   closeModal(id) {
+    if (id === "dumpModal") this.stopDictation();
     this.dom[id].hidden = true;
   }
 
@@ -1562,9 +1727,16 @@ class AppController {
       requests: this.requests,
       tasks: this.tasks,
     });
+    this.renderAreaFilters();
+    const filter = this.agendaFilter;
     const visible =
-      this.agendaFilter === "all" ? items : items.filter((i) => i.group === this.agendaFilter);
+      filter === "all"
+        ? items
+        : filter.startsWith("area:")
+          ? items.filter((i) => i.area === filter.slice(5))
+          : items.filter((i) => i.group === filter);
 
+    this.renderReviewBanner();
     this.dom.agendaCount.textContent = `${items.length} pendiente${items.length === 1 ? "" : "s"}`;
     this.dom.agendaEmpty.hidden = visible.length > 0;
     this.dom.agendaList.innerHTML = "";
@@ -1588,6 +1760,13 @@ class AppController {
     tag.textContent = Agenda.GROUPS[item.group] || item.group;
     head.appendChild(tag);
 
+    if (item.priority === 3) {
+      const prio = document.createElement("span");
+      prio.className = "agenda-item__tag agenda-item__tag--high";
+      prio.textContent = PRIORITY_LABELS[3];
+      head.appendChild(prio);
+    }
+
     if (item.clientName) {
       const who = document.createElement("span");
       who.className = "agenda-item__client";
@@ -1602,6 +1781,24 @@ class AppController {
     const detail = document.createElement("p");
     detail.className = "agenda-item__detail";
     detail.textContent = item.detail;
+
+    let subList = null;
+    if (item.subtasks?.length) {
+      subList = document.createElement("ul");
+      subList.className = "subtasks";
+      item.subtasks.forEach((sub) => {
+        const row = document.createElement("li");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = `subtask${sub.done ? " is-done" : ""}`;
+        btn.dataset.act = "task-done";
+        btn.dataset.value = sub.id;
+        btn.setAttribute("aria-pressed", String(sub.done));
+        btn.textContent = sub.title;
+        row.appendChild(btn);
+        subList.appendChild(row);
+      });
+    }
 
     const actions = document.createElement("div");
     actions.className = "agenda-item__actions";
@@ -1618,14 +1815,39 @@ class AppController {
       actions.appendChild(btn);
     });
 
-    li.append(head, title, detail, actions);
+    li.append(head, title, detail, ...(subList ? [subList] : []), actions);
     return li;
+  }
+
+  renderAreaFilters() {
+    const group = this.dom.agendaFilters;
+    const areas = TaskModule.areas(this.tasks.filter((t) => TaskModule.isRoot(t) && t.status !== "someday"));
+    const current = [...group.querySelectorAll(".filter--area")].map((b) => b.dataset.filter.slice(5));
+    if (current.join("\u0000") === areas.join("\u0000")) return;
+
+    group.querySelectorAll(".filter--area").forEach((b) => b.remove());
+    areas.forEach((area) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "filter filter--area";
+      btn.dataset.filter = `area:${area}`;
+      btn.setAttribute("role", "tab");
+      btn.textContent = area;
+      group.appendChild(btn);
+    });
+
+    if (this.agendaFilter.startsWith("area:") && !areas.includes(this.agendaFilter.slice(5))) {
+      this.agendaFilter = "all";
+    }
+    group.querySelectorAll(".filter").forEach((el) => {
+      el.classList.toggle("is-active", el.dataset.filter === this.agendaFilter);
+    });
   }
 
   renderDoneToday() {
     const today = BillingModule.toISODate(new Date());
     const done = this.tasks.filter(
-      (t) => t.doneAt && BillingModule.toISODate(new Date(t.doneAt)) === today
+      (t) => t.doneAt && TaskModule.isRoot(t) && BillingModule.toISODate(new Date(t.doneAt)) === today
     );
     this.dom.agendaDone.hidden = done.length === 0;
     this.dom.agendaDoneList.innerHTML = "";
@@ -1654,6 +1876,7 @@ class AppController {
   openTaskModal(prefill = {}) {
     this.dom.taskForm.reset();
     this.populateSelect(this.dom.taskClientSelect, { includeEmpty: "Sin cliente" });
+    this.fillAreaOptions();
     if (prefill.title) this.dom.taskTitle.value = prefill.title;
     if (prefill.clientId) this.dom.taskClientSelect.value = prefill.clientId;
     this.openModal("taskModal");
@@ -1665,26 +1888,20 @@ class AppController {
     const title = String(data.get("title") || "").trim();
     if (!title) return;
 
+    const clientId = String(data.get("clientId") || "");
     await this.addTask({
       title,
-      clientId: String(data.get("clientId") || ""),
+      clientId,
       dueDate: String(data.get("dueDate") || ""),
+      priority: Number(data.get("priority")) || 2,
+      area: clientId ? "" : String(data.get("area") || "").trim().slice(0, 40),
       kind: "manual",
     });
     this.closeModal("taskModal");
   }
 
-  async addTask({ title, clientId = "", dueDate = "", kind = "manual", ref = "" }) {
-    const task = {
-      id: crypto.randomUUID(),
-      title,
-      clientId,
-      dueDate,
-      kind,
-      ref,
-      createdAt: Date.now(),
-      doneAt: 0,
-    };
+  async addTask(fields) {
+    const task = TaskModule.create(fields);
     this.tasks.push(task);
     try {
       await this.persistState();
@@ -1703,6 +1920,7 @@ class AppController {
     try {
       await this.persistState();
       this.renderAgenda();
+      this.renderReview();
     } catch {
       task.doneAt = prev;
     }
@@ -1710,13 +1928,43 @@ class AppController {
 
   async deleteTask(id) {
     const prev = this.tasks;
-    this.tasks = this.tasks.filter((t) => t.id !== id);
+    this.tasks = this.tasks.filter((t) => t.id !== id && t.parentId !== id);
     try {
       await this.persistState();
       this.renderAgenda();
+      this.renderReview();
     } catch {
       this.tasks = prev;
     }
+  }
+
+  /** Cambios de fecha/estado: un solo camino con rollback para agenda y revisión. */
+  async patchTask(id, patch, toast = "") {
+    const task = this.tasks.find((t) => t.id === id);
+    if (!task) return;
+    const prev = { ...task };
+    Object.assign(task, patch);
+    try {
+      await this.persistState();
+      this.renderAgenda();
+      this.renderReview();
+      if (toast) this.showToast(toast);
+    } catch {
+      Object.assign(task, prev);
+    }
+  }
+
+  rescheduleTask(id) {
+    const date = TaskModule.rescheduleDate();
+    this.patchTask(id, { dueDate: date, status: "open" }, `Para el ${BillingModule.formatLong(date)}`);
+  }
+
+  somedayTask(id) {
+    this.patchTask(id, { status: "someday", dueDate: "" }, "Movida a Algún día");
+  }
+
+  activateTask(id) {
+    this.patchTask(id, { status: "open", createdAt: Date.now() }, "De vuelta en Hoy");
   }
 
   /** Convierte una señal SEO en tarea, evitando duplicar la misma señal. */
@@ -1739,6 +1987,440 @@ class AppController {
       kind: signal.kind,
       ref: signal.url || "",
     });
+  }
+
+  /* ---------- Vaciar cabeza ---------- */
+  openDump() {
+    this.dumpPlan = null;
+    this.dom.dumpForm.hidden = false;
+    this.dom.dumpPreview.hidden = true;
+    this.fillAreaOptions();
+    this.openModal("dumpModal");
+  }
+
+  initDictation() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    this.SpeechRecognition = SR || null;
+    this.dom.btnDumpMic.hidden = !SR;
+  }
+
+  toggleDictation() {
+    if (this.recognizer) {
+      this.stopDictation();
+      return;
+    }
+    const rec = new this.SpeechRecognition();
+    rec.lang = "es-CL";
+    rec.continuous = true;
+    rec.interimResults = true;
+
+    const field = this.dom.dumpText;
+    const base = field.value.trim() ? `${field.value.trim()}\n` : "";
+    let finalText = "";
+
+    rec.onresult = (e) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const chunk = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += `${chunk.trim()}. `;
+        else interim += chunk;
+      }
+      field.value = base + finalText + interim;
+      field.scrollTop = field.scrollHeight;
+    };
+    rec.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        this.showToast("Permití el micrófono en el navegador para dictar");
+      }
+    };
+    rec.onend = () => {
+      this.recognizer = null;
+      this.dom.btnDumpMic.setAttribute("aria-pressed", "false");
+      this.dom.btnDumpMic.textContent = "Dictar";
+    };
+
+    rec.start();
+    this.recognizer = rec;
+    this.dom.btnDumpMic.setAttribute("aria-pressed", "true");
+    this.dom.btnDumpMic.textContent = "Detener";
+  }
+
+  stopDictation() {
+    this.recognizer?.stop();
+  }
+
+  fillAreaOptions() {
+    const list = this.dom.areaOptions;
+    list.innerHTML = "";
+    new Set(["Personal", "Mono Studio", ...TaskModule.areas(this.tasks)]).forEach((area) => {
+      const opt = document.createElement("option");
+      opt.value = area;
+      list.appendChild(opt);
+    });
+  }
+
+  async handleDumpSubmit(e) {
+    e.preventDefault();
+    this.stopDictation();
+    const text = this.dom.dumpText.value.trim();
+    if (!text || this.dumpBusy) return;
+
+    this.dumpBusy = true;
+    const btn = this.dom.btnDumpPlan;
+    btn.disabled = true;
+    btn.textContent = "Organizando…";
+    try {
+      const res = await fetch("./api/plan.php", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+      if (!data.tasks?.length) throw new Error("No encontré tareas en el texto");
+
+      this.dumpPlan = data.tasks;
+      this.dom.dumpSummary.textContent = data.summary || "";
+      this.dom.dumpQuestion.hidden = !data.question;
+      this.dom.dumpQuestion.textContent = data.question || "";
+      this.renderDumpPlan();
+      this.dom.dumpForm.hidden = true;
+      this.dom.dumpPreview.hidden = false;
+    } catch (err) {
+      this.showToast(err.message || "No se pudo organizar");
+    } finally {
+      this.dumpBusy = false;
+      btn.disabled = false;
+      btn.textContent = "Organizar";
+    }
+  }
+
+  renderDumpPlan() {
+    const list = this.dom.dumpList;
+    list.innerHTML = "";
+    const plan = this.dumpPlan || [];
+    const steps = plan.reduce((n, t) => n + t.subtasks.length, 0);
+    this.dom.btnDumpSave.textContent = `Guardar ${plan.length} tarea${plan.length === 1 ? "" : "s"}${steps ? ` (${steps} paso${steps === 1 ? "" : "s"})` : ""}`;
+    this.dom.btnDumpSave.disabled = plan.length === 0;
+
+    const el = (tag, props = {}) => Object.assign(document.createElement(tag), props);
+    const fragment = document.createDocumentFragment();
+
+    plan.forEach((task, i) => {
+      const li = el("li", { className: `plan-task plan-task--p${task.priority}` });
+      li.dataset.i = String(i);
+
+      const row = el("div", { className: "plan-task__row" });
+      const title = el("input", { className: "plan-task__title", value: task.title, maxLength: 240 });
+      title.dataset.field = "title";
+      title.setAttribute("aria-label", "Tarea");
+      const remove = el("button", { type: "button", className: "plan-task__remove", textContent: "✕" });
+      remove.dataset.remove = "task";
+      remove.setAttribute("aria-label", "Quitar tarea");
+      row.append(title, remove);
+
+      const meta = el("div", { className: "plan-task__meta" });
+
+      const prio = el("select");
+      prio.dataset.field = "priority";
+      prio.setAttribute("aria-label", "Prioridad");
+      [3, 2, 1].forEach((p) => {
+        prio.appendChild(el("option", { value: String(p), textContent: PRIORITY_LABELS[p], selected: task.priority === p }));
+      });
+
+      const client = el("select");
+      client.dataset.field = "clientId";
+      client.setAttribute("aria-label", "Cliente");
+      client.appendChild(el("option", { value: "", textContent: "Sin cliente" }));
+      this.clients.forEach((c) => {
+        client.appendChild(el("option", { value: c.id, textContent: c.name, selected: task.clientId === c.id }));
+      });
+
+      const area = el("input", { value: task.area, placeholder: "Área", maxLength: 40, hidden: !!task.clientId });
+      area.dataset.field = "area";
+      area.setAttribute("list", "areaOptions");
+      area.setAttribute("aria-label", "Área");
+
+      const due = el("input", { type: "date", value: task.dueDate, disabled: task.someday });
+      due.dataset.field = "dueDate";
+      due.setAttribute("aria-label", "Fecha");
+
+      const somedayLabel = el("label", { className: "plan-task__check" });
+      const someday = el("input", { type: "checkbox", checked: task.someday });
+      someday.dataset.field = "someday";
+      somedayLabel.append(someday, document.createTextNode(" Algún día"));
+
+      meta.append(prio, client, area, due, somedayLabel);
+      li.append(row, meta);
+
+      if (task.notes) {
+        li.appendChild(el("p", { className: "plan-task__notes", textContent: task.notes }));
+      }
+
+      if (task.subtasks.length) {
+        const subs = el("ol", { className: "plan-task__subs" });
+        task.subtasks.forEach((sub, j) => {
+          const subLi = el("li");
+          subLi.dataset.j = String(j);
+          const subTitle = el("input", { value: sub.title, maxLength: 240 });
+          subTitle.dataset.field = "title";
+          subTitle.setAttribute("aria-label", "Paso");
+          const subRemove = el("button", { type: "button", className: "plan-task__remove", textContent: "✕" });
+          subRemove.dataset.remove = "sub";
+          subRemove.setAttribute("aria-label", "Quitar paso");
+          subLi.append(subTitle, subRemove);
+          subs.appendChild(subLi);
+        });
+        li.appendChild(subs);
+      }
+
+      fragment.appendChild(li);
+    });
+    list.appendChild(fragment);
+  }
+
+  /** Los inputs del preview escriben directo en this.dumpPlan: no hay estado paralelo en el DOM. */
+  handleDumpEdit(e) {
+    const input = e.target.closest("[data-field]");
+    const li = e.target.closest(".plan-task");
+    if (!input || !li || !this.dumpPlan) return;
+    const task = this.dumpPlan[Number(li.dataset.i)];
+    if (!task) return;
+
+    const subLi = input.closest("[data-j]");
+    if (subLi) {
+      task.subtasks[Number(subLi.dataset.j)].title = input.value;
+      return;
+    }
+
+    const field = input.dataset.field;
+    if (field === "someday") {
+      task.someday = input.checked;
+      if (task.someday) task.dueDate = "";
+      const due = li.querySelector('[data-field="dueDate"]');
+      due.disabled = task.someday;
+      due.value = task.dueDate;
+    } else if (field === "priority") {
+      task.priority = Number(input.value) || 2;
+      li.className = `plan-task plan-task--p${task.priority}`;
+    } else if (field === "clientId") {
+      task.clientId = input.value;
+      li.querySelector('[data-field="area"]').hidden = !!task.clientId;
+    } else {
+      task[field] = input.value;
+    }
+  }
+
+  handleDumpRemove(e) {
+    const btn = e.target.closest("[data-remove]");
+    const li = e.target.closest(".plan-task");
+    if (!btn || !li || !this.dumpPlan) return;
+    const i = Number(li.dataset.i);
+    if (btn.dataset.remove === "sub") {
+      this.dumpPlan[i].subtasks.splice(Number(btn.closest("[data-j]").dataset.j), 1);
+    } else {
+      this.dumpPlan.splice(i, 1);
+    }
+    this.renderDumpPlan();
+  }
+
+  async saveDumpPlan() {
+    const plan = (this.dumpPlan || []).filter((t) => t.title.trim());
+    if (!plan.length) return;
+
+    const created = [];
+    plan.forEach((t) => {
+      const shared = {
+        clientId: t.clientId || "",
+        area: t.clientId ? "" : (t.area || "").trim().slice(0, 40),
+        priority: t.priority,
+        status: t.someday ? "someday" : "open",
+      };
+      const parent = TaskModule.create({
+        ...shared,
+        title: t.title.trim(),
+        notes: t.notes || "",
+        dueDate: t.someday ? "" : t.dueDate || "",
+      });
+      created.push(parent);
+      t.subtasks
+        .filter((s) => s.title.trim())
+        .forEach((s) => {
+          created.push(TaskModule.create({
+            ...shared,
+            title: s.title.trim(),
+            parentId: parent.id,
+            dueDate: t.someday ? "" : s.dueDate || "",
+          }));
+        });
+    });
+
+    const prev = this.tasks;
+    this.tasks = [...this.tasks, ...created];
+    try {
+      await this.persistState();
+      this.dom.dumpText.value = "";
+      this.dumpPlan = null;
+      this.closeModal("dumpModal");
+      this.renderAgenda();
+      this.showToast(`${plan.length} tarea${plan.length === 1 ? "" : "s"} en tu agenda`);
+    } catch {
+      this.tasks = prev;
+    }
+  }
+
+  /* ---------- Revisión semanal ---------- */
+  reviewBuckets() {
+    const children = TaskModule.childrenMap(this.tasks);
+    const weekAgo = Date.now() - 7 * 86400000;
+    const buckets = { done: [], overdue: [], stale: [], undated: [], someday: [] };
+
+    this.tasks.forEach((t) => {
+      if (!TaskModule.isRoot(t)) return;
+      if (t.doneAt) {
+        if (t.doneAt >= weekAgo) buckets.done.push(t);
+        return;
+      }
+      if (t.status === "someday") {
+        buckets.someday.push(t);
+        return;
+      }
+      const subs = children.get(t.id) || [];
+      const due = TaskModule.effectiveDue(t, subs);
+      if (due && BillingModule.daysUntil(due) < 0) buckets.overdue.push(t);
+      else if (TaskModule.isStale(t, subs)) buckets.stale.push(t);
+      else if (!due) buckets.undated.push(t);
+    });
+    return buckets;
+  }
+
+  reviewDue() {
+    const today = BillingModule.toISODate(new Date());
+    const last = localStorage.getItem(Store.KEYS.lastReview) || "";
+    if (last === today || localStorage.getItem(Store.KEYS.lastReview + ".snooze") === today) return false;
+    if (new Date().getDay() === 0) return true;
+    return !!last && BillingModule.daysUntil(last) < -7;
+  }
+
+  renderReviewBanner() {
+    const banner = this.dom.reviewBanner;
+    if (!banner) return;
+    const b = this.reviewBuckets();
+    const pending = b.overdue.length + b.stale.length;
+    const show = this.reviewDue() && (pending > 0 || b.someday.length > 0 || b.done.length > 0);
+    banner.hidden = !show;
+    if (!show) return;
+
+    const parts = [
+      b.done.length ? `${b.done.length} hecha${b.done.length === 1 ? "" : "s"} esta semana` : "",
+      b.overdue.length ? `${b.overdue.length} vencida${b.overdue.length === 1 ? "" : "s"}` : "",
+      b.stale.length ? `${b.stale.length} estancada${b.stale.length === 1 ? "" : "s"}` : "",
+      b.someday.length ? `${b.someday.length} en Algún día` : "",
+    ].filter(Boolean);
+    this.dom.reviewBannerText.textContent = `Revisión semanal · ${parts.join(" · ")}. 10 minutos y arrancás la semana limpio.`;
+  }
+
+  openReview() {
+    this.openModal("reviewModal");
+    this.renderReview();
+  }
+
+  renderReview() {
+    if (!this.dom.reviewModal || this.dom.reviewModal.hidden) return;
+    const b = this.reviewBuckets();
+    const body = this.dom.reviewBody;
+    body.innerHTML = "";
+
+    const clientName = (t) => this.clients.find((c) => c.id === t.clientId)?.name || t.area || "";
+    const section = (title, tasks, actionsFor, hint = "") => {
+      if (!tasks.length) return;
+      const wrap = document.createElement("section");
+      wrap.className = "review__section";
+      const h = document.createElement("h4");
+      h.textContent = `${title} · ${tasks.length}`;
+      wrap.appendChild(h);
+      if (hint) {
+        const p = document.createElement("p");
+        p.className = "field__hint";
+        p.textContent = hint;
+        wrap.appendChild(p);
+      }
+      const ul = document.createElement("ul");
+      ul.className = "review__list";
+      tasks.forEach((t) => {
+        const li = document.createElement("li");
+        li.className = "review-row";
+        const text = document.createElement("div");
+        const strong = document.createElement("strong");
+        strong.textContent = t.title;
+        const meta = document.createElement("span");
+        meta.textContent = [
+          clientName(t),
+          t.dueDate ? BillingModule.formatShort(t.dueDate) : "",
+          t.priority === 3 ? "Alta" : "",
+        ].filter(Boolean).join(" · ");
+        text.append(strong, meta);
+        const actions = document.createElement("div");
+        actions.className = "review-row__actions";
+        actionsFor(t).forEach(([label, act, primary]) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = `chip-btn${primary ? " chip-btn--primary" : ""}${act === "task-delete" ? " chip-btn--subtle" : ""}`;
+          btn.dataset.act = act;
+          btn.dataset.value = t.id;
+          btn.textContent = label;
+          actions.appendChild(btn);
+        });
+        li.append(text, actions);
+        ul.appendChild(li);
+      });
+      wrap.appendChild(ul);
+      body.appendChild(wrap);
+    };
+
+    const decide = () => [
+      ["Hecho", "task-done", true],
+      ["Reprogramar", "task-reschedule"],
+      ["Algún día", "task-someday"],
+      ["Soltar", "task-delete"],
+    ];
+
+    if (b.done.length) {
+      const p = document.createElement("p");
+      p.className = "review__win";
+      p.textContent = `Cerraste ${b.done.length} tarea${b.done.length === 1 ? "" : "s"} en los últimos 7 días.`;
+      body.appendChild(p);
+    }
+    section("Vencidas", b.overdue, decide, "Si no la vas a hacer esta semana, no merece una fecha.");
+    section("Estancadas", b.stale, decide, `Sin fecha y abiertas hace más de ${STALE_UNDATED_DAYS} días.`);
+    section("Sin fecha", b.undated, () => [
+      ["Esta semana", "task-reschedule", true],
+      ["Algún día", "task-someday"],
+      ["Soltar", "task-delete"],
+    ]);
+    section("Algún día", b.someday, () => [
+      ["Activar", "task-activate", true],
+      ["Soltar", "task-delete"],
+    ]);
+
+    if (!body.childElementCount) {
+      const p = document.createElement("p");
+      p.className = "review__win";
+      p.textContent = "Todo en orden. Nada que decidir.";
+      body.appendChild(p);
+    }
+  }
+
+  finishReview() {
+    localStorage.setItem(Store.KEYS.lastReview, BillingModule.toISODate(new Date()));
+    this.closeModal("reviewModal");
+    this.renderAgenda();
+    this.showToast("Semana revisada");
+  }
+
+  snoozeReview() {
+    localStorage.setItem(Store.KEYS.lastReview + ".snooze", BillingModule.toISODate(new Date()));
+    this.renderAgenda();
   }
 
   /* ---------- SEO ---------- */
