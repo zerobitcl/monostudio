@@ -2655,6 +2655,39 @@ body {
   padding: 5px 11px;
 }
 
+.agenda-dismissed {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 0.72rem;
+  color: var(--txt-dim);
+}
+
+.export {
+  max-height: min(90vh, 900px);
+}
+
+.export__text {
+  flex: 1;
+  min-height: 320px;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  line-height: 1.55;
+  color: var(--txt-primary);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  outline: none;
+  resize: none;
+}
+
+.export__text:focus {
+  border-color: var(--neon-blue);
+}
+
 .field-row {
   display: grid;
   grid-template-columns: 1fr 1fr;

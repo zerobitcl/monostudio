@@ -47,7 +47,7 @@ class Store {
   };
 
   static API = "./api/store.php";
-  static cache = { clients: [], requests: [], tasks: [] };
+  static cache = { clients: [], requests: [], tasks: [], dismissed: [] };
 
   static async init() {
     const res = await fetch(Store.API, { headers: { Accept: "application/json" } });
@@ -58,12 +58,13 @@ class Store {
       clients: Array.isArray(data.clients) ? data.clients : [],
       requests: Array.isArray(data.requests) ? data.requests : [],
       tasks: Array.isArray(data.tasks) ? data.tasks : [],
+      dismissed: Array.isArray(data.dismissed) ? data.dismissed : [],
     };
     return Store.cache;
   }
 
-  static async save(clients, requests, tasks) {
-    Store.cache = { clients, requests, tasks };
+  static async save(clients, requests, tasks, dismissed) {
+    Store.cache = { clients, requests, tasks, dismissed };
     const res = await fetch(Store.API, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -642,14 +643,19 @@ class TaskModule {
 class Agenda {
   static GROUPS = { money: "Dinero", seo: "SEO", task: "Tareas" };
 
-  static build({ clients, requests, tasks }) {
+  static seoKey(host, signalId) {
+    return `seo:${host}:${signalId}`;
+  }
+
+  static build({ clients, requests, tasks, dismissed = [] }) {
+    const hidden = new Set(dismissed.map((d) => d.id));
     return [
       ...Agenda.#fromBilling(clients),
       ...Agenda.#fromWatches(clients),
       ...Agenda.#fromRequests(requests, clients),
       ...Agenda.#fromTasks(tasks, clients),
-      ...Agenda.#fromSeo(clients),
-    ].sort(
+      ...Agenda.#fromSeo(clients, hidden),
+    ].filter((item) => !hidden.has(item.id)).sort(
       (a, b) =>
         b.severity - a.severity ||
         (b.priority ?? 2) - (a.priority ?? 2) ||
@@ -838,14 +844,14 @@ class Agenda {
   }
 
   /** Recorre todo lo analizado, no solo lo vinculado a un cliente. */
-  static #fromSeo(clients) {
+  static #fromSeo(clients, hidden = new Set()) {
     const items = [];
 
     SeoStore.data.forEach((cached, host) => {
       if (!cached?.signals?.length) return;
       const client = clients.find((c) => GscModule.hostOf(c.siteUrl) === host);
       // Prioriza críticos (indexación, caídas fuertes) en la agenda del día.
-      const ranked = [...cached.signals].sort((a, b) => {
+      const ranked = cached.signals.filter((s) => !hidden.has(Agenda.seoKey(host, s.id))).sort((a, b) => {
         const aSite = a.kind === "site-noindex" ? 1 : 0;
         const bSite = b.kind === "site-noindex" ? 1 : 0;
         if (aSite !== bSite) return bSite - aSite;
@@ -854,7 +860,7 @@ class Agenda {
 
       ranked.slice(0, 6).forEach((signal) => {
         items.push({
-          id: `seo:${host}:${signal.id}`,
+          id: Agenda.seoKey(host, signal.id),
           group: "seo",
           severity: Number(signal.severity) || 1,
           title: signal.title,
@@ -869,6 +875,7 @@ class Agenda {
                 : [{ label: "Anotar tarea", act: "signal-task", value: `${host}|${signal.id}`, primary: true }]),
             ...(signal.url ? [{ label: "Ver página", act: "link", value: signal.url }] : []),
             { label: "Ver sitio", act: "open-seo", value: host },
+            { label: "Descartar", act: "dismiss", value: Agenda.seoKey(host, signal.id), subtle: true },
           ],
         });
       });
@@ -890,10 +897,11 @@ class AppController {
     return false;
   }
 
-  constructor({ clients, requests, tasks }) {
+  constructor({ clients, requests, tasks, dismissed = [] }) {
     this.clients = clients.map(BillingModule.migrateClient);
     this.requests = requests;
     this.tasks = tasks;
+    this.dismissed = dismissed;
 
     this.timerId = null;
     this.toastTimer = null;
@@ -926,7 +934,7 @@ class AppController {
     this.dom = AppController.#collectDom();
   }
 
-  static MODALS = ["clientModal", "requestModal", "taskModal", "notebookModal", "dumpModal", "reviewModal"];
+  static MODALS = ["clientModal", "requestModal", "taskModal", "notebookModal", "dumpModal", "reviewModal", "exportModal"];
 
   static #collectDom() {
     const ids = [
@@ -958,6 +966,7 @@ class AppController {
       "dumpModal", "dumpForm", "dumpText", "btnDumpMic", "btnDumpPlan", "dumpPreview", "dumpSummary",
       "dumpQuestion", "dumpList", "btnDumpBack", "btnDumpSave", "areaOptions",
       "reviewModal", "reviewBody", "btnReviewDone", "reviewBanner", "reviewBannerText",
+      "exportModal", "exportText", "agendaDismissed", "agendaDismissedCount",
       "notebookTitle", "notebookSite", "notebookList", "notebookWatches", "notebookEmpty", "notebookForm", "notebookBody",
       "btnNotebookChat",
       "nodeTooltip", "toast",
@@ -994,7 +1003,8 @@ class AppController {
     this.clients = store.clients.map(BillingModule.migrateClient);
     this.requests = Array.isArray(store.requests) ? store.requests : this.requests;
     this.tasks = Array.isArray(store.tasks) ? store.tasks : this.tasks;
-    Store.cache = { clients: this.clients, requests: this.requests, tasks: this.tasks };
+    this.dismissed = Array.isArray(store.dismissed) ? store.dismissed : this.dismissed;
+    Store.cache = { clients: this.clients, requests: this.requests, tasks: this.tasks, dismissed: this.dismissed };
     this.renderAll();
     if (this.notebookClientId && this.dom.notebookModal && !this.dom.notebookModal.hidden) {
       this.renderNotebook();
@@ -1024,7 +1034,7 @@ class AppController {
     if (this.isSaving) return;
     this.isSaving = true;
     try {
-      await Store.save(this.clients, this.requests, this.tasks);
+      await Store.save(this.clients, this.requests, this.tasks, this.dismissed);
     } catch (err) {
       this.showToast(err.message || "Error al guardar");
       throw err;
@@ -1081,6 +1091,11 @@ class AppController {
     });
 
     document.getElementById("btnOpenDump").addEventListener("click", () => this.openDump());
+    document.getElementById("btnOpenExport").addEventListener("click", () => this.openExport());
+    document.getElementById("btnExportCopy").addEventListener("click", () => this.copyExport());
+    document.getElementById("btnExportGemini").addEventListener("click", () => this.copyExport({ openGemini: true }));
+    document.getElementById("btnExportDownload").addEventListener("click", () => this.downloadExport());
+    document.getElementById("btnRestoreDismissed").addEventListener("click", () => this.restoreDismissed());
     document.getElementById("btnOpenReview").addEventListener("click", () => this.openReview());
     document.getElementById("btnReviewStart").addEventListener("click", () => this.openReview());
     document.getElementById("btnReviewSnooze").addEventListener("click", () => this.snoozeReview());
@@ -1263,6 +1278,9 @@ class AppController {
         break;
       case "task-activate":
         this.activateTask(value);
+        break;
+      case "dismiss":
+        this.dismissItem(value);
         break;
       case "signal-task":
         this.taskFromSignal(value);
@@ -1710,7 +1728,7 @@ class AppController {
     const hosts = this.seoHosts();
     const scanned = hosts.filter((h) => SeoStore.get(h.host));
     const critical = scanned.reduce(
-      (sum, h) => sum + (SeoStore.get(h.host)?.signals || []).filter((s) => s.severity >= 3).length,
+      (sum, h) => sum + this.visibleSignals(h.host).filter((s) => s.severity >= 3).length,
       0
     );
     this.dom.statAlertsValue.textContent = scanned.length ? String(critical) : "—";
@@ -1720,13 +1738,55 @@ class AppController {
     this.dom.statAlerts.classList.toggle("is-alert", critical > 0);
   }
 
-  /* ---------- Hoy ---------- */
-  renderAgenda() {
-    const items = Agenda.build({
+  visibleSignals(host, signals = SeoStore.get(host)?.signals || []) {
+    const hidden = new Set(this.dismissed.map((d) => d.id));
+    return signals.filter((s) => !hidden.has(Agenda.seoKey(host, s.id)));
+  }
+
+  async dismissItem(id) {
+    if (!id || this.dismissed.some((d) => d.id === id)) return;
+    const prev = this.dismissed;
+    this.dismissed = [...this.dismissed, { id, at: Date.now() }];
+    try {
+      await this.persistState();
+      this.renderStats();
+      this.renderAgenda();
+      if (this.module === "seo") this.renderSeo();
+      this.showToast("Descartada");
+    } catch {
+      this.dismissed = prev;
+    }
+  }
+
+  async restoreDismissed() {
+    const prev = this.dismissed;
+    this.dismissed = [];
+    try {
+      await this.persistState();
+      this.renderStats();
+      this.renderAgenda();
+      if (this.module === "seo") this.renderSeo();
+      this.showToast(`${prev.length} restaurada${prev.length === 1 ? "" : "s"}`);
+    } catch {
+      this.dismissed = prev;
+    }
+  }
+
+  agendaItems() {
+    return Agenda.build({
       clients: this.clients,
       requests: this.requests,
       tasks: this.tasks,
+      dismissed: this.dismissed,
     });
+  }
+
+  /* ---------- Hoy ---------- */
+  renderAgenda() {
+    const items = this.agendaItems();
+    this.dom.agendaDismissed.hidden = this.dismissed.length === 0;
+    this.dom.agendaDismissedCount.textContent =
+      `${this.dismissed.length} alerta${this.dismissed.length === 1 ? "" : "s"} descartada${this.dismissed.length === 1 ? "" : "s"}`;
     this.renderAreaFilters();
     const filter = this.agendaFilter;
     const visible =
@@ -2269,6 +2329,86 @@ class AppController {
     }
   }
 
+  /* ---------- Plan para IA ---------- */
+  buildDayPlan() {
+    const items = this.agendaItems();
+    const today = BillingModule.toISODate(new Date());
+    const doneToday = this.tasks.filter(
+      (t) => t.doneAt && TaskModule.isRoot(t) && BillingModule.toISODate(new Date(t.doneAt)) === today
+    );
+
+    const lines = [
+      `Sos mi asistente de productividad. Te paso mi agenda de hoy, ${BillingModule.formatLong(today)}, ordenada por urgencia (primero lo más urgente).`,
+      "",
+      "Ayudame así:",
+      "1. Armá un plan del día realista en bloques de tiempo, atacando primero lo urgente. Si no alcanza el día, decime qué mover.",
+      "2. Dame el paso a paso concreto de la primera tarea.",
+      "3. Si algo se puede delegar, automatizar o soltar, decímelo.",
+      "4. Preguntame lo que te falte antes de asumir.",
+      "",
+      'Después vamos tarea por tarea: cuando te diga "listo", pasamos a la siguiente.',
+    ];
+
+    const sections = [
+      [3, "Urgente (vencido o para hoy)"],
+      [2, "Importante (hoy o próximos días)"],
+      [1, "Si queda tiempo"],
+    ];
+    let n = 0;
+    sections.forEach(([severity, heading]) => {
+      const group = items.filter((i) => i.severity === severity);
+      if (!group.length) return;
+      lines.push("", `## ${heading}`);
+      group.forEach((item) => {
+        n += 1;
+        const tags = [
+          item.priority === 3 ? "[Alta]" : "",
+          `[${Agenda.GROUPS[item.group] || item.group}]`,
+        ].filter(Boolean).join(" ");
+        const context = [item.clientName, item.detail].filter(Boolean).join(" · ");
+        lines.push(`${n}. ${tags} ${item.title}${context ? ` — ${context}` : ""}`);
+        (item.subtasks || []).forEach((s) => lines.push(`   - [${s.done ? "x" : " "}] ${s.title}`));
+      });
+    });
+
+    if (!n) lines.push("", "No tengo pendientes para hoy. Ayudame a elegir en qué avanzar.");
+    if (doneToday.length) {
+      lines.push("", "## Ya hice hoy", ...doneToday.map((t) => `- ${t.title}`));
+    }
+    return lines.join("\n");
+  }
+
+  openExport() {
+    this.dom.exportText.value = this.buildDayPlan();
+    this.openModal("exportModal");
+    this.dom.exportText.scrollTop = 0;
+  }
+
+  async copyExport({ openGemini = false } = {}) {
+    const text = this.dom.exportText.value;
+    // Gemini no acepta el prompt por URL: la pestaña se abre en el mismo gesto del click
+    // (si no, el bloqueador de popups la corta) y el texto queda en el portapapeles.
+    if (openGemini) window.open("https://gemini.google.com/app", "_blank", "noopener");
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      this.dom.exportText.select();
+      document.execCommand("copy");
+    }
+    this.showToast(openGemini ? "Copiado. Pegalo en Gemini con Ctrl+V" : "Plan copiado");
+  }
+
+  downloadExport() {
+    const blob = new Blob([this.dom.exportText.value], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement("a"), {
+      href: url,
+      download: `plan-${BillingModule.toISODate(new Date())}.md`,
+    });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   /* ---------- Revisión semanal ---------- */
   reviewBuckets() {
     const children = TaskModule.childrenMap(this.tasks);
@@ -2651,7 +2791,7 @@ class AppController {
 
     hosts.forEach(({ host, label }) => {
       const data = SeoStore.get(host);
-      const critical = (data?.signals || []).filter((s) => s.severity >= 3).length;
+      const critical = this.visibleSignals(host).filter((s) => s.severity >= 3).length;
       const notIndexed = Number(data?.inventory?.notIndexed || 0);
 
       const btn = document.createElement("button");
@@ -2821,7 +2961,7 @@ class AppController {
   }
 
   renderSeoSignals(data) {
-    const signals = data?.signals || [];
+    const signals = this.visibleSignals(this.seoHost, data?.signals || []);
     this.dom.seoSignals.innerHTML = "";
     this.dom.seoSignalsEmpty.hidden = signals.length > 0 || !data?.totals;
 
@@ -2842,6 +2982,7 @@ class AppController {
                 ? [{ label: this.indexing ? "Pidiendo…" : "Indexar pendientes", act: "index-pending", value: this.seoHost, primary: true }]
                 : [{ label: "Anotar tarea", act: "signal-task", value: `${this.seoHost}|${signal.id}`, primary: true }]),
             ...(signal.url ? [{ label: "Abrir", act: "link", value: signal.url }] : []),
+            { label: "Descartar", act: "dismiss", value: Agenda.seoKey(this.seoHost, signal.id), subtle: true },
           ],
         })
       );

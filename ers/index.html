@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Mono Studio OS — base de operaciones diaria" />
   <title>Mono Studio OS</title>
-  <link rel="stylesheet" href="styles.css?v=20260927a" />
+  <link rel="stylesheet" href="styles.css?v=20260927b" />
 </head>
 <body>
 
@@ -67,6 +67,7 @@
           <button class="filter" type="button" data-filter="seo" role="tab">SEO</button>
           <button class="filter" type="button" data-filter="task" role="tab">Tareas</button>
         </div>
+        <button class="btn btn--ghost" id="btnOpenExport" type="button" title="Copiar el plan del día para Gemini">Plan para IA</button>
         <button class="btn btn--ghost" id="btnOpenReview" type="button">Revisar</button>
         <button class="btn btn--ghost" id="btnOpenTaskModal" type="button">+ Tarea</button>
         <button class="btn btn--neon" id="btnOpenDump" type="button">Vaciar cabeza</button>
@@ -89,6 +90,11 @@
         <h3>Completado hoy</h3>
         <ul class="agenda agenda--done" id="agendaDoneList"></ul>
       </div>
+
+      <p class="agenda-dismissed" id="agendaDismissed" hidden>
+        <span id="agendaDismissedCount"></span>
+        <button class="chip-btn chip-btn--subtle" id="btnRestoreDismissed" type="button">Restaurar</button>
+      </p>
     </main>
 
     <!-- ============ CLIENTES ============ -->
@@ -417,6 +423,26 @@
     </div>
   </div>
 
+  <!-- ============ PLAN PARA IA ============ -->
+  <div class="modal-backdrop" id="exportModal" hidden>
+    <div class="modal modal--sheet modal--wide glass export" role="dialog" aria-labelledby="exportTitle">
+      <header class="modal__head">
+        <div>
+          <p class="notebook__kicker">Hoy</p>
+          <h3 id="exportTitle">Plan para IA</h3>
+        </div>
+        <button type="button" class="modal__close" data-close="exportModal" aria-label="Cerrar">✕</button>
+      </header>
+      <p class="field__hint">Tu día ordenado por urgencia, con un prompt listo. Pegalo en Gemini y te guía paso a paso. Podés editarlo antes de copiar.</p>
+      <textarea class="export__text" id="exportText" spellcheck="false" aria-label="Plan del día"></textarea>
+      <div class="dump__actions">
+        <button type="button" class="btn btn--ghost" id="btnExportDownload">Descargar .md</button>
+        <button type="button" class="btn btn--ghost" id="btnExportCopy">Copiar</button>
+        <button type="button" class="btn btn--neon" id="btnExportGemini">Copiar y abrir Gemini</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ============ REVISIÓN SEMANAL ============ -->
   <div class="modal-backdrop" id="reviewModal" hidden>
     <div class="modal modal--sheet glass review" role="dialog" aria-labelledby="reviewTitle">
@@ -496,7 +522,7 @@
   </div>
   <div class="chat-backdrop" id="chatBackdrop" hidden></div>
 
-  <script src="app.js?v=20260927a"></script>
+  <script src="app.js?v=20260927b"></script>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </body>

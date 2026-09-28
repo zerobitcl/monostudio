@@ -202,9 +202,28 @@ function ersSanitizeTasks($tasks): array
     return $out;
 }
 
+/** Items de agenda descartados a mano (señales SEO que no aplican): [{id, at}]. */
+function ersSanitizeDismissed($items): array
+{
+    if (!is_array($items)) {
+        return [];
+    }
+    $out = [];
+    $seen = [];
+    foreach (array_slice($items, -500) as $item) {
+        $id = is_array($item) ? ersClip(trim((string) ($item['id'] ?? '')), 700) : '';
+        if ($id === '' || isset($seen[$id])) {
+            continue;
+        }
+        $seen[$id] = true;
+        $out[] = ['id' => $id, 'at' => (int) ($item['at'] ?? 0)];
+    }
+    return $out;
+}
+
 function ersEmptyStore(): array
 {
-    return ['clients' => [], 'requests' => [], 'tasks' => []];
+    return ['clients' => [], 'requests' => [], 'tasks' => [], 'dismissed' => []];
 }
 
 function ersReadStore(?string $path = null): array
@@ -228,6 +247,7 @@ function ersReadStore(?string $path = null): array
         'clients' => ersSanitizeClients($data['clients'] ?? null),
         'requests' => is_array($data['requests'] ?? null) ? $data['requests'] : [],
         'tasks' => ersSanitizeTasks($data['tasks'] ?? null),
+        'dismissed' => ersSanitizeDismissed($data['dismissed'] ?? null),
     ];
 }
 
@@ -244,6 +264,7 @@ function ersWriteStore(array $data, ?string $path = null): bool
             'clients' => $data['clients'] ?? [],
             'requests' => $data['requests'] ?? [],
             'tasks' => $data['tasks'] ?? [],
+            'dismissed' => $data['dismissed'] ?? [],
             'updatedAt' => gmdate('c'),
         ],
         JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE

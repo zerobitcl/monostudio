@@ -37,6 +37,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'clients' => ersSanitizeClients($input['clients'] ?? null),
         'requests' => is_array($input['requests'] ?? null) ? $input['requests'] : [],
         'tasks' => ersSanitizeTasks($input['tasks'] ?? null),
+        // Un cliente con app.js viejo en caché no manda este campo: no debe borrar lo descartado.
+        'dismissed' => array_key_exists('dismissed', $input)
+            ? ersSanitizeDismissed($input['dismissed'])
+            : ersReadStore($dataFile)['dismissed'],
     ];
 
     if (!ersWriteStore($store, $dataFile)) {
