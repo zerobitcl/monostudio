@@ -710,6 +710,13 @@ function ersBuildSeoReportMarkdown(string $host, array $summary, ?array $client)
             round(((float) ($ks['brandShare'] ?? 0)) * 100),
             $ks['potentialClicks'] ?? 0
         );
+        if ((int) ($ks['hiddenClicks'] ?? 0) > 0) {
+            $lines[] = sprintf(
+                '- %s de %s clics vienen de búsquedas que Google anonimiza (cola larga)',
+                $ks['hiddenClicks'],
+                $ks['siteClicks'] ?? 0
+            );
+        }
         $groups = ['top' => 'Más buscadas', 'striking' => 'Oportunidades (pos. 4-20)', 'rising' => 'En alza'];
         foreach ($groups as $key => $label) {
             $rows = $kw['buckets'][$key] ?? [];

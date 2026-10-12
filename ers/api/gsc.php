@@ -46,6 +46,8 @@ const GSC_KW_ROWS = 5000;
 const GSC_KW_BUCKET = 25;
 const GSC_KW_MIN_IMPRESSIONS = 20;
 const GSC_KW_AI_TIMEOUT = 45;
+/** Invalida solo la caché de keywords cuando cambia su forma; GSC_VERSION invalidaría todo. */
+const GSC_KW_VERSION = '2026.10.12-hidden';
 
 /** Sube al cambiar la lógica de resolución de propiedad; sirve para saber qué versión está viva en el server. */
 const GSC_VERSION = '2026.09.08-report';
@@ -1646,7 +1648,7 @@ function gscKeywordRow(string $query, array $now, array $prev, array $pages, boo
  * Agrupa queries en listas accionables. Todo es determinista: la IA interpreta
  * estas listas, nunca calcula métricas, así no puede inventar números.
  */
-function gscBuildKeywords(array $now, array $prev, array $pagesByQuery, string $host): array
+function gscBuildKeywords(array $now, array $prev, array $pagesByQuery, string $host, ?array $site = null): array
 {
     $brandToken = gscBrandToken($host);
     $rows = [];
@@ -1696,8 +1698,10 @@ function gscBuildKeywords(array $now, array $prev, array $pagesByQuery, string $
             static fn ($r) => $r['dClicks'] <= -3 || ($r['impressions'] >= 30 && $r['dPos'] <= -2),
             static fn ($a, $b) => ($a['dClicks'] <=> $b['dClicks']) ?: ($a['dPos'] <=> $b['dPos'])
         ),
+        // Sin umbral de impresiones: en sitios chicos ninguna query llega al mínimo
+        // y la lista quedaba vacía justo donde más falta contexto.
         'top' => $pick(
-            static fn ($r) => $r['clicks'] > 0 || $r['impressions'] >= $min,
+            static fn ($r) => $r['clicks'] > 0 || $r['impressions'] > 0,
             static fn ($a, $b) => ($b['clicks'] <=> $a['clicks']) ?: ($b['impressions'] <=> $a['impressions'])
         ),
         'cannibal' => [],
@@ -1733,10 +1737,17 @@ function gscBuildKeywords(array $now, array $prev, array $pagesByQuery, string $
         $potential[$r['q']] = max($potential[$r['q']] ?? 0, $r['gain'], $r['ctrGain']);
     }
 
+    // GSC omite queries poco frecuentes (privacidad) al agrupar por query, pero no en
+    // el total del sitio: la diferencia son clics reales que ninguna query explica.
+    $siteClicks = $site !== null ? (int) $site['clicks'] : null;
+
     return [
         'summary' => [
             'queries' => count($now),
             'clicks' => $totalClicks,
+            'siteClicks' => $siteClicks,
+            'siteImpressions' => $site !== null ? (int) $site['impressions'] : null,
+            'hiddenClicks' => $siteClicks !== null ? max(0, $siteClicks - $totalClicks) : null,
             'brandToken' => $brandToken,
             'brandShare' => $totalClicks > 0 ? round($brandClicks / $totalClicks, 3) : 0,
             'potentialClicks' => array_sum($potential),
@@ -1770,6 +1781,7 @@ function gscFetchKeywords(string $token, string $property, string $host): array
         'now' => gscAnalyticsJob($token, $property, $cur['start'], $cur['end'], ['dimensions' => ['query'], 'rowLimit' => GSC_KW_ROWS]),
         'prev' => gscAnalyticsJob($token, $property, $before['start'], $before['end'], ['dimensions' => ['query'], 'rowLimit' => GSC_KW_ROWS]),
         'pages' => gscAnalyticsJob($token, $property, $cur['start'], $cur['end'], ['dimensions' => ['query', 'page'], 'rowLimit' => GSC_KW_ROWS]),
+        'site' => gscAnalyticsJob($token, $property, $cur['start'], $cur['end']),
     ]);
     if (!$res['now']['ok']) {
         throw new RuntimeException(gscJobError($res['now'], 'Search Console no devolvió queries'));
@@ -1780,6 +1792,7 @@ function gscFetchKeywords(string $token, string $property, string $host): array
         'host' => $host,
         'property' => $property,
         'version' => GSC_VERSION,
+        'kwVersion' => GSC_KW_VERSION,
         'fetchedAt' => time(),
         'range' => $cur,
         'previousRange' => $before,
@@ -1787,7 +1800,8 @@ function gscFetchKeywords(string $token, string $property, string $host): array
         gscKeywordMetrics($data($res['now'])),
         gscKeywordMetrics($data($res['prev'])),
         gscKeywordPages($data($res['pages'])),
-        $host
+        $host,
+        $res['site']['ok'] ? gscMetricRow($data($res['site'])['rows'][0] ?? null) : null
     );
 }
 
@@ -1823,12 +1837,19 @@ function gscKeywordsAiPrompt(array $kw): string
     $lines = [
         'Sitio: ' . ($kw['host'] ?? ''),
         'Rango: ' . ($kw['range']['start'] ?? '') . ' a ' . ($kw['range']['end'] ?? '') . ' (vs 28 días previos)',
-        'Queries con datos: ' . ($s['queries'] ?? 0) . ' · clics: ' . ($s['clicks'] ?? 0)
+        'Queries visibles: ' . ($s['queries'] ?? 0) . ' · clics atribuidos a esas queries: ' . ($s['clicks'] ?? 0)
             . ' · % clics de marca: ' . round(((float) ($s['brandShare'] ?? 0)) * 100) . '%'
             . ' · clics recuperables estimados: ' . ($s['potentialClicks'] ?? 0),
+    ];
+    if (($s['siteClicks'] ?? null) !== null) {
+        $lines[] = 'Total real del sitio: ' . $s['siteClicks'] . ' clics · ' . ($s['siteImpressions'] ?? 0) . ' impresiones'
+            . ' · clics en queries anonimizadas por Google: ' . ($s['hiddenClicks'] ?? 0);
+    }
+    array_push(
+        $lines,
         '',
         'Formato de filas: query | clics | impresiones | ctr | posición | Δclics | Δposición (+ = mejoró) | página',
-    ];
+    );
     $sections = [
         'top' => 'TOP POR CLICS',
         'striking' => 'POSICIÓN 4-20 CON DEMANDA (striking distance)',
@@ -1999,6 +2020,8 @@ REGLAS
 - No inventes métricas ni volúmenes de búsqueda; si citás un número, tiene que estar en los datos.
 - Las queries [marca] no son oportunidad de crecimiento: mencionalas solo si caen.
 - Priorizá por clics recuperables: striking distance y CTR bajo primero, luego tendencias.
+- Google anonimiza las queries poco frecuentes: si "clics atribuidos" es menor al total real, la diferencia son clics reales de búsquedas ocultas. Nunca digas que el sitio no tiene clics si el total real es mayor a 0; explicá que el tráfico existe pero está repartido en búsquedas de cola larga.
+- Con pocas queries visibles, trabajá con las impresiones: qué temas ya muestran demanda y qué página debería capturarla.
 - Cada acción tiene que ser ejecutable esta semana por un dev/redactor: qué cambiar y en qué URL.
 - "ideas" = contenidos NUEVOS que cubran demanda que hoy ninguna página atiende bien (queries en posición > 10 o con la página equivocada). Si no hay evidencia, devolvé lista vacía.
 - resumen: máximo 3 frases, con el hallazgo más importante primero.
@@ -2721,7 +2744,9 @@ if ($action === 'keywords' || $action === 'keywords-ai') {
 
         $kwFile = gscKeywordCacheFile($dataDir, $kwHost);
         $kw = gscReadJson($kwFile, []);
-        $kwValid = isset($kw['fetchedAt']) && ($kw['version'] ?? '') === GSC_VERSION;
+        $kwValid = isset($kw['fetchedAt'])
+            && ($kw['version'] ?? '') === GSC_VERSION
+            && ($kw['kwVersion'] ?? '') === GSC_KW_VERSION;
 
         // La IA analiza lo que el operador ve en pantalla, aunque la caché esté vieja:
         // refrescar GSC + Gemini en la misma request se come el límite de 60s del proxy.

@@ -2803,6 +2803,15 @@ class AppController {
       { value: counts.striking || 0, label: "en posición 4–20" },
       { value: counts.cannibal || 0, label: "canibalizadas", tone: counts.cannibal ? "warn" : "" },
     ];
+    if (summary.hiddenClicks > 0) {
+      stats.push({
+        value: `${GscModule.fmt(summary.hiddenClicks)} / ${GscModule.fmt(summary.siteClicks)}`,
+        label: "clics en búsquedas ocultas",
+        tone: summary.hiddenClicks / summary.siteClicks > 0.5 ? "warn" : "",
+        title:
+          "Google no entrega las queries poco frecuentes por privacidad. Estos clics son reales: vienen de búsquedas de cola larga que no aparecen en la lista.",
+      });
+    }
     stats.forEach((s) => {
       const box = document.createElement("div");
       box.className = `kw__stat${s.tone ? ` is-${s.tone}` : ""}`;
