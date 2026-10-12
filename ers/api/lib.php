@@ -567,6 +567,56 @@ function ersSeoSummary(string $host): array
     ];
 }
 
+/** Lee la caché de keywords que arma gsc.php (action=keywords) sin tocar Google. */
+function ersKeywordSummary(string $host, int $perBucket = 8): array
+{
+    $host = strtolower(preg_replace('/^www\./i', '', trim($host)) ?? $host);
+    if ($host === '') {
+        return ['error' => 'Host vacío'];
+    }
+    $read = static function (string $file): array {
+        $raw = is_file($file) ? file_get_contents($file) : false;
+        $data = is_string($raw) ? json_decode($raw, true) : null;
+        return is_array($data) ? $data : [];
+    };
+    $kw = $read(ersDataDir() . '/gsc-kw-' . md5($host) . '.json');
+    if (!isset($kw['buckets'])) {
+        return [
+            'host' => $host,
+            'available' => false,
+            'message' => 'Sin caché de keywords. Abrí SEO → Keywords para este sitio.',
+        ];
+    }
+
+    $slim = static fn (array $r) => [
+        'query' => $r['q'] ?? '',
+        'clicks' => $r['clicks'] ?? 0,
+        'impressions' => $r['impressions'] ?? 0,
+        'ctr' => $r['ctr'] ?? 0,
+        'position' => $r['position'] ?? 0,
+        'deltaClicks' => $r['dClicks'] ?? 0,
+        'potentialClicks' => max((int) ($r['gain'] ?? 0), (int) ($r['ctrGain'] ?? 0)),
+        'page' => $r['page'] ?? '',
+        'brand' => !empty($r['brand']),
+    ];
+    $buckets = [];
+    foreach (['top', 'striking', 'lowCtr', 'rising', 'falling'] as $key) {
+        $buckets[$key] = array_map($slim, array_slice($kw['buckets'][$key] ?? [], 0, $perBucket));
+    }
+    $buckets['cannibal'] = array_slice($kw['buckets']['cannibal'] ?? [], 0, 5);
+
+    $ai = $read(ersDataDir() . '/gsc-kw-ai-' . md5($host) . '.json');
+    return [
+        'host' => $host,
+        'available' => true,
+        'fetchedAt' => $kw['fetchedAt'] ?? null,
+        'range' => $kw['range'] ?? null,
+        'summary' => $kw['summary'] ?? null,
+        'buckets' => $buckets,
+        'ai' => is_array($ai['insights'] ?? null) ? $ai['insights'] : null,
+    ];
+}
+
 function ersBuildSeoReportMarkdown(string $host, array $summary, ?array $client): string
 {
     $name = $client['name'] ?? $host;
@@ -649,6 +699,45 @@ function ersBuildSeoReportMarkdown(string $host, array $summary, ?array $client)
         }
     }
 
+    $kw = ersKeywordSummary($host, 6);
+    if (!empty($kw['available'])) {
+        $ks = $kw['summary'] ?? [];
+        $lines[] = '';
+        $lines[] = '## Keywords';
+        $lines[] = sprintf(
+            '- %s queries · %d%% de clics son de marca · ~%s clics/mes recuperables',
+            $ks['queries'] ?? 0,
+            round(((float) ($ks['brandShare'] ?? 0)) * 100),
+            $ks['potentialClicks'] ?? 0
+        );
+        $groups = ['top' => 'Más buscadas', 'striking' => 'Oportunidades (pos. 4-20)', 'rising' => 'En alza'];
+        foreach ($groups as $key => $label) {
+            $rows = $kw['buckets'][$key] ?? [];
+            if ($rows === []) {
+                continue;
+            }
+            $lines[] = '';
+            $lines[] = '### ' . $label;
+            foreach ($rows as $r) {
+                $lines[] = sprintf(
+                    '- %s · %s clics · %s imp · pos %s%s',
+                    $r['query'],
+                    $r['clicks'],
+                    $r['impressions'],
+                    number_format((float) $r['position'], 1),
+                    $key === 'striking' && $r['potentialClicks'] > 0 ? ' · +' . $r['potentialClicks'] . ' clics posibles' : ''
+                );
+            }
+        }
+        if (!empty($kw['ai']['acciones'])) {
+            $lines[] = '';
+            $lines[] = '### Plan sugerido (IA)';
+            foreach ($kw['ai']['acciones'] as $a) {
+                $lines[] = '- **' . ($a['titulo'] ?? '') . '**: ' . ($a['detalle'] ?? '');
+            }
+        }
+    }
+
     $lines[] = '';
     $lines[] = '_Mono Studio OS · borrador desde caché GSC_';
     return implode("\n", $lines);
@@ -686,6 +775,7 @@ function ersRunAction(string $tool, array $args, string $actor = 'user', bool $c
             'listAgenda' => ersActionListAgenda(),
             'getSeoSummary' => ersActionGetSeoSummary($args),
             'getPortfolioSeo' => ersActionGetPortfolioSeo($args),
+            'getKeywordOpportunities' => ersActionGetKeywordOpportunities($args),
             'generarInformeSeo' => ersActionGenerarInformeSeo($args, $actor),
             'addNote' => ersActionAddNote($args, $actor),
             'setCheckIn' => ersActionSetCheckIn($args, $actor),
@@ -798,6 +888,16 @@ function ersActionGetSeoSummary(array $args): array
         $host = ersHostOf((string) ($client['siteUrl'] ?? ''));
     }
     return ersSeoSummary($host);
+}
+
+function ersActionGetKeywordOpportunities(array $args): array
+{
+    $host = trim((string) ($args['host'] ?? ''));
+    if ($host === '') {
+        $client = ersActionGetClient($args);
+        $host = ersHostOf((string) ($client['siteUrl'] ?? ''));
+    }
+    return ersKeywordSummary($host);
 }
 
 /**
@@ -1729,6 +1829,18 @@ function ersGeminiToolDeclarations(): array
                 'type' => 'object',
                 'properties' => [
                     'limit' => $num('Máximo de sitios a listar (default 25)'),
+                ],
+            ],
+        ],
+        [
+            'name' => 'getKeywordOpportunities',
+            'description' => 'Keywords de UN sitio desde GSC: más buscadas, oportunidades en posición 4-20 con clics recuperables, CTR bajo, en alza, cayendo y canibalización, más el último análisis IA si existe. Usá esto para preguntas de palabras clave, queries, oportunidades de crecimiento o qué contenido crear.',
+            'parameters' => [
+                'type' => 'object',
+                'properties' => [
+                    'host' => $str('Hostname sin www'),
+                    'clientId' => $str('UUID del cliente'),
+                    'name' => $str('Nombre del cliente'),
                 ],
             ],
         ],

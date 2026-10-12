@@ -207,6 +207,36 @@
         <p class="signal-empty" id="seoSignalsEmpty" hidden>Sin alertas en este sitio.</p>
       </section>
 
+      <section class="kw" id="kwPanel" aria-labelledby="kwTitle" hidden>
+        <header class="kw__head">
+          <div>
+            <h3 id="kwTitle">Keywords</h3>
+            <p class="kw__meta" id="kwMeta"></p>
+          </div>
+          <button class="btn btn--neon" id="btnKwAi" type="button">Analizar con IA</button>
+        </header>
+
+        <div class="kw__stats" id="kwStats"></div>
+        <div class="kw-ai" id="kwAi" hidden aria-live="polite"></div>
+
+        <div class="period-toggle kw__tabs" id="kwTabs" role="tablist" aria-label="Grupos de keywords">
+          <button class="period-toggle__btn is-active" type="button" role="tab" data-kw-tab="striking">Oportunidades</button>
+          <button class="period-toggle__btn" type="button" role="tab" data-kw-tab="lowCtr">CTR bajo</button>
+          <button class="period-toggle__btn" type="button" role="tab" data-kw-tab="rising">En alza</button>
+          <button class="period-toggle__btn" type="button" role="tab" data-kw-tab="falling">Cayendo</button>
+          <button class="period-toggle__btn" type="button" role="tab" data-kw-tab="top">Más buscadas</button>
+          <button class="period-toggle__btn" type="button" role="tab" data-kw-tab="cannibal">Canibalización</button>
+        </div>
+        <p class="kw__hint" id="kwHint"></p>
+        <div class="seo-table-wrap">
+          <table class="seo-table kw__table">
+            <thead id="kwHead"></thead>
+            <tbody id="kwBody"></tbody>
+          </table>
+        </div>
+        <p class="signal-empty" id="kwEmpty" hidden></p>
+      </section>
+
       <details class="drawer" id="seoPagesDrawer" hidden>
         <summary>Todas las páginas <span id="seoPagesCount"></span></summary>
         <div class="seo-table-wrap">

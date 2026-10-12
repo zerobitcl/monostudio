@@ -7,6 +7,8 @@
  * GET  action=site&host=x.cl   → métricas, señales e inventario de un cliente
  * POST action=config           → override de sitemap/URLs para un host
  * POST action=index            → reenvía sitemap + inspecciona URLs (pedir rastreo)
+ * GET  action=keywords&host=x  → queries agrupadas en oportunidades (determinista)
+ * POST action=keywords-ai      → lectura de esas queries con Gemini (bajo demanda)
  *
  * Credenciales: data/gsc-service-account.json (el JSON que baja Google Cloud)
  */
@@ -39,6 +41,11 @@ const GSC_CONCURRENCY = 6;
  * con 504 alrededor de los 60s, así que cerramos antes y marcamos `partial`.
  */
 const GSC_TIME_BUDGET = 40;
+
+const GSC_KW_ROWS = 5000;
+const GSC_KW_BUCKET = 25;
+const GSC_KW_MIN_IMPRESSIONS = 20;
+const GSC_KW_AI_TIMEOUT = 45;
 
 /** Sube al cambiar la lógica de resolución de propiedad; sirve para saber qué versión está viva en el server. */
 const GSC_VERSION = '2026.09.08-report';
@@ -1521,6 +1528,515 @@ function gscNormalizeConfig(array $config): array
     return ['hosts' => $hosts];
 }
 
+/* ------------------------------------------------------------
+   Keywords: oportunidades por query
+   ------------------------------------------------------------ */
+
+/**
+ * CTR orgánico esperado por posición (curva conservadora de estudios públicos).
+ * Sirve para ordenar oportunidades por clics recuperables, no para prometer cifras.
+ */
+function gscExpectedCtr(float $position): float
+{
+    if ($position <= 0) {
+        return 0.0;
+    }
+    $curve = [1 => 0.28, 2 => 0.155, 3 => 0.10, 4 => 0.072, 5 => 0.054, 6 => 0.042, 7 => 0.033, 8 => 0.027, 9 => 0.022, 10 => 0.019];
+    $p = (int) max(1, round($position));
+    if ($p <= 10) {
+        return $curve[$p];
+    }
+    return $p <= 20 ? 0.009 : 0.003;
+}
+
+function gscAscii(string $value): string
+{
+    return strtolower(strtr($value, [
+        'á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u', 'ü' => 'u', 'ñ' => 'n',
+        'Á' => 'a', 'É' => 'e', 'Í' => 'i', 'Ó' => 'o', 'Ú' => 'u', 'Ü' => 'u', 'Ñ' => 'n',
+    ]));
+}
+
+/**
+ * Las queries de marca inflan CTR y posición: si no se separan, el sitio parece
+ * sano aunque no capte demanda nueva. Heurística: el primer label del dominio.
+ */
+function gscBrandToken(string $host): string
+{
+    $token = preg_replace('#[^a-z0-9]#', '', gscAscii(explode('.', $host)[0] ?? '')) ?? '';
+    return strlen($token) >= 4 ? $token : '';
+}
+
+function gscIsBrandQuery(string $query, string $token): bool
+{
+    if ($token === '') {
+        return false;
+    }
+    $flat = preg_replace('#[^a-z0-9]#', '', gscAscii($query)) ?? '';
+    return $flat !== '' && str_contains($flat, $token);
+}
+
+function gscKeywordMetrics(array $payload): array
+{
+    $out = [];
+    foreach ($payload['rows'] ?? [] as $row) {
+        $query = trim((string) ($row['keys'][0] ?? ''));
+        if ($query !== '') {
+            $out[$query] = gscMetricRow($row);
+        }
+    }
+    return $out;
+}
+
+/** query → páginas que rankean para ella, ordenadas por impresiones. */
+function gscKeywordPages(array $payload): array
+{
+    $out = [];
+    foreach ($payload['rows'] ?? [] as $row) {
+        $query = trim((string) ($row['keys'][0] ?? ''));
+        $url = trim((string) ($row['keys'][1] ?? ''));
+        if ($query === '' || $url === '') {
+            continue;
+        }
+        $out[$query][] = ['url' => $url] + gscMetricRow($row);
+    }
+    foreach ($out as &$pages) {
+        usort($pages, static fn ($a, $b) => $b['impressions'] <=> $a['impressions']);
+    }
+    unset($pages);
+    return $out;
+}
+
+function gscKeywordRow(string $query, array $now, array $prev, array $pages, bool $brand): array
+{
+    $delta = gscDelta($now, $prev);
+    $pos = $now['position'];
+    $impr = $now['impressions'];
+
+    // Llegar al top 3 desde página 1, o a página 1 desde la 2: saltos realistas en un ciclo.
+    $gain = 0;
+    if ($pos >= 4 && $pos <= 20) {
+        $target = $pos <= 10 ? 3 : 8;
+        $gain = (int) max(0, round($impr * (gscExpectedCtr($target) - $now['ctr'])));
+    }
+    $ctrGain = $pos > 0 && $pos <= 6
+        ? (int) max(0, round($impr * (gscExpectedCtr($pos) - $now['ctr'])))
+        : 0;
+
+    return [
+        'q' => $query,
+        'brand' => $brand,
+        'clicks' => $now['clicks'],
+        'impressions' => $impr,
+        'ctr' => round($now['ctr'], 4),
+        'position' => round($pos, 1),
+        'dClicks' => $delta['clicks'],
+        'dImpr' => $delta['impressions'],
+        'dPos' => round($delta['position'], 1),
+        'page' => (string) ($pages[0]['url'] ?? ''),
+        'pages' => count($pages),
+        'gain' => $gain,
+        'ctrGain' => $ctrGain,
+        'isNew' => $prev['impressions'] === 0 && $impr > 0,
+        'lost' => $impr === 0 && $prev['clicks'] > 0,
+    ];
+}
+
+/**
+ * Agrupa queries en listas accionables. Todo es determinista: la IA interpreta
+ * estas listas, nunca calcula métricas, así no puede inventar números.
+ */
+function gscBuildKeywords(array $now, array $prev, array $pagesByQuery, string $host): array
+{
+    $brandToken = gscBrandToken($host);
+    $rows = [];
+    $totalClicks = 0;
+    $brandClicks = 0;
+
+    // PHP convierte claves numéricas ("2024") en int; con strict_types hay que castear.
+    foreach ($now as $query => $cur) {
+        $query = (string) $query;
+        $brand = gscIsBrandQuery($query, $brandToken);
+        $totalClicks += $cur['clicks'];
+        if ($brand) {
+            $brandClicks += $cur['clicks'];
+        }
+        $rows[] = gscKeywordRow($query, $cur, $prev[$query] ?? gscMetricRow(null), $pagesByQuery[$query] ?? [], $brand);
+    }
+    foreach ($prev as $query => $before) {
+        if (!isset($now[$query]) && $before['clicks'] >= 3) {
+            $query = (string) $query;
+            $rows[] = gscKeywordRow($query, gscMetricRow(null), $before, [], gscIsBrandQuery($query, $brandToken));
+        }
+    }
+
+    $pick = static function (callable $filter, callable $sort) use ($rows): array {
+        $list = array_values(array_filter($rows, $filter));
+        usort($list, $sort);
+        return array_slice($list, 0, GSC_KW_BUCKET);
+    };
+    $min = GSC_KW_MIN_IMPRESSIONS;
+
+    $buckets = [
+        'striking' => $pick(
+            static fn ($r) => !$r['brand'] && $r['impressions'] >= $min && $r['gain'] > 0,
+            static fn ($a, $b) => $b['gain'] <=> $a['gain']
+        ),
+        'lowCtr' => $pick(
+            static fn ($r) => !$r['brand'] && $r['impressions'] >= $min * 2 && $r['position'] <= 6
+                && $r['ctr'] < gscExpectedCtr($r['position']) * 0.5,
+            static fn ($a, $b) => $b['ctrGain'] <=> $a['ctrGain']
+        ),
+        'rising' => $pick(
+            static fn ($r) => $r['impressions'] >= $min
+                && ($r['isNew'] || $r['dImpr'] >= max($min, ($r['impressions'] - $r['dImpr']) * 0.5)),
+            static fn ($a, $b) => $b['dImpr'] <=> $a['dImpr']
+        ),
+        'falling' => $pick(
+            static fn ($r) => $r['dClicks'] <= -3 || ($r['impressions'] >= 30 && $r['dPos'] <= -2),
+            static fn ($a, $b) => ($a['dClicks'] <=> $b['dClicks']) ?: ($a['dPos'] <=> $b['dPos'])
+        ),
+        'top' => $pick(
+            static fn ($r) => $r['clicks'] > 0 || $r['impressions'] >= $min,
+            static fn ($a, $b) => ($b['clicks'] <=> $a['clicks']) ?: ($b['impressions'] <=> $a['impressions'])
+        ),
+        'cannibal' => [],
+    ];
+
+    foreach ($pagesByQuery as $query => $pages) {
+        $total = array_sum(array_column($pages, 'impressions'));
+        if ($total < 30 || gscIsBrandQuery((string) $query, $brandToken)) {
+            continue;
+        }
+        $contenders = array_values(array_filter($pages, static fn ($p) => $p['impressions'] / $total >= 0.15));
+        if (count($contenders) < 2) {
+            continue;
+        }
+        $buckets['cannibal'][] = [
+            'q' => (string) $query,
+            'impressions' => $total,
+            'pages' => array_map(static fn ($p) => [
+                'url' => $p['url'],
+                'clicks' => $p['clicks'],
+                'impressions' => $p['impressions'],
+                'position' => round($p['position'], 1),
+                'share' => round($p['impressions'] / $total, 2),
+            ], array_slice($contenders, 0, 4)),
+        ];
+    }
+    usort($buckets['cannibal'], static fn ($a, $b) => $b['impressions'] <=> $a['impressions']);
+    $buckets['cannibal'] = array_slice($buckets['cannibal'], 0, GSC_KW_BUCKET);
+
+    // Una query puede estar en striking y lowCtr: se cuenta su mejor escenario, no ambos.
+    $potential = [];
+    foreach (array_merge($buckets['striking'], $buckets['lowCtr']) as $r) {
+        $potential[$r['q']] = max($potential[$r['q']] ?? 0, $r['gain'], $r['ctrGain']);
+    }
+
+    return [
+        'summary' => [
+            'queries' => count($now),
+            'clicks' => $totalClicks,
+            'brandToken' => $brandToken,
+            'brandShare' => $totalClicks > 0 ? round($brandClicks / $totalClicks, 3) : 0,
+            'potentialClicks' => array_sum($potential),
+            'counts' => array_map('count', $buckets),
+        ],
+        'buckets' => $buckets,
+    ];
+}
+
+function gscKeywordCacheFile(string $dataDir, string $host): string
+{
+    return $dataDir . '/gsc-kw-' . md5($host) . '.json';
+}
+
+function gscKeywordAiFile(string $dataDir, string $host): string
+{
+    return $dataDir . '/gsc-kw-ai-' . md5($host) . '.json';
+}
+
+function gscFetchKeywords(string $token, string $property, string $host): array
+{
+    $end = (new DateTimeImmutable('today', new DateTimeZone('UTC')))->modify('-3 days');
+    $start = $end->modify('-27 days');
+    $prevEnd = $start->modify('-1 day');
+    $prevStart = $prevEnd->modify('-27 days');
+    $range = static fn (DateTimeImmutable $a, DateTimeImmutable $b) => ['start' => $a->format('Y-m-d'), 'end' => $b->format('Y-m-d')];
+    $cur = $range($start, $end);
+    $before = $range($prevStart, $prevEnd);
+
+    $res = gscMultiFetch([
+        'now' => gscAnalyticsJob($token, $property, $cur['start'], $cur['end'], ['dimensions' => ['query'], 'rowLimit' => GSC_KW_ROWS]),
+        'prev' => gscAnalyticsJob($token, $property, $before['start'], $before['end'], ['dimensions' => ['query'], 'rowLimit' => GSC_KW_ROWS]),
+        'pages' => gscAnalyticsJob($token, $property, $cur['start'], $cur['end'], ['dimensions' => ['query', 'page'], 'rowLimit' => GSC_KW_ROWS]),
+    ]);
+    if (!$res['now']['ok']) {
+        throw new RuntimeException(gscJobError($res['now'], 'Search Console no devolvió queries'));
+    }
+
+    $data = static fn (array $r) => $r['ok'] && is_array($r['data']) ? $r['data'] : [];
+    return [
+        'host' => $host,
+        'property' => $property,
+        'version' => GSC_VERSION,
+        'fetchedAt' => time(),
+        'range' => $cur,
+        'previousRange' => $before,
+    ] + gscBuildKeywords(
+        gscKeywordMetrics($data($res['now'])),
+        gscKeywordMetrics($data($res['prev'])),
+        gscKeywordPages($data($res['pages'])),
+        $host
+    );
+}
+
+/** El análisis IA viejo se sigue mostrando marcado como desfasado: rehacerlo cuesta tokens. */
+function gscKeywordAiFor(string $dataDir, string $host, int $basedOn): ?array
+{
+    $ai = gscReadJson(gscKeywordAiFile($dataDir, $host), []);
+    if (!is_array($ai['insights'] ?? null)) {
+        return null;
+    }
+    $ai['stale'] = (int) ($ai['basedOn'] ?? 0) !== $basedOn;
+    return $ai;
+}
+
+function gscKeywordLine(array $r): string
+{
+    $path = $r['page'] !== '' ? (parse_url($r['page'], PHP_URL_PATH) ?: '/') : '-';
+    return implode(' | ', [
+        $r['q'],
+        $r['clicks'],
+        $r['impressions'],
+        round($r['ctr'] * 100, 1) . '%',
+        $r['position'],
+        ($r['dClicks'] > 0 ? '+' : '') . $r['dClicks'],
+        ($r['dPos'] > 0 ? '+' : '') . $r['dPos'],
+        $path,
+    ]);
+}
+
+function gscKeywordsAiPrompt(array $kw): string
+{
+    $s = $kw['summary'] ?? [];
+    $lines = [
+        'Sitio: ' . ($kw['host'] ?? ''),
+        'Rango: ' . ($kw['range']['start'] ?? '') . ' a ' . ($kw['range']['end'] ?? '') . ' (vs 28 días previos)',
+        'Queries con datos: ' . ($s['queries'] ?? 0) . ' · clics: ' . ($s['clicks'] ?? 0)
+            . ' · % clics de marca: ' . round(((float) ($s['brandShare'] ?? 0)) * 100) . '%'
+            . ' · clics recuperables estimados: ' . ($s['potentialClicks'] ?? 0),
+        '',
+        'Formato de filas: query | clics | impresiones | ctr | posición | Δclics | Δposición (+ = mejoró) | página',
+    ];
+    $sections = [
+        'top' => 'TOP POR CLICS',
+        'striking' => 'POSICIÓN 4-20 CON DEMANDA (striking distance)',
+        'lowCtr' => 'TOP 6 CON CTR BAJO',
+        'rising' => 'EN ALZA / NUEVAS',
+        'falling' => 'CAYENDO',
+    ];
+    foreach ($sections as $key => $title) {
+        $rows = array_slice($kw['buckets'][$key] ?? [], 0, 15);
+        if ($rows === []) {
+            continue;
+        }
+        $lines[] = '';
+        $lines[] = '## ' . $title;
+        foreach ($rows as $r) {
+            $lines[] = gscKeywordLine($r) . ($r['brand'] ? ' [marca]' : '') . ($r['isNew'] ? ' [nueva]' : '');
+        }
+    }
+    $cannibal = array_slice($kw['buckets']['cannibal'] ?? [], 0, 8);
+    if ($cannibal !== []) {
+        $lines[] = '';
+        $lines[] = '## CANIBALIZACIÓN (varias URLs compiten por la query)';
+        foreach ($cannibal as $c) {
+            $pages = array_map(
+                static fn ($p) => (parse_url($p['url'], PHP_URL_PATH) ?: '/') . ' ' . round($p['share'] * 100) . '% pos ' . $p['position'],
+                $c['pages']
+            );
+            $lines[] = $c['q'] . ' | ' . $c['impressions'] . ' imp | ' . implode(', ', $pages);
+        }
+    }
+    return implode("\n", $lines);
+}
+
+function gscKeywordsAiSchema(): array
+{
+    $str = ['type' => 'string'];
+    $list = ['type' => 'array', 'items' => $str];
+    $enum = static fn (array $values) => ['type' => 'string', 'enum' => $values];
+    $obj = static fn (array $props) => [
+        'type' => 'object',
+        'properties' => $props,
+        'required' => array_keys($props),
+    ];
+
+    return $obj([
+        'resumen' => $str,
+        'clusters' => ['type' => 'array', 'items' => $obj([
+            'tema' => $str,
+            'intencion' => $enum(['informacional', 'comercial', 'transaccional', 'local', 'navegacional']),
+            'queries' => $list,
+            'lectura' => $str,
+        ])],
+        'acciones' => ['type' => 'array', 'items' => $obj([
+            'titulo' => $str,
+            'detalle' => $str,
+            'tipo' => $enum(['title_meta', 'ampliar_contenido', 'contenido_nuevo', 'enlazado_interno', 'canibalizacion', 'tecnico']),
+            'url' => $str,
+            'queries' => $list,
+            'impacto' => $enum(['alto', 'medio', 'bajo']),
+            'esfuerzo' => $enum(['bajo', 'medio', 'alto']),
+        ])],
+        'ideas' => ['type' => 'array', 'items' => $obj([
+            'titulo' => $str,
+            'keyword' => $str,
+            'porque' => $str,
+        ])],
+    ]);
+}
+
+/**
+ * La IA solo puede citar queries y URLs que existen en los datos; lo demás se
+ * descarta. Es la defensa contra keywords inventadas que el cliente luego busca.
+ */
+function gscSanitizeKeywordAi(array $raw, array $kw): array
+{
+    $host = (string) ($kw['host'] ?? '');
+    $known = [];
+    foreach ($kw['buckets'] ?? [] as $rows) {
+        foreach ($rows as $r) {
+            $known[gscAscii((string) $r['q'])] = ['q' => (string) $r['q'], 'page' => (string) ($r['page'] ?? '')];
+        }
+    }
+    $clip = static fn ($s, int $n): string => function_exists('mb_substr')
+        ? mb_substr(trim((string) $s), 0, $n)
+        : substr(trim((string) $s), 0, $n);
+    $queries = static function ($list) use ($known): array {
+        $out = [];
+        foreach (is_array($list) ? $list : [] as $q) {
+            $hit = $known[gscAscii(trim((string) $q))] ?? null;
+            if ($hit && !in_array($hit['q'], $out, true)) {
+                $out[] = $hit['q'];
+            }
+        }
+        return array_slice($out, 0, 8);
+    };
+    $oneOf = static fn ($v, array $allowed, string $fallback): string => in_array($v, $allowed, true) ? $v : $fallback;
+
+    $clusters = [];
+    foreach (array_slice(is_array($raw['clusters'] ?? null) ? $raw['clusters'] : [], 0, 5) as $c) {
+        $qs = $queries($c['queries'] ?? []);
+        if ($qs === [] || trim((string) ($c['tema'] ?? '')) === '') {
+            continue;
+        }
+        $clusters[] = [
+            'tema' => $clip($c['tema'], 80),
+            'intencion' => $oneOf($c['intencion'] ?? '', ['informacional', 'comercial', 'transaccional', 'local', 'navegacional'], 'informacional'),
+            'queries' => $qs,
+            'lectura' => $clip($c['lectura'] ?? '', 400),
+        ];
+    }
+
+    $actions = [];
+    foreach (array_slice(is_array($raw['acciones'] ?? null) ? $raw['acciones'] : [], 0, 6) as $a) {
+        $title = $clip($a['titulo'] ?? '', 140);
+        if ($title === '') {
+            continue;
+        }
+        $qs = $queries($a['queries'] ?? []);
+        $url = trim((string) ($a['url'] ?? ''));
+        if (!gscUrlBelongsToHost($url, $host)) {
+            $url = $qs !== [] ? ($known[gscAscii($qs[0])]['page'] ?? '') : '';
+        }
+        $actions[] = [
+            'titulo' => $title,
+            'detalle' => $clip($a['detalle'] ?? '', 600),
+            'tipo' => $oneOf($a['tipo'] ?? '', ['title_meta', 'ampliar_contenido', 'contenido_nuevo', 'enlazado_interno', 'canibalizacion', 'tecnico'], 'ampliar_contenido'),
+            'url' => $url,
+            'queries' => $qs,
+            'impacto' => $oneOf($a['impacto'] ?? '', ['alto', 'medio', 'bajo'], 'medio'),
+            'esfuerzo' => $oneOf($a['esfuerzo'] ?? '', ['bajo', 'medio', 'alto'], 'medio'),
+        ];
+    }
+
+    $ideas = [];
+    foreach (array_slice(is_array($raw['ideas'] ?? null) ? $raw['ideas'] : [], 0, 4) as $i) {
+        $title = $clip($i['titulo'] ?? '', 140);
+        if ($title !== '') {
+            $ideas[] = [
+                'titulo' => $title,
+                'keyword' => $clip($i['keyword'] ?? '', 100),
+                'porque' => $clip($i['porque'] ?? '', 300),
+            ];
+        }
+    }
+
+    return [
+        'resumen' => $clip($raw['resumen'] ?? '', 700),
+        'clusters' => $clusters,
+        'acciones' => $actions,
+        'ideas' => $ideas,
+    ];
+}
+
+function gscKeywordsAi(array $kw): array
+{
+    require_once __DIR__ . '/lib.php';
+    $cfg = ersLoadGeminiConfig();
+    if ($cfg['apiKey'] === '') {
+        throw new RuntimeException('Falta configurar Gemini (ers/data/gemini.json).');
+    }
+
+    $system = <<<TXT
+Sos un consultor SEO senior que analiza datos reales de Google Search Console de un sitio de un cliente en Chile.
+Respondés en español neutro-chileno, directo, sin teoría ni relleno.
+
+REGLAS
+- Usá SOLO queries y URLs que aparecen en los datos. Copiá las queries textuales, sin corregirlas.
+- No inventes métricas ni volúmenes de búsqueda; si citás un número, tiene que estar en los datos.
+- Las queries [marca] no son oportunidad de crecimiento: mencionalas solo si caen.
+- Priorizá por clics recuperables: striking distance y CTR bajo primero, luego tendencias.
+- Cada acción tiene que ser ejecutable esta semana por un dev/redactor: qué cambiar y en qué URL.
+- "ideas" = contenidos NUEVOS que cubran demanda que hoy ninguna página atiende bien (queries en posición > 10 o con la página equivocada). Si no hay evidencia, devolvé lista vacía.
+- resumen: máximo 3 frases, con el hallazgo más importante primero.
+- Máximo 5 clusters, 6 acciones, 4 ideas.
+TXT;
+
+    $payload = [
+        'systemInstruction' => ['parts' => [['text' => $system]]],
+        'contents' => [['role' => 'user', 'parts' => [['text' => gscKeywordsAiPrompt($kw)]]]],
+        'generationConfig' => [
+            'temperature' => 0.35,
+            'maxOutputTokens' => 8192,
+            'responseMimeType' => 'application/json',
+            'responseSchema' => gscKeywordsAiSchema(),
+        ],
+    ];
+
+    $res = ersGeminiHttp(ersGeminiUrl($cfg), $payload, GSC_KW_AI_TIMEOUT);
+    $text = '';
+    foreach ($res['candidates'][0]['content']['parts'] ?? [] as $part) {
+        if (empty($part['thought']) && isset($part['text']) && is_string($part['text'])) {
+            $text .= $part['text'];
+        }
+    }
+    $text = trim((string) preg_replace('#^```(?:json)?|```$#m', '', $text));
+    $raw = json_decode($text, true);
+    if (!is_array($raw)) {
+        throw new RuntimeException('Gemini no devolvió un análisis válido. Reintenta.');
+    }
+
+    return [
+        'model' => $cfg['model'],
+        'generatedAt' => time(),
+        'basedOn' => (int) ($kw['fetchedAt'] ?? 0),
+        'insights' => gscSanitizeKeywordAi($raw, $kw),
+    ];
+}
+
 $rawConfig = gscReadJson($configFile, []);
 $config = gscNormalizeConfig($rawConfig);
 if (!array_key_exists('hosts', $rawConfig) || $rawConfig['hosts'] !== $config['hosts']) {
@@ -2177,6 +2693,74 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
         ];
         gscWriteJson($hostCacheFile, $payload);
         gscJson($payload);
+    } catch (Throwable $e) {
+        gscJson(['error' => $e->getMessage()], 500);
+    }
+}
+
+if ($action === 'keywords' || $action === 'keywords-ai') {
+    try {
+        if ($serviceAccount === []) {
+            gscJson(['error' => 'No hay cuenta de servicio. Sube el JSON a ers/data/gsc-service-account.json.'], 400);
+        }
+
+        $isAi = $action === 'keywords-ai';
+        if ($isAi && $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            gscJson(['error' => 'Método no permitido'], 405);
+        }
+        $input = $isAi ? json_decode((string) file_get_contents('php://input'), true) : $_GET;
+        $input = is_array($input) ? $input : [];
+
+        $kwHost = gscSanitizeHost((string) ($input['host'] ?? ''));
+        if ($kwHost === '') {
+            gscJson(['error' => 'Indica el dominio del cliente'], 400);
+        }
+        $fresh = in_array((string) ($input['fresh'] ?? ''), ['1', 'true'], true) || ($input['fresh'] ?? null) === true;
+
+        @set_time_limit(($isAi ? GSC_KW_AI_TIMEOUT : GSC_TIME_BUDGET) + 20);
+
+        $kwFile = gscKeywordCacheFile($dataDir, $kwHost);
+        $kw = gscReadJson($kwFile, []);
+        $kwValid = isset($kw['fetchedAt']) && ($kw['version'] ?? '') === GSC_VERSION;
+
+        // La IA analiza lo que el operador ve en pantalla, aunque la caché esté vieja:
+        // refrescar GSC + Gemini en la misma request se come el límite de 60s del proxy.
+        $needsFetch = $isAi
+            ? !$kwValid
+            : ($fresh || !$kwValid || (time() - (int) $kw['fetchedAt']) >= GSC_CACHE_TTL);
+
+        if ($needsFetch) {
+            $token = gscAccessToken($serviceAccount, $tokenFile);
+            $sites = [];
+            try {
+                $sites = gscListSites($token);
+            } catch (Throwable $e) {
+                // gscResolveProperty prueba candidatos aunque list sites falle.
+            }
+            $resolved = gscResolveProperty($token, 'https://' . $kwHost . '/', $sites);
+            $property = (string) ($resolved['property'] ?? '');
+            if ($property === '') {
+                gscJson(['error' => (string) ($resolved['error'] ?? 'Search Console no ve este dominio.')], 400);
+            }
+            $kw = gscFetchKeywords($token, $property, $kwHost);
+            gscWriteJson($kwFile, $kw);
+            $kw['cached'] = false;
+        } else {
+            $kw['cached'] = true;
+        }
+
+        if (!$isAi) {
+            $kw['ai'] = gscKeywordAiFor($dataDir, $kwHost, (int) $kw['fetchedAt']);
+            gscJson($kw);
+        }
+
+        $ai = gscKeywordAiFor($dataDir, $kwHost, (int) $kw['fetchedAt']);
+        if ($fresh || $ai === null || $ai['stale']) {
+            $ai = gscKeywordsAi($kw);
+            gscWriteJson(gscKeywordAiFile($dataDir, $kwHost), $ai);
+            $ai['stale'] = false;
+        }
+        gscJson(['ok' => true, 'host' => $kwHost, 'ai' => $ai]);
     } catch (Throwable $e) {
         gscJson(['error' => $e->getMessage()], 500);
     }

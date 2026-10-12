@@ -2164,6 +2164,299 @@ body {
 }
 
 /* ==========================================================
+   SEO — Keywords
+   ========================================================== */
+.kw {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border);
+  background:
+    radial-gradient(120% 140% at 100% 0%, rgba(201, 54, 255, 0.06), transparent 55%),
+    rgba(255, 255, 255, 0.02);
+}
+
+.kw__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.kw__head h3 {
+  font-size: 0.76rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--txt-secondary);
+}
+
+.kw__meta {
+  margin-top: 4px;
+  font-size: 0.74rem;
+  color: var(--txt-dim);
+}
+
+.kw__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.kw__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--glass-border);
+}
+
+.kw__stat strong {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+}
+
+.kw__stat span {
+  font-size: 0.66rem;
+  color: var(--txt-dim);
+}
+
+.kw__stat.is-accent {
+  border-color: rgba(45, 255, 179, 0.25);
+}
+
+.kw__stat.is-accent strong { color: var(--neon-green); }
+.kw__stat.is-warn strong { color: #ffcc66; }
+
+.kw__tabs {
+  margin: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.kw__tabs .period-toggle__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.kw__count {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.kw__hint {
+  font-size: 0.76rem;
+  color: var(--txt-secondary);
+  line-height: 1.5;
+}
+
+.kw__table td:first-child {
+  min-width: 220px;
+}
+
+.kw__q {
+  display: block;
+  font-weight: 600;
+  color: var(--txt-primary);
+}
+
+.kw__table .seo-tag {
+  margin-top: 6px;
+  margin-right: 4px;
+}
+
+.kw__table .seo-tag + .seo-tag {
+  margin-left: 0;
+}
+
+.kw__page {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.7rem;
+  color: var(--txt-dim);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.kw__page:hover {
+  color: var(--neon-blue);
+}
+
+.kw__gain {
+  font-family: var(--font-mono);
+  color: var(--neon-green);
+}
+
+.kw__split {
+  display: grid;
+  gap: 6px;
+  min-width: 240px;
+  white-space: normal;
+}
+
+/* La barra de fondo muestra la cuota de impresiones sin sumar otra columna. */
+.kw__split-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 0.72rem;
+  color: var(--txt-primary);
+  text-decoration: none;
+  background: linear-gradient(90deg, rgba(255, 204, 102, 0.16) var(--share), rgba(255, 255, 255, 0.03) var(--share));
+}
+
+.kw__split-row small {
+  color: var(--txt-secondary);
+  white-space: nowrap;
+}
+
+.kw-ai {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(201, 54, 255, 0.22);
+  background: linear-gradient(160deg, rgba(201, 54, 255, 0.08), rgba(46, 123, 255, 0.05) 60%, transparent);
+}
+
+.kw-ai.is-loading {
+  animation: kw-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes kw-pulse {
+  50% { border-color: rgba(201, 54, 255, 0.5); }
+}
+
+.kw-ai__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.kw-ai__head .seo-tag {
+  margin-top: 0;
+}
+
+.kw-ai__title {
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--neon-magenta);
+}
+
+.kw-ai__meta {
+  font-size: 0.7rem;
+  color: var(--txt-dim);
+}
+
+.kw-ai__summary {
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--txt-primary);
+}
+
+.kw-ai__label {
+  margin-top: 4px;
+  font-size: 0.64rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--txt-dim);
+}
+
+.kw-ai__actions,
+.kw-ai__ideas {
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.kw-action,
+.kw-cluster,
+.kw-ai__ideas li {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(7, 8, 15, 0.45);
+  border: 1px solid var(--glass-border);
+}
+
+.kw-action.is-alto {
+  border-left: 2px solid var(--neon-green);
+}
+
+.kw-action__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.kw-action__top strong {
+  font-size: 0.86rem;
+}
+
+.kw-action__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.kw-action .seo-tag,
+.kw-cluster .seo-tag {
+  margin: 0;
+}
+
+.kw-action__detail {
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--txt-secondary);
+}
+
+.kw-action .seo-query-list,
+.kw-cluster .seo-query-list {
+  margin-top: 0;
+}
+
+.kw-action__foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.kw-action__foot .kw__page {
+  margin-top: 0;
+}
+
+.kw-action__foot .chip-btn {
+  margin-left: auto;
+}
+
+.kw-ai__clusters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.kw-ai__ideas .seo-query {
+  width: fit-content;
+}
+
+/* ==========================================================
    Hoy — agenda operativa
    ========================================================== */
 #panelToday,

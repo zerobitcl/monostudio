@@ -310,6 +310,22 @@ class GscModule {
     return data;
   }
 
+  static keywords(host, fresh = false) {
+    return GscModule.#get("keywords", `host=${encodeURIComponent(host)}${fresh ? "&fresh=1" : ""}`);
+  }
+
+  static async keywordsAi(host, fresh = false) {
+    const res = await fetch(GscModule.#url("keywords-ai"), {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ host, fresh }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || GscModule.#gatewayMessage(res.status));
+    return data;
+  }
+
   static hostOf(url) {
     try {
       return new URL(String(url)).hostname.replace(/^www\./i, "").toLowerCase();
@@ -917,6 +933,11 @@ class AppController {
     this.seoLoading = false;
     this.warming = false;
     this.indexing = false;
+    /** Keywords por host: solo en memoria, el server ya cachea 6h y el payload es grande. */
+    this.kwData = new Map();
+    this.kwTab = "striking";
+    this.kwLoading = new Set();
+    this.kwAnalyzing = false;
     this.chatOpen = false;
     this.chatBusy = false;
     this.chatHistory = [];
@@ -953,6 +974,7 @@ class AppController {
       "seoSignals", "seoSignalsEmpty", "seoPagesDrawer", "seoPagesCount",
       "seoTableBody", "seoDiagDrawer", "seoDiag", "seoRange", "seoBrief", "seoBriefBody",
       "seoPeriodToggle",
+      "kwPanel", "kwMeta", "kwStats", "kwAi", "kwTabs", "kwHint", "kwHead", "kwBody", "kwEmpty", "btnKwAi",
       "seoClicks", "seoImpressions", "seoCtr", "seoPosition",
       "seoClicksDelta", "seoImpressionsDelta", "seoCtrDelta", "seoPositionDelta",
       "btnGscRefresh", "btnSeoIndex", "btnSeoBrief", "btnSeoPrint", "btnSeoBriefClose", "gscConfigForm", "gscSitemapUrl", "gscPages",
@@ -1185,6 +1207,17 @@ class AppController {
       this.renderSeo();
     });
     this.dom.gscConfigForm.addEventListener("submit", (e) => this.handleGscConfig(e));
+    this.dom.kwTabs.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-kw-tab]");
+      if (!btn) return;
+      this.kwTab = btn.dataset.kwTab;
+      this.renderKeywords();
+    });
+    this.dom.btnKwAi.addEventListener("click", () => this.analyzeKeywords());
+    this.dom.kwAi.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-kw-task]");
+      if (btn) this.taskFromKeywordAction(Number(btn.dataset.kwTask));
+    });
 
     this.dom.btnViewOrbit.addEventListener("click", () => this.setView("orbit"));
     this.dom.btnViewList.addEventListener("click", () => this.setView("list"));
@@ -2672,6 +2705,421 @@ class AppController {
       this.renderStats();
       this.renderAgenda();
     }
+    // Secuencial a propósito: en paralelo con el análisis de páginas compite por el límite de 60s del proxy.
+    if (fresh) this.loadKeywords(host, true);
+  }
+
+  static KW_TABS = {
+    striking: {
+      label: "Oportunidades",
+      hint: "Posición 4–20 con demanda real. Es el crecimiento más barato: Google ya las asocia al sitio, falta empujarlas al top 3 o a página 1.",
+      gain: "gain",
+    },
+    lowCtr: {
+      label: "CTR bajo",
+      hint: "Ya rankean arriba pero casi nadie hace clic. Reescribe title y meta description de esa URL con la query exacta y un gancho.",
+      gain: "ctrGain",
+    },
+    rising: {
+      label: "En alza",
+      hint: "Demanda nueva o creciendo vs los 28 días previos. Refuerza la página antes de que un competidor tome el espacio.",
+    },
+    falling: {
+      label: "Cayendo",
+      hint: "Pierden clics o posición. Revisa cambios recientes en la URL, la competencia o si cambió la intención de búsqueda.",
+    },
+    top: {
+      label: "Más buscadas",
+      hint: "Lo que hoy trae el tráfico. Protégelo: no cambies slug ni title de estas URLs sin medir antes.",
+    },
+    cannibal: {
+      label: "Canibalización",
+      hint: "Varias URLs compiten por la misma búsqueda y se restan fuerza. Consolida en una o diferencia la intención de cada una.",
+    },
+  };
+
+  async loadKeywords(host, fresh = false) {
+    if (!host || this.kwLoading.has(host)) return;
+    this.kwLoading.add(host);
+    if (host === this.seoHost) this.renderKeywords();
+    try {
+      this.kwData.set(host, await GscModule.keywords(host, fresh));
+    } catch (err) {
+      this.kwData.set(host, { error: err.message });
+    } finally {
+      this.kwLoading.delete(host);
+      if (this.module === "seo" && host === this.seoHost) this.renderKeywords();
+    }
+  }
+
+  renderKeywords() {
+    const host = this.seoHost;
+    const seo = host ? SeoStore.get(host) : null;
+    if (!host || !seo?.totals) {
+      this.dom.kwPanel.hidden = true;
+      return;
+    }
+    this.dom.kwPanel.hidden = false;
+
+    const kw = this.kwData.get(host);
+    if (!kw && !this.kwLoading.has(host)) {
+      this.loadKeywords(host);
+      return;
+    }
+    const loading = this.kwLoading.has(host);
+    const ready = Boolean(kw?.buckets) && !kw.error;
+
+    this.dom.kwTabs.hidden = !ready;
+    this.dom.kwHint.hidden = !ready;
+    this.dom.kwHead.closest(".seo-table-wrap").hidden = !ready;
+    this.dom.btnKwAi.hidden = !ready;
+    this.dom.kwStats.innerHTML = "";
+
+    if (!ready) {
+      this.dom.kwMeta.textContent = loading ? "Consultando queries en Search Console…" : "";
+      this.dom.kwEmpty.hidden = false;
+      this.dom.kwEmpty.textContent = loading ? "Cargando…" : kw?.error || "Sin datos de keywords.";
+      this.dom.kwAi.hidden = true;
+      return;
+    }
+
+    const summary = kw.summary || {};
+    const counts = summary.counts || {};
+    const ageH = kw.fetchedAt ? (Date.now() / 1000 - kw.fetchedAt) / 3600 : null;
+    const age = ageH == null ? "" : ageH < 1 ? " · recién consultado" : ` · caché ${Math.round(ageH)}h`;
+    this.dom.kwMeta.textContent =
+      `${GscModule.fmt(summary.queries)} queries · ${kw.range?.start} → ${kw.range?.end}${loading ? " · actualizando…" : age}`;
+
+    const stats = [
+      { value: `+${GscModule.fmt(summary.potentialClicks)}`, label: "clics/mes recuperables", tone: "accent" },
+      {
+        value: `${Math.round((summary.brandShare || 0) * 100)}%`,
+        label: "clics de marca",
+        tone: summary.brandShare > 0.6 ? "warn" : "",
+        title: summary.brandShare > 0.6
+          ? "Más del 60% de los clics viene de gente que ya conoce la marca: el sitio casi no capta demanda nueva."
+          : "",
+      },
+      { value: counts.striking || 0, label: "en posición 4–20" },
+      { value: counts.cannibal || 0, label: "canibalizadas", tone: counts.cannibal ? "warn" : "" },
+    ];
+    stats.forEach((s) => {
+      const box = document.createElement("div");
+      box.className = `kw__stat${s.tone ? ` is-${s.tone}` : ""}`;
+      if (s.title) box.title = s.title;
+      const strong = document.createElement("strong");
+      strong.textContent = String(s.value);
+      const span = document.createElement("span");
+      span.textContent = s.label;
+      box.append(strong, span);
+      this.dom.kwStats.appendChild(box);
+    });
+    if (!AppController.KW_TABS[this.kwTab]) this.kwTab = "striking";
+    this.dom.kwTabs.querySelectorAll("[data-kw-tab]").forEach((btn) => {
+      const id = btn.dataset.kwTab;
+      btn.classList.toggle("is-active", id === this.kwTab);
+      btn.setAttribute("aria-selected", String(id === this.kwTab));
+      btn.textContent = AppController.KW_TABS[id].label;
+      const count = document.createElement("span");
+      count.className = "kw__count";
+      count.textContent = String(counts[id] || 0);
+      btn.appendChild(count);
+    });
+
+    const tab = AppController.KW_TABS[this.kwTab];
+    this.dom.kwHint.textContent = tab.hint;
+    const rows = kw.buckets[this.kwTab] || [];
+    this.dom.kwEmpty.hidden = rows.length > 0;
+    this.dom.kwEmpty.textContent = "Nada en este grupo. Buena señal o poca data: revisa otro rango más adelante.";
+
+    if (this.kwTab === "cannibal") this.#renderKwCannibal(rows);
+    else this.#renderKwRows(rows, tab.gain);
+
+    this.renderKeywordAi(kw);
+  }
+
+  #renderKwHead(labels) {
+    this.dom.kwHead.innerHTML = "";
+    const tr = document.createElement("tr");
+    labels.forEach((label) => {
+      const th = document.createElement("th");
+      th.textContent = label;
+      tr.appendChild(th);
+    });
+    this.dom.kwHead.appendChild(tr);
+  }
+
+  #renderKwRows(rows, gainKey) {
+    this.#renderKwHead(["Keyword", "Clics", "Imp.", "CTR", "Pos.", ...(gainKey ? ["Potencial"] : [])]);
+    this.dom.kwBody.innerHTML = "";
+    const fragment = document.createDocumentFragment();
+
+    rows.forEach((row) => {
+      const tr = document.createElement("tr");
+      const name = document.createElement("td");
+      const q = document.createElement("strong");
+      q.className = "kw__q";
+      q.textContent = row.q;
+      name.appendChild(q);
+      [
+        row.brand && ["marca", "neutral"],
+        row.isNew && ["nueva", "up"],
+        row.lost && ["perdida", "down"],
+        row.pages > 1 && [`${row.pages} URLs`, "push"],
+      ]
+        .filter(Boolean)
+        .forEach(([text, tone]) => {
+          const tag = document.createElement("span");
+          tag.className = `seo-tag is-${tone}`;
+          tag.textContent = text;
+          name.appendChild(tag);
+        });
+      if (row.page) {
+        const link = document.createElement("a");
+        link.href = row.page;
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.className = "kw__page";
+        link.textContent = GscModule.pagePath(row.page);
+        name.appendChild(link);
+      }
+
+      const cell = (text, deltaValue, opts) => {
+        const td = document.createElement("td");
+        td.textContent = text;
+        if (deltaValue != null) {
+          const d = GscModule.delta(deltaValue, opts);
+          if (d.text !== "sin cambio") {
+            const span = document.createElement("span");
+            span.className = `seo-delta ${d.cls}`;
+            span.textContent = d.text;
+            td.appendChild(span);
+          }
+        }
+        return td;
+      };
+
+      tr.append(
+        name,
+        cell(GscModule.fmt(row.clicks), row.dClicks, {}),
+        cell(GscModule.fmt(row.impressions), row.dImpr, {}),
+        cell(GscModule.pct(row.ctr)),
+        cell(row.position ? GscModule.pos(row.position) : "—", row.isNew || row.lost ? null : row.dPos, { position: true })
+      );
+      if (gainKey) {
+        const td = document.createElement("td");
+        td.className = "kw__gain";
+        td.textContent = row[gainKey] > 0 ? `+${GscModule.fmt(row[gainKey])}` : "—";
+        td.title = "Clics extra al mes estimados con la curva de CTR por posición";
+        tr.appendChild(td);
+      }
+      fragment.appendChild(tr);
+    });
+    this.dom.kwBody.appendChild(fragment);
+  }
+
+  #renderKwCannibal(rows) {
+    this.#renderKwHead(["Keyword", "Imp.", "URLs que compiten"]);
+    this.dom.kwBody.innerHTML = "";
+    const fragment = document.createDocumentFragment();
+    rows.forEach((row) => {
+      const tr = document.createElement("tr");
+      const name = document.createElement("td");
+      const q = document.createElement("strong");
+      q.className = "kw__q";
+      q.textContent = row.q;
+      name.appendChild(q);
+
+      const impr = document.createElement("td");
+      impr.textContent = GscModule.fmt(row.impressions);
+
+      const pages = document.createElement("td");
+      pages.className = "kw__split";
+      (row.pages || []).forEach((p) => {
+        const line = document.createElement("a");
+        line.href = p.url;
+        line.target = "_blank";
+        line.rel = "noopener";
+        line.className = "kw__split-row";
+        line.style.setProperty("--share", `${Math.round(p.share * 100)}%`);
+        const path = document.createElement("span");
+        path.textContent = GscModule.pagePath(p.url);
+        const meta = document.createElement("small");
+        meta.textContent = `${Math.round(p.share * 100)}% · pos ${GscModule.pos(p.position)}`;
+        line.append(path, meta);
+        pages.appendChild(line);
+      });
+
+      tr.append(name, impr, pages);
+      fragment.appendChild(tr);
+    });
+    this.dom.kwBody.appendChild(fragment);
+  }
+
+  static KW_ACTION_TYPES = {
+    title_meta: "Title / meta",
+    ampliar_contenido: "Ampliar contenido",
+    contenido_nuevo: "Contenido nuevo",
+    enlazado_interno: "Enlazado interno",
+    canibalizacion: "Canibalización",
+    tecnico: "Técnico",
+  };
+
+  renderKeywordAi(kw) {
+    const ai = kw?.ai;
+    const insights = ai?.insights;
+    const btn = this.dom.btnKwAi;
+    btn.disabled = this.kwAnalyzing || !(kw?.summary?.queries > 0);
+    btn.textContent = this.kwAnalyzing
+      ? "Analizando…"
+      : !insights
+        ? "Analizar con IA"
+        : ai.stale
+          ? "Actualizar análisis"
+          : "Rehacer análisis";
+
+    const box = this.dom.kwAi;
+    box.innerHTML = "";
+    if (!insights && !this.kwAnalyzing) {
+      box.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    box.classList.toggle("is-loading", this.kwAnalyzing);
+
+    const node = (tag, cls, text) => {
+      const el = document.createElement(tag);
+      if (cls) el.className = cls;
+      if (text != null) el.textContent = text;
+      return el;
+    };
+    const chips = (queries) => {
+      const wrap = node("div", "seo-query-list");
+      (queries || []).forEach((q) => wrap.appendChild(node("span", "seo-query", q)));
+      return wrap;
+    };
+
+    const head = node("div", "kw-ai__head");
+    head.appendChild(node("strong", "kw-ai__title", "Lectura IA"));
+    if (insights) {
+      const when = new Date(Number(ai.generatedAt || 0) * 1000);
+      const meta = `${ai.model || "Gemini"} · ${Number.isNaN(when.getTime()) ? "" : when.toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" })}`;
+      head.appendChild(node("span", "kw-ai__meta", meta));
+      if (ai.stale) head.appendChild(node("span", "seo-tag is-push", "datos más nuevos disponibles"));
+    }
+    box.appendChild(head);
+
+    if (!insights) {
+      box.appendChild(node("p", "kw-ai__summary", `Gemini está cruzando ${GscModule.fmt(kw.summary?.queries)} queries con tus páginas…`));
+      return;
+    }
+
+    if (insights.resumen) box.appendChild(node("p", "kw-ai__summary", insights.resumen));
+
+    if (insights.acciones?.length) {
+      box.appendChild(node("h4", "kw-ai__label", "Plan de acción"));
+      const list = node("ol", "kw-ai__actions");
+      insights.acciones.forEach((a, i) => {
+        const item = node("li", `kw-action is-${a.impacto}`);
+        const top = node("div", "kw-action__top");
+        top.appendChild(node("strong", "", a.titulo));
+        const tags = node("div", "kw-action__tags");
+        tags.append(
+          node("span", "seo-tag", AppController.KW_ACTION_TYPES[a.tipo] || a.tipo),
+          node("span", `seo-tag is-${a.impacto === "alto" ? "up" : "neutral"}`, `Impacto ${a.impacto}`),
+          node("span", "seo-tag", `Esfuerzo ${a.esfuerzo}`)
+        );
+        top.appendChild(tags);
+        item.appendChild(top);
+        if (a.detalle) item.appendChild(node("p", "kw-action__detail", a.detalle));
+        if (a.queries?.length) item.appendChild(chips(a.queries));
+
+        const foot = node("div", "kw-action__foot");
+        if (a.url) {
+          const link = node("a", "kw__page", GscModule.pagePath(a.url));
+          link.href = a.url;
+          link.target = "_blank";
+          link.rel = "noopener";
+          foot.appendChild(link);
+        }
+        const taskBtn = node("button", "chip-btn chip-btn--primary", "Anotar tarea");
+        taskBtn.type = "button";
+        taskBtn.dataset.kwTask = String(i);
+        foot.appendChild(taskBtn);
+        item.appendChild(foot);
+        list.appendChild(item);
+      });
+      box.appendChild(list);
+    }
+
+    if (insights.clusters?.length) {
+      box.appendChild(node("h4", "kw-ai__label", "Temas detectados"));
+      const grid = node("div", "kw-ai__clusters");
+      insights.clusters.forEach((c) => {
+        const card = node("article", "kw-cluster");
+        const top = node("div", "kw-action__top");
+        top.append(node("strong", "", c.tema), node("span", "seo-tag", c.intencion));
+        card.appendChild(top);
+        if (c.lectura) card.appendChild(node("p", "kw-action__detail", c.lectura));
+        card.appendChild(chips(c.queries));
+        grid.appendChild(card);
+      });
+      box.appendChild(grid);
+    }
+
+    if (insights.ideas?.length) {
+      box.appendChild(node("h4", "kw-ai__label", "Contenido nuevo sugerido"));
+      const list = node("ul", "kw-ai__ideas");
+      insights.ideas.forEach((idea) => {
+        const li = node("li");
+        li.appendChild(node("strong", "", idea.titulo));
+        if (idea.keyword) li.appendChild(node("span", "seo-query", idea.keyword));
+        if (idea.porque) li.appendChild(node("p", "kw-action__detail", idea.porque));
+        list.appendChild(li);
+      });
+      box.appendChild(list);
+    }
+  }
+
+  async analyzeKeywords() {
+    const host = this.seoHost;
+    const kw = this.kwData.get(host);
+    if (!host || !kw?.buckets || this.kwAnalyzing) return;
+    this.kwAnalyzing = true;
+    this.renderKeywords();
+    try {
+      // Solo forzamos a Gemini si el análisis vigente ya corresponde a estos datos.
+      const fresh = Boolean(kw.ai?.insights && !kw.ai.stale);
+      const data = await GscModule.keywordsAi(host, fresh);
+      const current = this.kwData.get(host);
+      if (current) current.ai = data.ai;
+      this.showToast("Análisis de keywords listo");
+    } catch (err) {
+      this.showToast(err.message || "No se pudo analizar con IA", 4200);
+    } finally {
+      this.kwAnalyzing = false;
+      if (this.module === "seo" && host === this.seoHost) this.renderKeywords();
+    }
+  }
+
+  async taskFromKeywordAction(index) {
+    const host = this.seoHost;
+    const action = this.kwData.get(host)?.ai?.insights?.acciones?.[index];
+    if (!action) return;
+    if (this.tasks.some((t) => !t.doneAt && t.title === action.titulo)) {
+      this.showToast("Ya está en tu lista");
+      return;
+    }
+    const client = this.clients.find((c) => GscModule.hostOf(c.siteUrl) === host);
+    const queries = action.queries?.length ? `\nQueries: ${action.queries.join(", ")}` : "";
+    await this.addTask({
+      title: action.titulo,
+      clientId: client?.id || "",
+      kind: "seo-keyword",
+      ref: action.url || "",
+      priority: { alto: 3, medio: 2, bajo: 1 }[action.impacto] || 2,
+      notes: `${action.detalle || ""}${queries}`.trim().slice(0, 1000),
+    });
   }
 
   renderSeo() {
@@ -2713,6 +3161,7 @@ class AppController {
       this.dom.btnSeoBrief.hidden = true;
       this.dom.seoPeriodToggle.hidden = true;
       this.dom.btnSeoIndex.hidden = true;
+      this.dom.kwPanel.hidden = true;
       return;
     } else if (data?.error) {
       this.#seoNotice(data.error, "warn");
@@ -2735,6 +3184,7 @@ class AppController {
     this.renderSeoInventory(data);
     this.renderSeoSignals(data);
     this.renderSeoPages(data);
+    this.renderKeywords();
     this.renderSeoDiagnostics(data);
     this.syncSeoForm(data);
   }
@@ -2868,7 +3318,7 @@ class AppController {
       [this.dom.seoClicksDelta, delta.clicks, {}],
       [this.dom.seoImpressionsDelta, delta.impressions, {}],
       [this.dom.seoCtrDelta, delta.ctr, { percent: true }],
-      [this.dom.seoPositionDelta, delta.position, { invert: true, position: true }],
+      [this.dom.seoPositionDelta, delta.position, { position: true }],
     ];
     pairs.forEach(([el, value, opts]) => {
       const { text, cls } = GscModule.delta(value, opts);
@@ -3087,7 +3537,7 @@ class AppController {
         cell(current.clicks, GscModule.fmt, row.delta?.clicks, {}),
         cell(current.impressions, GscModule.fmt, row.delta?.impressions, {}),
         cell(current.ctr, GscModule.pct, row.delta?.ctr, { percent: true }),
-        cell(current.position, GscModule.pos, row.delta?.position, { invert: true, position: true }),
+        cell(current.position, GscModule.pos, row.delta?.position, { position: true }),
         state
       );
       fragment.appendChild(tr);
@@ -3264,7 +3714,7 @@ class AppController {
             <div><dt>Clics</dt><dd>${esc(GscModule.fmt(t.clicks))}<small>${esc(deltaLabel(d.clicks))}</small></dd></div>
             <div><dt>Impresiones</dt><dd>${esc(GscModule.fmt(t.impressions))}<small>${esc(deltaLabel(d.impressions))}</small></dd></div>
             <div><dt>CTR</dt><dd>${esc(GscModule.pct(t.ctr))}<small>${esc(deltaLabel(d.ctr != null ? d.ctr * 100 : null))}</small></dd></div>
-            <div><dt>Posición</dt><dd>${esc(GscModule.pos(t.position))}<small>${esc(deltaLabel(d.position, true))}</small></dd></div>
+            <div><dt>Posición</dt><dd>${esc(GscModule.pos(t.position))}<small>${esc(deltaLabel(d.position))}</small></dd></div>
           </dl>
         </article>`;
       })
@@ -3308,7 +3758,10 @@ class AppController {
       });
     });
     queries.sort((a, b) => (Number(b.clicks) || 0) - (Number(a.clicks) || 0));
-    const queryRows = queries
+    // Las queries de keywords son de todo el sitio; las de páginas solo cubren las URLs inspeccionadas.
+    const kw = this.kwData.get(this.seoHost);
+    const kwTop = (kw?.buckets?.top || []).map((r) => ({ query: r.q, clicks: r.clicks, impressions: r.impressions }));
+    const queryRows = (kwTop.length ? kwTop : queries)
       .slice(0, 8)
       .map(
         (item) => `
@@ -3318,6 +3771,23 @@ class AppController {
           <td>${esc(GscModule.fmt(item.impressions))}</td>
         </tr>`
       )
+      .join("");
+
+    const opportunityRows = (kw?.buckets?.striking || [])
+      .slice(0, 8)
+      .map(
+        (r) => `
+        <tr>
+          <td>${esc(r.q)}</td>
+          <td>${esc(GscModule.pos(r.position))}</td>
+          <td>${esc(GscModule.fmt(r.impressions))}</td>
+          <td>+${esc(GscModule.fmt(r.gain))}</td>
+        </tr>`
+      )
+      .join("");
+
+    const kwPlan = (kw?.ai?.insights?.acciones || [])
+      .map((a) => `<li><strong>${esc(a.titulo)}</strong> — ${esc(a.detalle)}</li>`)
       .join("");
 
     const monthRows = (data.trend?.months || [])
@@ -3390,6 +3860,14 @@ class AppController {
           <thead><tr><th>Query</th><th>Clics</th><th>Imp.</th></tr></thead>
           <tbody>${queryRows}</tbody>
         </table></section>` : ""}
+
+      ${opportunityRows ? `<section class="brief__section"><h2>Oportunidades de crecimiento</h2>
+        <table>
+          <thead><tr><th>Query</th><th>Pos.</th><th>Imp.</th><th>Clics/mes posibles</th></tr></thead>
+          <tbody>${opportunityRows}</tbody>
+        </table></section>` : ""}
+
+      ${kwPlan ? `<section class="brief__section"><h2>Plan de keywords</h2><ol>${kwPlan}</ol></section>` : ""}
 
       ${monthRows ? `<section class="brief__section"><h2>Mes a mes</h2>
         <table>

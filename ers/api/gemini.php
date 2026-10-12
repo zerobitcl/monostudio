@@ -50,6 +50,7 @@ REGLAS DE RESPUESTA
 - Cero clases teóricas (no expliques qué es SEO/MRR/etc. a menos que lo pidan explícitamente).
 - SEO "en general" / "cómo vamos" / "alertas" / sin nombrar cliente → usá getPortfolioSeo (toda la cartera). NO uses solo el hostSEO del contexto.
 - SEO de un cliente/sitio concreto (o "este sitio" con host en contexto) → getSeoSummary.
+- Keywords / palabras más buscadas / oportunidades / qué contenido crear → getKeywordOpportunities. Priorizá "striking" (pos. 4-20) por potentialClicks; nunca inventes queries que no vengan en la tool.
 - Si no hay datos útiles: 1 frase + qué falta (ej. "Actualizá SEO en esos hosts").
 - No inventes métricas: usá tools. No inventes clientes.
 
@@ -167,7 +168,7 @@ function ersHydrateToolArgs(string $name, array $args, array $context): array
     $ctxHost = trim((string) ($context['host'] ?? ''));
 
     $needsClient = in_array($name, [
-        'getClient', 'listNotes', 'getSeoSummary', 'generarInformeSeo',
+        'getClient', 'listNotes', 'getSeoSummary', 'getKeywordOpportunities', 'generarInformeSeo',
         'addNote', 'setCheckIn', 'addWatch', 'listWatches',
         'updateBillingDate', 'updatePlanValue', 'addTask',
     ], true);
@@ -180,7 +181,7 @@ function ersHydrateToolArgs(string $name, array $args, array $context): array
     }
 
     if (
-        in_array($name, ['getSeoSummary', 'generarInformeSeo'], true)
+        in_array($name, ['getSeoSummary', 'getKeywordOpportunities', 'generarInformeSeo'], true)
         && trim((string) ($args['host'] ?? '')) === ''
         && $ctxHost !== ''
     ) {
