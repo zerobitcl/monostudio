@@ -1034,7 +1034,22 @@ function reportRender(array $model): string
         }
     }
 
-    $rows = '';
+    $moves = '';
+    foreach ($model['moves'] as $i => $move) {
+        $moves .= '<article class="move"><span class="num">' . $e(str_pad((string) ($i + 1), 2, '0', STR_PAD_LEFT)) . '</span><div><strong>'
+            . $e((string) $move['title']) . '</strong><p>' . $e((string) $move['detail']) . '</p><em>'
+            . $e((string) $move['path']) . '</em></div></article>';
+    }
+
+    $sources = [$copy['sourcesSearch']];
+    if (is_array($ga) && !empty($ga['ok'])) {
+        $sources[] = $copy['sourcesAnalytics'];
+    }
+    if (!empty($model['hasSpeed'])) {
+        $sources[] = $copy['sourcesSpeed'];
+    }
+
+    $cards = '';
     foreach ($model['pages'] as $page) {
         $line = (string) ($model['lines'][$page['path']] ?? '');
         $query = (string) ($page['query'] ?? '');
@@ -1046,81 +1061,74 @@ function reportRender(array $model): string
             }
             $speed .= '</span>';
         }
-        $rows .= '<tr><td><strong class="path">' . $e((string) $page['path']) . '</strong>'
-            . ($query !== '' ? '<span class="query">' . $e($copy['searched']) . ' «' . $e($query) . '»</span>' : '')
-            . $speed
-            . '</td><td>' . $e(reportNum((float) $page['impressions'], $lang)) . '</td><td>'
-            . $e(reportNum((float) $page['clicks'], $lang)) . '</td><td>'
-            . $e($page['position'] > 0 ? reportNum((float) $page['position'], $lang, 1) : '—')
-            . '</td><td>' . $e($line) . '</td></tr>';
-    }
-
-    $moves = '';
-    foreach ($model['moves'] as $i => $move) {
-        $moves .= '<li><span class="num">' . $e(str_pad((string) ($i + 1), 2, '0', STR_PAD_LEFT)) . '</span><div><strong>'
-            . $e((string) $move['title']) . '</strong><p>' . $e((string) $move['detail']) . '</p><em>'
-            . $e((string) $move['path']) . '</em></div></li>';
-    }
-
-    $sources = [$copy['sourcesSearch']];
-    if (is_array($ga) && !empty($ga['ok'])) {
-        $sources[] = $copy['sourcesAnalytics'];
-    }
-    if (!empty($model['hasSpeed'])) {
-        $sources[] = $copy['sourcesSpeed'];
+        $place = $page['position'] > 0 ? reportNum((float) $page['position'], $lang, 1) : '—';
+        $cards .= '<article class="card"><header><strong>' . $e((string) $page['path']) . '</strong><span>'
+            . $e(reportNum((float) $page['impressions'], $lang)) . ' veces · '
+            . $e(reportNum((float) $page['clicks'], $lang)) . ' clics · lugar '
+            . $e($place) . '</span></header>'
+            . ($query !== '' ? '<p class="query">' . $e($copy['searched']) . ' «' . $e($query) . '»</p>' : '')
+            . ($speed !== '' ? '<p class="query">' . $speed . '</p>' : '')
+            . '<p class="todo">' . $e($line) . '</p></article>';
     }
 
     $css = <<<CSS
     * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; background: #fff; color: #1c1915; }
-    body { font-family: "Segoe UI", system-ui, sans-serif; font-size: 12px; line-height: 1.45; }
-    .sheet { padding: 4px 2px 8px; }
-    .mast { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; border-bottom: 1.5px solid #1c1915; padding-bottom: 14px; }
-    .kicker { margin: 0; letter-spacing: .22em; text-transform: uppercase; font-size: 9px; }
-    h1 { margin: 8px 0 0; font-size: 28px; font-weight: 560; letter-spacing: -.03em; line-height: 1.02; }
-    .who { margin: 6px 0 0; color: #5c564c; font-size: 13px; }
-    .when { margin: 0; text-align: right; color: #5c564c; font-size: 12px; }
-    .headline { margin: 22px 0 8px; padding-left: 12px; border-left: 3px solid #1c1915; font-size: 16px; line-height: 1.35; }
-    .lead { margin: 0 0 18px; font-size: 13.5px; max-width: 68ch; }
-    .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-    .kpis--ga { margin-top: 8px; }
-    .kpi { border: 1px solid #e4dfd6; padding: 10px 10px 8px; }
-    .kpi span { display: block; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: #6b645b; }
-    .kpi strong { display: block; margin-top: 4px; font-size: 20px; letter-spacing: -.03em; font-weight: 600; }
-    .kpi em { display: block; margin-top: 2px; font-style: normal; font-size: 11px; color: #6b645b; min-height: 1em; }
+    html, body { margin: 0; padding: 0; background: #f3f0e8; color: #16140f; }
+    body { font-family: "Segoe UI", system-ui, sans-serif; font-size: 12.5px; line-height: 1.5; }
+    .sheet { padding: 0 0 8px; }
+    .mast { display: flex; justify-content: space-between; align-items: flex-end; gap: 28px; background: #12141c; color: #f6f3ec; padding: 28px 26px 22px; break-inside: avoid; page-break-inside: avoid; }
+    .kicker { margin: 0 0 10px; letter-spacing: .28em; text-transform: uppercase; font-size: 10px; color: #8eb0ff; }
+    h1 { margin: 0; font-size: 34px; font-weight: 560; letter-spacing: -.035em; line-height: 0.98; }
+    .who { margin: 10px 0 0; font-size: 15px; color: #d9d3c7; }
+    .when { margin: 0; text-align: right; color: #b7b1a6; font-size: 12px; line-height: 1.45; }
+    .intro { margin: 22px 22px 0; break-inside: avoid; page-break-inside: avoid; }
+    .headline { margin: 0 0 8px; padding-left: 14px; border-left: 3px solid #2f6bff; font-size: 18px; line-height: 1.35; letter-spacing: -.02em; }
+    .lead { margin: 0; font-size: 14px; line-height: 1.55; max-width: 68ch; color: #3a342c; }
+    .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 16px 22px 0; break-inside: avoid; page-break-inside: avoid; }
+    .kpi { background: #fff; border-top: 3px solid #2f6bff; padding: 12px 12px 10px; }
+    .kpis--ga .kpi { border-top-color: #12141c; }
+    .kpi span { display: block; font-size: 9px; letter-spacing: .09em; text-transform: uppercase; color: #7a746a; }
+    .kpi strong { display: block; margin-top: 5px; font-size: 22px; letter-spacing: -.03em; font-weight: 620; }
+    .kpi em { display: block; margin-top: 3px; font-style: normal; font-size: 11px; color: #7a746a; min-height: 1em; }
     .kpi em.up { color: #0d6b45; }
     .kpi em.down { color: #9d2c2c; }
-    .mix { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; }
-    .chip { border: 1px solid #e4dfd6; padding: 4px 8px; font-size: 11px; }
-    h2 { margin: 26px 0 8px; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; font-weight: 650; }
-    table { width: 100%; border-collapse: collapse; }
-    th { text-align: left; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: #6b645b; font-weight: 600; padding: 6px 8px 6px 0; border-bottom: 1px solid #1c1915; }
-    td { padding: 9px 8px 9px 0; border-bottom: 1px solid #eeeae3; vertical-align: top; }
-    .path { font-size: 12.5px; }
-    .query, .speed { display: block; margin-top: 2px; color: #6b645b; font-size: 11px; }
-    ol { list-style: none; margin: 0; padding: 0; }
-    li { display: grid; grid-template-columns: 28px 1fr; gap: 8px; padding: 9px 0; border-bottom: 1px solid #eeeae3; break-inside: avoid; }
-    .num { color: #6b645b; font-variant-numeric: tabular-nums; }
-    li strong { display: block; font-size: 13px; }
-    li p { margin: 2px 0 0; }
-    li em { display: block; margin-top: 2px; font-style: normal; color: #6b645b; font-size: 11px; }
-    footer { margin-top: 22px; color: #6b645b; font-size: 10px; max-width: 78ch; }
-    footer p { margin: 0 0 4px; }
-    tr { break-inside: avoid; }
+    .mix { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 22px 0; }
+    .chip { background: #fff; padding: 5px 9px; font-size: 11px; color: #3a342c; }
+    h2 { margin: 28px 22px 10px; font-size: 11px; letter-spacing: .16em; text-transform: uppercase; font-weight: 680; break-after: avoid; page-break-after: avoid; }
+    .stack { margin: 0 22px; }
+    .card, .move { background: #fff; padding: 12px 14px 13px; margin: 0 0 8px; break-inside: avoid; page-break-inside: avoid; }
+    .card header { display: flex; justify-content: space-between; gap: 8px 16px; align-items: baseline; flex-wrap: wrap; }
+    .card header strong { font-size: 14px; letter-spacing: -.02em; }
+    .card header span, .query, .speed { color: #6f695f; font-size: 11.5px; }
+    .query { margin: 4px 0 0; }
+    .todo { margin: 6px 0 0; font-size: 13px; }
+    .move { display: grid; grid-template-columns: 36px 1fr; gap: 8px; }
+    .num { font-size: 13px; letter-spacing: .04em; color: #2f6bff; font-weight: 650; }
+    .move strong { display: block; font-size: 14px; }
+    .move p { margin: 3px 0 0; }
+    .move em { display: block; margin-top: 3px; font-style: normal; color: #6f695f; font-size: 11.5px; }
+    .close { margin: 22px 22px 0; break-inside: avoid; page-break-inside: avoid; }
+    .note { margin: 0 0 18px; color: #6f695f; font-size: 11px; max-width: 72ch; }
+    .sign { display: flex; gap: 16px; align-items: center; background: #12141c; color: #f6f3ec; padding: 18px 18px; }
+    .mark { width: 46px; height: 46px; border: 1px solid rgba(246,243,236,.35); display: flex; align-items: center; justify-content: center; letter-spacing: .06em; font-size: 13px; color: #8eb0ff; }
+    .sign__name { margin: 0; font-size: 18px; letter-spacing: -.02em; }
+    .sign__role { margin: 2px 0 0; letter-spacing: .16em; text-transform: uppercase; font-size: 10px; color: #8eb0ff; }
+    .sign__note { margin: 6px 0 0; color: #d9d3c7; font-size: 12px; max-width: 52ch; }
+    p { orphans: 3; widows: 3; }
 CSS;
 
-    return '<!DOCTYPE html><html lang="' . $e($lang) . '"><head><meta charset="utf-8"><title>'
+    return '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>'
         . $e($copy['title'] . ' — ' . $model['name']) . '</title><style>' . $css . '</style></head><body><article class="sheet">'
-        . '<header class="mast"><div><p class="kicker">' . $e($copy['kicker']) . '</p><h1>' . $e($copy['title']) . '</h1><p class="who">'
-        . $e($model['name']) . '</p></div><p class="when">' . $e($model['rangeLabel']) . '<br>' . $e($model['generated']) . '</p></header>'
-        . '<p class="headline">' . $e($model['headline']) . '</p><p class="lead">' . $e($model['lead']) . '</p>'
+        . '<header class="mast"><div><p class="kicker">' . $e($copy['kicker']) . '</p><h1>' . $e($model['name']) . '</h1><p class="who">'
+        . $e($copy['title']) . '</p></div><p class="when">' . $e($model['rangeLabel']) . '<br>' . $e($model['generated']) . '</p></header>'
+        . '<section class="intro"><p class="headline">' . $e($model['headline']) . '</p><p class="lead">' . $e($model['lead']) . '</p></section>'
         . '<section class="kpis">' . $kpis . '</section>' . $gaHtml
-        . ($rows !== '' ? '<h2>' . $e($copy['pages']) . '</h2><table><thead><tr><th>' . $e($copy['colPage']) . '</th><th>'
-            . $e($copy['colSeen']) . '</th><th>' . $e($copy['colClicks']) . '</th><th>' . $e($copy['colPlace']) . '</th><th>'
-            . $e($copy['colNext']) . '</th></tr></thead><tbody>' . $rows . '</tbody></table>' : '')
-        . ($moves !== '' ? '<h2>' . $e($copy['moves']) . '</h2><ol>' . $moves . '</ol>' : '')
-        . '<footer><p>' . $e($copy['caveat']) . '</p><p>' . $e(implode(' · ', $sources)) . ' · ' . $e($model['host']) . '</p></footer>'
-        . '</article></body></html>';
+        . ($cards !== '' ? '<h2>' . $e($copy['pages']) . '</h2><div class="stack">' . $cards . '</div>' : '')
+        . ($moves !== '' ? '<h2>' . $e($copy['moves']) . '</h2><div class="stack">' . $moves . '</div>' : '')
+        . '<section class="close"><p class="note">' . $e($copy['caveat']) . ' ' . $e(implode(' · ', $sources)) . ' · ' . $e($model['host']) . '</p>'
+        . '<aside class="sign"><div class="mark">ER</div><div><p class="sign__name">Eduardo Rojas</p><p class="sign__role">Mono Studio</p>'
+        . '<p class="sign__note">Preparé este informe con los datos de Google de este período. Si un número no cierra, lo vemos juntos.</p></div></aside>'
+        . '</section></article></body></html>';
 }
 
 function reportFileName(string $name): string
@@ -1275,10 +1283,13 @@ function reportPdf(string $apiKey, string $html, string $fileName): string
         'options' => [
             'printBackground' => true,
             'landscape' => false,
-            'marginTop' => '0.55in',
-            'marginBottom' => '0.55in',
-            'marginLeft' => '0.55in',
-            'marginRight' => '0.55in',
+            'displayHeaderFooter' => true,
+            'headerTemplate' => '<span></span>',
+            'footerTemplate' => '<div style="font-size:9px;width:100%;padding:0 18px;color:#7a746a;font-family:Arial,sans-serif;"><span style="float:left">Eduardo Rojas · Mono Studio</span><span style="float:right">Página <span class="pageNumber"></span> de <span class="totalPages"></span></span></div>',
+            'marginTop' => '0.48in',
+            'marginBottom' => '0.66in',
+            'marginLeft' => '0.48in',
+            'marginRight' => '0.48in',
         ],
     ], ['Authorization: ' . $apiKey], 55);
     $url = '';
@@ -1337,8 +1348,7 @@ if ($isEntry) {
             if ($host === '') {
                 gscJson(['error' => 'Indica el dominio del cliente'], 400);
             }
-            $prefs = reportHostConfig($dataDir, $host);
-            $lang = gscReportLang((string) ($input['lang'] ?? $prefs['reportLang'] ?? 'es'));
+            $lang = 'es';
             $fresh = in_array((string) ($input['fresh'] ?? ''), ['1', 'true'], true);
             $built = reportCompose($dataDir, $sa, $host, $lang, $fresh);
             if ($action === 'build') {

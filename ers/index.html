@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Mono Studio OS — base de operaciones diaria" />
   <title>Mono Studio OS</title>
-  <link rel="stylesheet" href="styles.css?v=20261025a" />
+  <link rel="stylesheet" href="styles.css?v=20261026a" />
 </head>
 <body>
 
@@ -280,14 +280,6 @@
             <textarea name="pages" id="gscPages" rows="4" placeholder="https://cliente.cl/servicios | Servicios"></textarea>
           </label>
           <label class="field">
-            <span>Idioma del informe al cliente</span>
-            <select name="reportLang" id="gscReportLang">
-              <option value="es">Español</option>
-              <option value="en">English</option>
-              <option value="pt">Português</option>
-            </select>
-          </label>
-          <label class="field">
             <span>Propiedad de Google Analytics <em class="field__optional">(ID numérico, opcional)</em></span>
             <input name="ga4Property" id="gscGa4Property" inputmode="numeric" list="ga4Properties" placeholder="123456789" autocomplete="off" />
             <datalist id="ga4Properties"></datalist>
@@ -544,14 +536,6 @@
   <div class="seo-brief" id="seoBrief" hidden aria-hidden="true">
     <div class="brief-toolbar no-print">
       <strong id="briefTitle">Informe SEO</strong>
-      <label class="brief-lang" id="briefLangWrap" hidden>
-        <span>Idioma</span>
-        <select id="reportLang" aria-label="Idioma del informe">
-          <option value="es">Español</option>
-          <option value="en">English</option>
-          <option value="pt">Português</option>
-        </select>
-      </label>
       <button type="button" class="btn btn--neon" id="btnReportPdf" hidden>Descargar PDF</button>
       <button type="button" class="btn btn--neon" id="btnSeoPrint">Imprimir / PDF</button>
       <button type="button" class="btn btn--ghost" id="btnSeoBriefClose">Cerrar</button>
@@ -587,7 +571,7 @@
   </div>
   <div class="chat-backdrop" id="chatBackdrop" hidden></div>
 
-  <script src="app.js?v=20261025a"></script>
+  <script src="app.js?v=20261026a"></script>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </body>

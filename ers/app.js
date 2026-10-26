@@ -1032,9 +1032,9 @@ class AppController {
       "seoClicks", "seoImpressions", "seoCtr", "seoPosition",
       "seoClicksDelta", "seoImpressionsDelta", "seoCtrDelta", "seoPositionDelta",
       "btnGscRefresh", "btnSeoIndex", "btnSeoBrief", "btnClientReport", "btnSeoPrint", "btnReportPdf", "btnSeoBriefClose",
-      "gscConfigForm", "gscSitemapUrl", "gscPages", "gscReportLang", "gscGa4Property", "ga4Properties", "ga4Hint",
+      "gscConfigForm", "gscSitemapUrl", "gscPages", "gscGa4Property", "ga4Properties", "ga4Hint",
       "growthPanel", "growthMeta", "growthList",
-      "briefTitle", "briefLangWrap", "reportLang", "reportFrame",
+      "briefTitle", "reportFrame",
       "clientModal", "requestModal", "taskModal", "notebookModal",
       "clientForm", "clientModalTitle", "clientSubmitBtn", "btnDeleteClient", "clientIdField",
       "clientName", "clientValue", "clientValueLabel", "clientValueHint",
@@ -1256,12 +1256,6 @@ class AppController {
     this.dom.btnSeoBrief.addEventListener("click", () => this.openSeoReport());
     this.dom.btnClientReport.addEventListener("click", () => this.openClientReport());
     this.dom.btnReportPdf.addEventListener("click", () => this.downloadClientReport());
-    this.dom.reportLang.addEventListener("change", () => {
-      if (this.reportBusy) return;
-      const lang = this.dom.reportLang.value;
-      this.saveReportLang(lang);
-      this.openClientReport(lang);
-    });
     this.dom.growthList.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-growth-task]");
       if (btn) this.taskFromGrowth(Number(btn.dataset.growthTask));
@@ -1759,7 +1753,6 @@ class AppController {
 
   setBriefMode(mode) {
     const client = mode === "client";
-    this.dom.briefLangWrap.hidden = !client;
     this.dom.btnReportPdf.hidden = !client;
     this.dom.btnSeoPrint.hidden = client;
     this.dom.reportFrame.hidden = !client;
@@ -3688,13 +3681,11 @@ class AppController {
     if (
       document.activeElement === this.dom.gscSitemapUrl
       || document.activeElement === this.dom.gscPages
-      || document.activeElement === this.dom.gscReportLang
       || document.activeElement === this.dom.gscGa4Property
     ) {
       return;
     }
     this.dom.gscSitemapUrl.value = data?.diagnostics?.sitemapUrl || "";
-    if (this.dom.gscReportLang) this.dom.gscReportLang.value = data?.reportLang || "es";
     if (this.dom.gscGa4Property) this.dom.gscGa4Property.value = data?.ga4Property || "";
     const manual = (data?.pages || []).filter((p) => p.label && p.label !== p.url);
     this.dom.gscPages.value = GscModule.serializePages(manual);
@@ -3836,7 +3827,7 @@ class AppController {
     this.dom.growthPanel.hidden = false;
     const n = shown.filter((item) => item.action !== "hold").length;
     this.dom.growthMeta.textContent = n
-      ? `${n} página${n === 1 ? "" : "s"} con un paso concreto. El informe al cliente sale en su idioma.`
+      ? `${n} página${n === 1 ? "" : "s"} con un paso concreto. El informe al cliente sale en español.`
       : "Ninguna página pide un cambio urgente. El informe igual resume el mes.";
 
     this.dom.growthList.innerHTML = "";
@@ -3890,40 +3881,21 @@ class AppController {
     });
   }
 
-  reportLangForHost() {
-    const data = this.seoHost ? SeoStore.get(this.seoHost) : null;
-    return this.dom.gscReportLang?.value || data?.reportLang || "es";
-  }
-
-  async saveReportLang(lang) {
-    if (!this.seoHost) return;
-    if (this.dom.gscReportLang) this.dom.gscReportLang.value = lang;
-    const cached = SeoStore.get(this.seoHost);
-    if (cached) cached.reportLang = lang;
-    try {
-      await ReportModule.prefs({ host: this.seoHost, reportLang: lang });
-    } catch (err) {
-      this.showToast(err.message || "No se pudo guardar el idioma");
-    }
-  }
-
-  async openClientReport(lang) {
+  async openClientReport() {
     if (!this.seoHost) return;
     const data = SeoStore.get(this.seoHost);
     if (!data?.totals && !GscModule.periodsOf(data).length) {
       this.showToast("Primero actualizá los datos de este sitio");
       return;
     }
-    const chosen = lang || this.reportLangForHost();
     this.reportBusy = true;
-    this.dom.reportLang.value = chosen;
     this.setBriefMode("client");
     this.dom.seoBrief.hidden = false;
     this.dom.seoBrief.setAttribute("aria-hidden", "false");
     this.dom.btnReportPdf.disabled = true;
     this.dom.reportFrame.srcdoc = "<!DOCTYPE html><html><body style=\"font-family:sans-serif;padding:28px;color:#1c1915\"><p>Armando el informe…</p></body></html>";
     try {
-      const report = await ReportModule.build(this.seoHost, chosen);
+      const report = await ReportModule.build(this.seoHost, "es");
       if (!report.html) throw new Error(report.error || "El informe vino vacío");
       this.dom.reportFrame.srcdoc = report.html;
       if (report.ga && !report.ga.ok && report.ga.message) this.showToast(report.ga.message, 5600);
@@ -3941,11 +3913,10 @@ class AppController {
 
   async downloadClientReport() {
     if (!this.seoHost) return;
-    const lang = this.dom.reportLang.value || this.reportLangForHost();
     this.dom.btnReportPdf.disabled = true;
     this.showToast("Generando el PDF…");
     try {
-      const data = await ReportModule.pdf(this.seoHost, lang);
+      const data = await ReportModule.pdf(this.seoHost, "es");
       if (!data.url) throw new Error(data.error || "api2pdf no devolvió el archivo");
       window.open(data.url, "_blank", "noopener");
       this.showToast("PDF listo. El enlace dura 24 horas.");
@@ -4211,7 +4182,6 @@ class AppController {
         host: this.seoHost,
         sitemapUrl: this.dom.gscSitemapUrl.value.trim(),
         pages: GscModule.parsePages(this.dom.gscPages.value),
-        reportLang: this.dom.gscReportLang.value,
         ga4Property: this.dom.gscGa4Property.value.trim(),
       });
       this.showToast("Configuración guardada");
