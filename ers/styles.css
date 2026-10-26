@@ -4514,28 +4514,6 @@ html.is-lite .cash-chart {
   color: var(--txt-dim);
 }
 
-.brief-lang {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--txt-dim);
-  font-size: 0.75rem;
-}
-
-.brief-lang select,
-.report-frame {
-  background: #fff;
-  color: #1c1915;
-}
-
-.brief-lang select {
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-sm);
-  padding: 6px 8px;
-  background: var(--bg-elevated);
-  color: var(--txt-primary);
-}
-
 .report-frame {
   flex: 1;
   width: 100%;
