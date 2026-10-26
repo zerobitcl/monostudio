@@ -11,6 +11,12 @@ ers/data/gemini.json
 ers/data/daily.json
 ers/data/daily-state.json
 
+# Informe de cliente: PDF, PageSpeed y token de Analytics
+ers/data/api2pdf.json
+ers/data/psi.json
+ers/data/ga4-token.json
+ers/data/ga4-directory.json
+
 # Search Console: cuenta de servicio, token y caché
 ers/data/gsc-service-account.json
 ers/data/gsc-secrets.json

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Mono Studio OS — base de operaciones diaria" />
   <title>Mono Studio OS</title>
-  <link rel="stylesheet" href="styles.css?v=20260927b" />
+  <link rel="stylesheet" href="styles.css?v=20261025a" />
 </head>
 <body>
 
@@ -161,7 +161,8 @@
         <h2>SEO</h2>
         <span class="panel-head__count" id="seoRange">Últimos 28 días</span>
         <button class="btn btn--ghost" id="btnSeoBrief" type="button" hidden>Exportar</button>
-        <button class="btn btn--neon" id="btnSeoIndex" type="button" hidden>Indexar pendientes</button>
+        <button class="btn btn--neon" id="btnClientReport" type="button" hidden>Informe cliente</button>
+        <button class="btn btn--ghost" id="btnSeoIndex" type="button" hidden>Indexar pendientes</button>
         <button class="btn btn--ghost" id="btnGscRefresh" type="button">Actualizar</button>
       </div>
 
@@ -205,6 +206,16 @@
       <section class="signals" aria-label="Acciones SEO">
         <ul class="signal-list" id="seoSignals"></ul>
         <p class="signal-empty" id="seoSignalsEmpty" hidden>Sin alertas en este sitio.</p>
+      </section>
+
+      <section class="growth" id="growthPanel" hidden>
+        <header class="kw__head">
+          <div>
+            <h3>Crecimiento por página</h3>
+            <p class="kw__meta" id="growthMeta"></p>
+          </div>
+        </header>
+        <ul class="growth__list" id="growthList"></ul>
       </section>
 
       <section class="kw" id="kwPanel" aria-labelledby="kwTitle" hidden>
@@ -267,6 +278,20 @@
           <label class="field">
             <span>URLs prioritarias <em class="field__optional">(una por línea · URL | etiqueta)</em></span>
             <textarea name="pages" id="gscPages" rows="4" placeholder="https://cliente.cl/servicios | Servicios"></textarea>
+          </label>
+          <label class="field">
+            <span>Idioma del informe al cliente</span>
+            <select name="reportLang" id="gscReportLang">
+              <option value="es">Español</option>
+              <option value="en">English</option>
+              <option value="pt">Português</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Propiedad de Google Analytics <em class="field__optional">(ID numérico, opcional)</em></span>
+            <input name="ga4Property" id="gscGa4Property" inputmode="numeric" list="ga4Properties" placeholder="123456789" autocomplete="off" />
+            <datalist id="ga4Properties"></datalist>
+            <small class="field__hint" id="ga4Hint">Si lo dejás vacío, usamos la propiedad cuyo sitio es este dominio.</small>
           </label>
           <button type="submit" class="btn btn--neon">Guardar y recargar</button>
         </form>
@@ -518,10 +543,20 @@
 
   <div class="seo-brief" id="seoBrief" hidden aria-hidden="true">
     <div class="brief-toolbar no-print">
-      <strong>Informe SEO</strong>
+      <strong id="briefTitle">Informe SEO</strong>
+      <label class="brief-lang" id="briefLangWrap" hidden>
+        <span>Idioma</span>
+        <select id="reportLang" aria-label="Idioma del informe">
+          <option value="es">Español</option>
+          <option value="en">English</option>
+          <option value="pt">Português</option>
+        </select>
+      </label>
+      <button type="button" class="btn btn--neon" id="btnReportPdf" hidden>Descargar PDF</button>
       <button type="button" class="btn btn--neon" id="btnSeoPrint">Imprimir / PDF</button>
       <button type="button" class="btn btn--ghost" id="btnSeoBriefClose">Cerrar</button>
     </div>
+    <iframe class="report-frame" id="reportFrame" hidden title="Informe del cliente"></iframe>
     <div class="seo-brief__body" id="seoBriefBody"></div>
   </div>
 
@@ -552,7 +587,7 @@
   </div>
   <div class="chat-backdrop" id="chatBackdrop" hidden></div>
 
-  <script src="app.js?v=20260927b"></script>
+  <script src="app.js?v=20261025a"></script>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </body>

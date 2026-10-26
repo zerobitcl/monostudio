@@ -100,7 +100,7 @@ function gscWriteJson(string $path, array $data): bool
     return file_put_contents($tmp, $payload, LOCK_EX) !== false && rename($tmp, $path);
 }
 
-function gscHttp(string $method, string $url, ?array $body = null, array $headers = []): array
+function gscHttp(string $method, string $url, ?array $body = null, array $headers = [], int $timeout = 25): array
 {
     $payload = $body !== null ? json_encode($body) : null;
     $headerList = $headers;
@@ -114,7 +114,7 @@ function gscHttp(string $method, string $url, ?array $body = null, array $header
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_CUSTOMREQUEST => $method,
             CURLOPT_HTTPHEADER => $headerList,
-            CURLOPT_TIMEOUT => 25,
+            CURLOPT_TIMEOUT => $timeout,
         ]);
         if ($payload !== null) {
             curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
@@ -136,7 +136,7 @@ function gscHttp(string $method, string $url, ?array $body = null, array $header
         'http' => [
             'method' => $method,
             'header' => implode("\r\n", $headerList),
-            'timeout' => 25,
+            'timeout' => $timeout,
             'ignore_errors' => true,
         ],
     ];
@@ -390,13 +390,45 @@ function gscB64Url(string $raw): string
     return rtrim(strtr(base64_encode($raw), '+/', '-_'), '=');
 }
 
-function gscAccessToken(array $sa, string $tokenFile): string
+function gscReportLang(string $value): string
+{
+    $value = strtolower(trim($value));
+    return in_array($value, ['es', 'en', 'pt'], true) ? $value : 'es';
+}
+
+/** ID numérico de una propiedad GA4. Acepta "properties/123" o el número pelado. */
+function gscGa4Property(string $value): string
+{
+    $digits = preg_replace('/\D+/', '', $value) ?? '';
+    return strlen($digits) >= 6 && strlen($digits) <= 15 ? $digits : '';
+}
+
+function gscHostEntry(array $entry): array
+{
+    return [
+        'sitemapUrl' => gscSanitizeSitemapUrl((string) ($entry['sitemapUrl'] ?? '')),
+        'pages' => gscSanitizePages(is_array($entry['pages'] ?? null) ? $entry['pages'] : []),
+        'reportLang' => gscReportLang((string) ($entry['reportLang'] ?? 'es')),
+        'ga4Property' => gscGa4Property((string) ($entry['ga4Property'] ?? '')),
+    ];
+}
+
+/** Lo que cambia las métricas de GSC. Idioma y GA4 no invalidan esa caché. */
+function gscHostOpsSig(array $entry): string
+{
+    return md5(json_encode([
+        (string) ($entry['sitemapUrl'] ?? ''),
+        $entry['pages'] ?? [],
+    ], JSON_UNESCAPED_SLASHES) ?: '');
+}
+
+function gscAccessToken(array $sa, string $tokenFile, string $scope = GSC_SCOPE): string
 {
     $cached = gscReadJson($tokenFile, []);
     $token = (string) ($cached['access_token'] ?? '');
     $exp = (int) ($cached['expires_at'] ?? 0);
     $cachedScope = (string) ($cached['scope'] ?? '');
-    if ($token !== '' && $exp > time() + 60 && $cachedScope === GSC_SCOPE) {
+    if ($token !== '' && $exp > time() + 60 && $cachedScope === $scope) {
         return $token;
     }
 
@@ -413,7 +445,7 @@ function gscAccessToken(array $sa, string $tokenFile): string
     $header = gscB64Url(json_encode(['alg' => 'RS256', 'typ' => 'JWT'], JSON_UNESCAPED_SLASHES));
     $claims = gscB64Url(json_encode([
         'iss' => $email,
-        'scope' => GSC_SCOPE,
+        'scope' => $scope,
         'aud' => 'https://oauth2.googleapis.com/token',
         'iat' => $now,
         'exp' => $now + 3600,
@@ -447,7 +479,7 @@ function gscAccessToken(array $sa, string $tokenFile): string
         'access_token' => $access,
         'expires_at' => time() + (int) ($res['data']['expires_in'] ?? 3500),
         'email' => $email,
-        'scope' => GSC_SCOPE,
+        'scope' => $scope,
     ]);
 
     return $access;
@@ -1494,10 +1526,7 @@ function gscNormalizeConfig(array $config): array
             if ($host === '' || !is_array($entry)) {
                 continue;
             }
-            $hosts[$host] = [
-                'sitemapUrl' => gscSanitizeSitemapUrl((string) ($entry['sitemapUrl'] ?? '')),
-                'pages' => gscSanitizePages($entry['pages'] ?? []),
-            ];
+            $hosts[$host] = gscHostEntry($entry);
         }
         return ['hosts' => $hosts];
     }
@@ -1526,6 +1555,10 @@ function gscNormalizeConfig(array $config): array
     }
 
     $ensure($hosts, gscSanitizeHost((string) ($config['siteUrl'] ?? '')));
+
+    foreach ($hosts as $host => $entry) {
+        $hosts[$host] = gscHostEntry($entry);
+    }
 
     return ['hosts' => $hosts];
 }
@@ -2060,10 +2093,27 @@ TXT;
     ];
 }
 
+if (defined('ERS_LIBRARY')) {
+    return;
+}
+
 $rawConfig = gscReadJson($configFile, []);
 $config = gscNormalizeConfig($rawConfig);
-if (!array_key_exists('hosts', $rawConfig) || $rawConfig['hosts'] !== $config['hosts']) {
+$rawHosts = is_array($rawConfig['hosts'] ?? null) ? $rawConfig['hosts'] : null;
+$opsChanged = $rawHosts === null;
+if (is_array($rawHosts)) {
+    foreach ($config['hosts'] as $host => $entry) {
+        $prev = $rawHosts[$host] ?? null;
+        if (!is_array($prev) || gscHostOpsSig($prev) !== gscHostOpsSig($entry)) {
+            $opsChanged = true;
+            break;
+        }
+    }
+}
+if ($rawHosts === null || ($rawConfig['hosts'] ?? null) !== $config['hosts']) {
     gscWriteJson($configFile, $config);
+}
+if ($opsChanged) {
     foreach (glob($dataDir . '/gsc-cache*.json') ?: [] as $stale) {
         @unlink($stale);
     }
@@ -2112,16 +2162,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'config') {
         gscJson(['error' => 'Indica un dominio válido'], 400);
     }
 
-    $config['hosts'][$host] = [
-        'sitemapUrl' => gscSanitizeSitemapUrl((string) ($input['sitemapUrl'] ?? '')),
-        'pages' => gscSanitizePages(is_array($input['pages'] ?? null) ? $input['pages'] : []),
-    ];
+    $prev = is_array($config['hosts'][$host] ?? null) ? $config['hosts'][$host] : [];
+    $next = gscHostEntry([
+        'sitemapUrl' => (string) ($input['sitemapUrl'] ?? ($prev['sitemapUrl'] ?? '')),
+        'pages' => is_array($input['pages'] ?? null) ? $input['pages'] : ($prev['pages'] ?? []),
+        'reportLang' => array_key_exists('reportLang', $input)
+            ? (string) $input['reportLang']
+            : (string) ($prev['reportLang'] ?? 'es'),
+        'ga4Property' => array_key_exists('ga4Property', $input)
+            ? (string) $input['ga4Property']
+            : (string) ($prev['ga4Property'] ?? ''),
+    ]);
+    $config['hosts'][$host] = $next;
 
     if (!gscWriteJson($configFile, $config)) {
         gscJson(['error' => 'No se pudo guardar la configuración'], 500);
     }
 
-    @unlink(gscHostCacheFile($dataDir, $host));
+    if (gscHostOpsSig($prev) !== gscHostOpsSig($next)) {
+        @unlink(gscHostCacheFile($dataDir, $host));
+    }
     gscJson(['ok' => true, 'host' => $host] + $config['hosts'][$host]);
 }
 
@@ -2348,6 +2408,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             && ($cached['pageSig'] ?? '') === $pageSig
         ) {
             $cached['cached'] = true;
+            $cached['reportLang'] = gscReportLang((string) ($override['reportLang'] ?? 'es'));
+            $cached['ga4Property'] = gscGa4Property((string) ($override['ga4Property'] ?? ''));
             gscJson($cached);
         }
 
@@ -2713,6 +2775,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             'signals' => $signals,
             'diagnostics' => $diagnostics,
             'pages' => $pageRows,
+            'reportLang' => gscReportLang((string) ($override['reportLang'] ?? 'es')),
+            'ga4Property' => gscGa4Property((string) ($override['ga4Property'] ?? '')),
         ];
         gscWriteJson($hostCacheFile, $payload);
         gscJson($payload);

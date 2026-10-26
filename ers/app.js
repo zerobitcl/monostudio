@@ -403,6 +403,14 @@ class GscModule {
     return list.find((p) => p.id === id) || list[0] || null;
   }
 
+  static expectedCtr(position) {
+    const curve = { 1: 0.28, 2: 0.155, 3: 0.1, 4: 0.072, 5: 0.054, 6: 0.042, 7: 0.033, 8: 0.027, 9: 0.022, 10: 0.019 };
+    const p = Math.max(1, Math.round(position || 0));
+    if (!position) return 0;
+    if (p <= 10) return curve[p];
+    return p <= 20 ? 0.009 : 0.003;
+  }
+
   static pagePath(url) {
     try {
       const path = new URL(String(url)).pathname || "/";
@@ -410,6 +418,49 @@ class GscModule {
     } catch {
       return String(url || "");
     }
+  }
+}
+
+class ReportModule {
+  static API = "./api/report.php";
+
+  static async #read(res) {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `El informe respondió ${res.status}`);
+    return data;
+  }
+
+  static properties() {
+    return fetch(`${ReportModule.API}?action=properties&_=${Date.now()}`, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    }).then((res) => ReportModule.#read(res));
+  }
+
+  static build(host, lang) {
+    const qs = `action=build&host=${encodeURIComponent(host)}&lang=${encodeURIComponent(lang)}&_=${Date.now()}`;
+    return fetch(`${ReportModule.API}?${qs}`, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    }).then((res) => ReportModule.#read(res));
+  }
+
+  static pdf(host, lang) {
+    return fetch(`${ReportModule.API}?action=pdf`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ host, lang }),
+    }).then((res) => ReportModule.#read(res));
+  }
+
+  static prefs(payload) {
+    return fetch(`${ReportModule.API}?action=prefs`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+    }).then((res) => ReportModule.#read(res));
   }
 }
 
@@ -938,6 +989,9 @@ class AppController {
     this.kwTab = "striking";
     this.kwLoading = new Set();
     this.kwAnalyzing = false;
+    this.gaCatalog = null;
+    this.growthItems = [];
+    this.reportBusy = false;
     this.chatOpen = false;
     this.chatBusy = false;
     this.chatHistory = [];
@@ -977,7 +1031,10 @@ class AppController {
       "kwPanel", "kwMeta", "kwStats", "kwAi", "kwTabs", "kwHint", "kwHead", "kwBody", "kwEmpty", "btnKwAi",
       "seoClicks", "seoImpressions", "seoCtr", "seoPosition",
       "seoClicksDelta", "seoImpressionsDelta", "seoCtrDelta", "seoPositionDelta",
-      "btnGscRefresh", "btnSeoIndex", "btnSeoBrief", "btnSeoPrint", "btnSeoBriefClose", "gscConfigForm", "gscSitemapUrl", "gscPages",
+      "btnGscRefresh", "btnSeoIndex", "btnSeoBrief", "btnClientReport", "btnSeoPrint", "btnReportPdf", "btnSeoBriefClose",
+      "gscConfigForm", "gscSitemapUrl", "gscPages", "gscReportLang", "gscGa4Property", "ga4Properties", "ga4Hint",
+      "growthPanel", "growthMeta", "growthList",
+      "briefTitle", "briefLangWrap", "reportLang", "reportFrame",
       "clientModal", "requestModal", "taskModal", "notebookModal",
       "clientForm", "clientModalTitle", "clientSubmitBtn", "btnDeleteClient", "clientIdField",
       "clientName", "clientValue", "clientValueLabel", "clientValueHint",
@@ -1197,6 +1254,18 @@ class AppController {
     this.dom.btnGscRefresh.addEventListener("click", () => this.loadSeoHost(this.seoHost, true));
     this.dom.btnSeoIndex.addEventListener("click", () => this.requestIndex(this.seoHost));
     this.dom.btnSeoBrief.addEventListener("click", () => this.openSeoReport());
+    this.dom.btnClientReport.addEventListener("click", () => this.openClientReport());
+    this.dom.btnReportPdf.addEventListener("click", () => this.downloadClientReport());
+    this.dom.reportLang.addEventListener("change", () => {
+      if (this.reportBusy) return;
+      const lang = this.dom.reportLang.value;
+      this.saveReportLang(lang);
+      this.openClientReport(lang);
+    });
+    this.dom.growthList.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-growth-task]");
+      if (btn) this.taskFromGrowth(Number(btn.dataset.growthTask));
+    });
     this.dom.btnSeoPrint.addEventListener("click", () => this.printSeoReport());
     this.dom.btnSeoBriefClose.addEventListener("click", () => this.closeSeoReport());
     this.dom.seoPeriodToggle.addEventListener("click", (e) => {
@@ -1688,7 +1757,18 @@ class AppController {
     }
   }
 
+  setBriefMode(mode) {
+    const client = mode === "client";
+    this.dom.briefLangWrap.hidden = !client;
+    this.dom.btnReportPdf.hidden = !client;
+    this.dom.btnSeoPrint.hidden = client;
+    this.dom.reportFrame.hidden = !client;
+    this.dom.seoBriefBody.hidden = client;
+    this.dom.briefTitle.textContent = client ? "Informe cliente" : "Informe SEO";
+  }
+
   openMarkdownBrief(markdown, title = "Informe") {
+    this.setBriefMode("ops");
     const esc = (s) =>
       String(s ?? "")
         .replace(/&/g, "&amp;")
@@ -2632,6 +2712,7 @@ class AppController {
       this.seoConnection = { connected: false, error: err.message };
     }
     this.renderStats();
+    this.loadGaCatalog();
     if (this.module === "seo") this.renderSeo();
 
     try {
@@ -3147,6 +3228,7 @@ class AppController {
     this.dom.seoInventory.hidden = !data?.inventory?.total;
     this.dom.seoPagesDrawer.hidden = !data?.pages?.length;
     this.dom.btnSeoBrief.hidden = !hasMetrics;
+    this.dom.btnClientReport.hidden = !hasMetrics;
     this.dom.seoPeriodToggle.hidden = !hasMetrics;
     const pending = notIndexed + Number(data?.inventory?.unchecked || 0);
     this.dom.btnSeoIndex.hidden = pending === 0;
@@ -3168,6 +3250,8 @@ class AppController {
       this.dom.seoSignals.innerHTML = "";
       this.dom.seoSignalsEmpty.hidden = true;
       this.dom.btnSeoBrief.hidden = true;
+      this.dom.btnClientReport.hidden = true;
+      this.dom.growthPanel.hidden = true;
       this.dom.seoPeriodToggle.hidden = true;
       this.dom.btnSeoIndex.hidden = true;
       this.dom.kwPanel.hidden = true;
@@ -3194,6 +3278,8 @@ class AppController {
     this.renderSeoSignals(data);
     this.renderSeoPages(data);
     this.renderKeywords();
+    this.renderGrowth();
+    this.renderGaHint();
     this.renderSeoDiagnostics(data);
     this.syncSeoForm(data);
   }
@@ -3599,10 +3685,17 @@ class AppController {
   }
 
   syncSeoForm(data) {
-    if (document.activeElement === this.dom.gscSitemapUrl || document.activeElement === this.dom.gscPages) {
+    if (
+      document.activeElement === this.dom.gscSitemapUrl
+      || document.activeElement === this.dom.gscPages
+      || document.activeElement === this.dom.gscReportLang
+      || document.activeElement === this.dom.gscGa4Property
+    ) {
       return;
     }
     this.dom.gscSitemapUrl.value = data?.diagnostics?.sitemapUrl || "";
+    if (this.dom.gscReportLang) this.dom.gscReportLang.value = data?.reportLang || "es";
+    if (this.dom.gscGa4Property) this.dom.gscGa4Property.value = data?.ga4Property || "";
     const manual = (data?.pages || []).filter((p) => p.label && p.label !== p.url);
     this.dom.gscPages.value = GscModule.serializePages(manual);
   }
@@ -3654,6 +3747,215 @@ class AppController {
     }
   }
 
+  async loadGaCatalog() {
+    try {
+      this.gaCatalog = await ReportModule.properties();
+    } catch (err) {
+      this.gaCatalog = { error: err.message, properties: [], email: "" };
+    }
+    if (this.module === "seo") this.renderGaHint();
+  }
+
+  renderGaHint() {
+    if (!this.dom.ga4Hint) return;
+    const catalog = this.gaCatalog;
+    const props = catalog?.properties || [];
+    if (this.dom.ga4Properties) {
+      this.dom.ga4Properties.innerHTML = "";
+      props.forEach((p) => {
+        const opt = document.createElement("option");
+        opt.value = p.id;
+        opt.textContent = [p.id, p.name, p.host].filter(Boolean).join(" · ");
+        this.dom.ga4Properties.appendChild(opt);
+      });
+    }
+    const email = catalog?.email || this.seoConnection?.serviceEmail || "";
+    const match = props.filter((p) => p.host === this.seoHost);
+    if (!catalog) {
+      this.dom.ga4Hint.textContent = "Buscando propiedades de Analytics…";
+    } else if (catalog.error) {
+      this.dom.ga4Hint.textContent = catalog.error;
+    } else if (match.length === 1) {
+      this.dom.ga4Hint.textContent = `Detectada ${match[0].id} · ${match[0].name}. Si el campo queda vacío, el informe usa esa.`;
+    } else if (match.length > 1) {
+      this.dom.ga4Hint.textContent = "Hay más de una propiedad para este dominio. Elegí el ID.";
+    } else if (email) {
+      this.dom.ga4Hint.textContent = `Ninguna propiedad tiene este dominio. Pegá el ID y agregá ${email} como Lector en Analytics.`;
+    } else {
+      this.dom.ga4Hint.textContent = "Pegá el ID numérico de GA4 (Admin → Detalles de la propiedad).";
+    }
+  }
+
+  renderGrowth() {
+    const data = this.seoHost ? SeoStore.get(this.seoHost) : null;
+    const pages = (data?.pages || []).filter((p) => !p.error && (p.current?.impressions || p.current?.clicks));
+    if (!pages.length) {
+      this.dom.growthPanel.hidden = true;
+      this.growthItems = [];
+      return;
+    }
+
+    const weight = { index: 0, falling: 1, push: 2, title: 3, growing: 4, hold: 5 };
+    const copy = {
+      index: ["Indexar", "Google no la tiene en el índice. Sin eso no hay nada que subir."],
+      falling: ["Recuperar", "Perdió clics contra el mes anterior. Revisar si sigue respondiendo la búsqueda."],
+      push: ["Empujar", "Está entre el puesto 4 y el 20. Reforzar contenido y title para entrar al top."],
+      title: ["Reescribir el title", "Se muestra mucho y se clickea poco."],
+      growing: ["Ampliar", "Está ganando clics. Conviene extenderla antes de que se estanque."],
+      hold: ["Mantener", "No es la prioridad de este mes."],
+    };
+    const items = pages.map((page) => {
+      const impr = Number(page.current?.impressions || 0);
+      const clicks = Number(page.current?.clicks || 0);
+      const pos = Number(page.current?.position || 0);
+      const ctr = Number(page.current?.ctr || 0);
+      const dClicks = Number(page.delta?.clicks || 0);
+      let action = "hold";
+      if (page.indexStatus?.tone === "issue") action = "index";
+      else if (dClicks <= -5) action = "falling";
+      else if (pos >= 4 && pos <= 20 && impr >= 30) action = "push";
+      else if (pos > 0 && pos <= 8 && impr >= 80 && ctr < GscModule.expectedCtr(pos) * 0.6) action = "title";
+      else if (dClicks >= 5 && clicks > 0) action = "growing";
+      return {
+        path: GscModule.pagePath(page.url),
+        url: page.url,
+        clicks,
+        impr,
+        pos,
+        action,
+        title: copy[action][0],
+        detail: copy[action][1],
+        query: page.queries?.[0]?.query || "",
+        weight: weight[action],
+      };
+    });
+    items.sort((a, b) => a.weight - b.weight || b.impr - a.impr);
+    const active = items.filter((item) => item.action !== "hold");
+    const shown = (active.length >= 3 ? active : items).slice(0, 6);
+    this.growthItems = shown;
+    this.dom.growthPanel.hidden = false;
+    const n = shown.filter((item) => item.action !== "hold").length;
+    this.dom.growthMeta.textContent = n
+      ? `${n} página${n === 1 ? "" : "s"} con un paso concreto. El informe al cliente sale en su idioma.`
+      : "Ninguna página pide un cambio urgente. El informe igual resume el mes.";
+
+    this.dom.growthList.innerHTML = "";
+    shown.forEach((item, index) => {
+      const li = document.createElement("li");
+      li.className = `growth__item is-${item.action}`;
+      const main = document.createElement("div");
+      const path = document.createElement("strong");
+      path.textContent = item.path;
+      const line = document.createElement("p");
+      line.textContent = item.query ? `${item.detail} Búsqueda: ${item.query}.` : item.detail;
+      main.append(path, line);
+      const metric = document.createElement("span");
+      metric.className = "growth__metric";
+      metric.textContent = `${GscModule.fmt(item.clicks)} clics · pos ${item.pos ? GscModule.pos(item.pos) : "—"}`;
+      const actions = document.createElement("div");
+      actions.className = "growth__actions";
+      const tag = document.createElement("span");
+      tag.className = "growth__tag";
+      tag.textContent = item.title;
+      actions.appendChild(tag);
+      if (item.action !== "hold") {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "chip-btn";
+        btn.dataset.growthTask = String(index);
+        btn.textContent = "A la agenda";
+        actions.appendChild(btn);
+      }
+      li.append(main, metric, actions);
+      this.dom.growthList.appendChild(li);
+    });
+  }
+
+  async taskFromGrowth(index) {
+    const item = this.growthItems[index];
+    if (!item) return;
+    const title = `${item.title}: ${item.path}`;
+    if (this.tasks.some((task) => !task.doneAt && task.title === title)) {
+      this.showToast("Ya está en tu lista");
+      return;
+    }
+    const client = this.clients.find((c) => GscModule.hostOf(c.siteUrl) === this.seoHost);
+    await this.addTask({
+      title,
+      clientId: client?.id || "",
+      kind: "seo-page",
+      ref: item.url || "",
+      priority: item.action === "index" || item.action === "falling" ? 3 : 2,
+      notes: item.detail.slice(0, 1000),
+    });
+  }
+
+  reportLangForHost() {
+    const data = this.seoHost ? SeoStore.get(this.seoHost) : null;
+    return this.dom.gscReportLang?.value || data?.reportLang || "es";
+  }
+
+  async saveReportLang(lang) {
+    if (!this.seoHost) return;
+    if (this.dom.gscReportLang) this.dom.gscReportLang.value = lang;
+    const cached = SeoStore.get(this.seoHost);
+    if (cached) cached.reportLang = lang;
+    try {
+      await ReportModule.prefs({ host: this.seoHost, reportLang: lang });
+    } catch (err) {
+      this.showToast(err.message || "No se pudo guardar el idioma");
+    }
+  }
+
+  async openClientReport(lang) {
+    if (!this.seoHost) return;
+    const data = SeoStore.get(this.seoHost);
+    if (!data?.totals && !GscModule.periodsOf(data).length) {
+      this.showToast("Primero actualizá los datos de este sitio");
+      return;
+    }
+    const chosen = lang || this.reportLangForHost();
+    this.reportBusy = true;
+    this.dom.reportLang.value = chosen;
+    this.setBriefMode("client");
+    this.dom.seoBrief.hidden = false;
+    this.dom.seoBrief.setAttribute("aria-hidden", "false");
+    this.dom.btnReportPdf.disabled = true;
+    this.dom.reportFrame.srcdoc = "<!DOCTYPE html><html><body style=\"font-family:sans-serif;padding:28px;color:#1c1915\"><p>Armando el informe…</p></body></html>";
+    try {
+      const report = await ReportModule.build(this.seoHost, chosen);
+      if (!report.html) throw new Error(report.error || "El informe vino vacío");
+      this.dom.reportFrame.srcdoc = report.html;
+      if (report.ga && !report.ga.ok && report.ga.message) this.showToast(report.ga.message, 5600);
+      else if (report.narrative === "template" && report.narrativeError) this.showToast(report.narrativeError, 4200);
+      else this.showToast(report.narrative === "gemini" ? "Informe listo" : "Informe listo, con el texto base");
+    } catch (err) {
+      const message = err.message || "No se pudo armar el informe";
+      this.dom.reportFrame.srcdoc = `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:28px;color:#1c1915"><p>${message.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]))}</p></body></html>`;
+      this.showToast(message, 5200);
+    } finally {
+      this.reportBusy = false;
+      this.dom.btnReportPdf.disabled = false;
+    }
+  }
+
+  async downloadClientReport() {
+    if (!this.seoHost) return;
+    const lang = this.dom.reportLang.value || this.reportLangForHost();
+    this.dom.btnReportPdf.disabled = true;
+    this.showToast("Generando el PDF…");
+    try {
+      const data = await ReportModule.pdf(this.seoHost, lang);
+      if (!data.url) throw new Error(data.error || "api2pdf no devolvió el archivo");
+      window.open(data.url, "_blank", "noopener");
+      this.showToast("PDF listo. El enlace dura 24 horas.");
+    } catch (err) {
+      this.showToast(err.message || "No se pudo generar el PDF", 5200);
+    } finally {
+      this.dom.btnReportPdf.disabled = false;
+    }
+  }
+
   closeSeoReport() {
     if (!this.dom.seoBrief || this.dom.seoBrief.hidden) return;
     document.body.classList.remove("is-printing-brief");
@@ -3675,6 +3977,7 @@ class AppController {
   }
 
   openSeoReport() {
+    this.setBriefMode("ops");
     const data = this.seoHost ? SeoStore.get(this.seoHost) : null;
     if (!data?.totals && !GscModule.periodsOf(data).length) {
       this.showToast("Aún no hay números para exportar");
@@ -3908,6 +4211,8 @@ class AppController {
         host: this.seoHost,
         sitemapUrl: this.dom.gscSitemapUrl.value.trim(),
         pages: GscModule.parsePages(this.dom.gscPages.value),
+        reportLang: this.dom.gscReportLang.value,
+        ga4Property: this.dom.gscGa4Property.value.trim(),
       });
       this.showToast("Configuración guardada");
       await this.loadSeoHost(this.seoHost, true);

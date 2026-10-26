@@ -4450,3 +4450,103 @@ html.is-lite .cash-chart {
 .notebook__actions .btn {
   flex: 1;
 }
+
+.growth {
+  margin-top: 22px;
+}
+
+.growth__list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.growth__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) auto auto;
+  gap: 12px 16px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.growth__item strong {
+  display: block;
+  font-size: 0.92rem;
+}
+
+.growth__item p {
+  margin-top: 3px;
+  color: var(--txt-secondary);
+  font-size: 0.78rem;
+}
+
+.growth__metric {
+  color: var(--txt-dim);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.growth__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.growth__tag {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--neon-green);
+}
+
+.growth__item.is-index .growth__tag,
+.growth__item.is-falling .growth__tag {
+  color: var(--danger);
+}
+
+.growth__item.is-hold .growth__tag {
+  color: var(--txt-dim);
+}
+
+.brief-lang {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--txt-dim);
+  font-size: 0.75rem;
+}
+
+.brief-lang select,
+.report-frame {
+  background: #fff;
+  color: #1c1915;
+}
+
+.brief-lang select {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  background: var(--bg-elevated);
+  color: var(--txt-primary);
+}
+
+.report-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: #fff;
+}
+
+@media (max-width: 760px) {
+  .growth__item {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+}
