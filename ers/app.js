@@ -437,20 +437,20 @@ class ReportModule {
     }).then((res) => ReportModule.#read(res));
   }
 
-  static build(host, lang) {
-    const qs = `action=build&host=${encodeURIComponent(host)}&lang=${encodeURIComponent(lang)}&_=${Date.now()}`;
+  static build(host, lang, fresh = false) {
+    const qs = `action=build&host=${encodeURIComponent(host)}&lang=${encodeURIComponent(lang)}${fresh ? "&fresh=1" : ""}&_=${Date.now()}`;
     return fetch(`${ReportModule.API}?${qs}`, {
       cache: "no-store",
       headers: { Accept: "application/json" },
     }).then((res) => ReportModule.#read(res));
   }
 
-  static pdf(host, lang) {
+  static pdf(host, lang, fresh = false) {
     return fetch(`${ReportModule.API}?action=pdf`, {
       method: "POST",
       cache: "no-store",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ host, lang }),
+      body: JSON.stringify({ host, lang, fresh: fresh ? 1 : 0 }),
     }).then((res) => ReportModule.#read(res));
   }
 
@@ -981,7 +981,8 @@ class AppController {
     this.seoPeriod = localStorage.getItem(Store.KEYS.seoPeriod) || "28d";
     this.seoProperties = [];
     this.seoConnection = null;
-    this.seoLoading = false;
+    /** Hosts con fetch SEO en vuelo (permite cambiar de chip sin bloquear). */
+    this.seoLoadingHosts = new Set();
     this.warming = false;
     this.indexing = false;
     /** Keywords por host: solo en memoria, el server ya cachea 6h y el payload es grande. */
@@ -1031,7 +1032,7 @@ class AppController {
       "kwPanel", "kwMeta", "kwStats", "kwAi", "kwTabs", "kwHint", "kwHead", "kwBody", "kwEmpty", "btnKwAi",
       "seoClicks", "seoImpressions", "seoCtr", "seoPosition",
       "seoClicksDelta", "seoImpressionsDelta", "seoCtrDelta", "seoPositionDelta",
-      "btnGscRefresh", "btnSeoIndex", "btnSeoBrief", "btnClientReport", "btnSeoPrint", "btnReportPdf", "btnSeoBriefClose",
+      "btnGscRefresh", "btnSeoIndex", "btnSeoBrief", "btnClientReport", "btnSeoPrint", "btnReportPdf", "btnReportFresh", "btnSeoBriefClose",
       "gscConfigForm", "gscSitemapUrl", "gscPages", "gscGa4Property", "ga4Properties", "ga4Hint",
       "growthPanel", "growthMeta", "growthList",
       "briefTitle", "reportFrame",
@@ -1255,6 +1256,7 @@ class AppController {
     this.dom.btnSeoIndex.addEventListener("click", () => this.requestIndex(this.seoHost));
     this.dom.btnSeoBrief.addEventListener("click", () => this.openSeoReport());
     this.dom.btnClientReport.addEventListener("click", () => this.openClientReport());
+    this.dom.btnReportFresh?.addEventListener("click", () => this.openClientReport({ fresh: true }));
     this.dom.btnReportPdf.addEventListener("click", () => this.downloadClientReport());
     this.dom.growthList.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-growth-task]");
@@ -1754,10 +1756,17 @@ class AppController {
   setBriefMode(mode) {
     const client = mode === "client";
     this.dom.btnReportPdf.hidden = !client;
+    if (this.dom.btnReportFresh) this.dom.btnReportFresh.hidden = !client;
     this.dom.btnSeoPrint.hidden = client;
     this.dom.reportFrame.hidden = !client;
     this.dom.seoBriefBody.hidden = client;
     this.dom.briefTitle.textContent = client ? "Informe cliente" : "Informe SEO";
+  }
+
+  reportLang() {
+    const data = this.seoHost ? SeoStore.get(this.seoHost) : null;
+    const lang = String(data?.reportLang || "es").toLowerCase();
+    return ["es", "en", "pt"].includes(lang) ? lang : "es";
   }
 
   openMarkdownBrief(markdown, title = "Informe") {
@@ -2762,19 +2771,21 @@ class AppController {
   }
 
   async loadSeoHost(host, fresh = false) {
-    if (!host || this.seoLoading) return;
-    this.seoLoading = true;
-    this.dom.btnGscRefresh.disabled = true;
-    this.dom.seoNotice.hidden = false;
-    this.dom.seoNotice.className = "notice";
-    this.dom.seoNotice.textContent = "Consultando Search Console…";
+    if (!host || this.seoLoadingHosts.has(host)) return;
+    this.seoLoadingHosts.add(host);
+    if (host === this.seoHost) {
+      this.dom.btnGscRefresh.disabled = true;
+      this.dom.seoNotice.hidden = false;
+      this.dom.seoNotice.className = "notice";
+      this.dom.seoNotice.textContent = "Consultando Search Console…";
+    }
     try {
       SeoStore.set(host, await GscModule.site(host, fresh));
     } catch (err) {
       SeoStore.set(host, { error: err.message, signals: [] });
     } finally {
-      this.seoLoading = false;
-      this.dom.btnGscRefresh.disabled = false;
+      this.seoLoadingHosts.delete(host);
+      if (host === this.seoHost) this.dom.btnGscRefresh.disabled = false;
       this.renderSeo();
       this.renderStats();
       this.renderAgenda();
@@ -3786,7 +3797,8 @@ class AppController {
       return;
     }
 
-    const weight = { index: 0, falling: 1, push: 2, title: 3, growing: 4, hold: 5 };
+    // Misma prioridad que reportPageAction (report.php), sin speed (PSI no vive en SeoStore).
+    const weight = { index: 0, falling: 1, push: 3, title: 4, growing: 5, hold: 6 };
     const copy = {
       index: ["Indexar", "Google no la tiene en el índice. Sin eso no hay nada que subir."],
       falling: ["Recuperar", "Perdió clics contra el mes anterior. Revisar si sigue respondiendo la búsqueda."],
@@ -3881,8 +3893,8 @@ class AppController {
     });
   }
 
-  async openClientReport() {
-    if (!this.seoHost) return;
+  async openClientReport({ fresh = false } = {}) {
+    if (!this.seoHost || this.reportBusy) return;
     const data = SeoStore.get(this.seoHost);
     if (!data?.totals && !GscModule.periodsOf(data).length) {
       this.showToast("Primero actualizá los datos de este sitio");
@@ -3893,9 +3905,10 @@ class AppController {
     this.dom.seoBrief.hidden = false;
     this.dom.seoBrief.setAttribute("aria-hidden", "false");
     this.dom.btnReportPdf.disabled = true;
+    if (this.dom.btnReportFresh) this.dom.btnReportFresh.disabled = true;
     this.dom.reportFrame.srcdoc = "<!DOCTYPE html><html><body style=\"font-family:sans-serif;padding:28px;color:#1c1915\"><p>Armando el informe…</p></body></html>";
     try {
-      const report = await ReportModule.build(this.seoHost, "es");
+      const report = await ReportModule.build(this.seoHost, this.reportLang(), fresh);
       if (!report.html) throw new Error(report.error || "El informe vino vacío");
       this.dom.reportFrame.srcdoc = report.html;
       if (report.ga && !report.ga.ok && report.ga.message) this.showToast(report.ga.message, 5600);
@@ -3908,6 +3921,7 @@ class AppController {
     } finally {
       this.reportBusy = false;
       this.dom.btnReportPdf.disabled = false;
+      if (this.dom.btnReportFresh) this.dom.btnReportFresh.disabled = false;
     }
   }
 
@@ -3916,7 +3930,7 @@ class AppController {
     this.dom.btnReportPdf.disabled = true;
     this.showToast("Generando el PDF…");
     try {
-      const data = await ReportModule.pdf(this.seoHost, "es");
+      const data = await ReportModule.pdf(this.seoHost, this.reportLang());
       if (!data.url) throw new Error(data.error || "api2pdf no devolvió el archivo");
       window.open(data.url, "_blank", "noopener");
       this.showToast("PDF listo. El enlace dura 24 horas.");
@@ -3974,11 +3988,13 @@ class AppController {
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
 
-    const deltaLabel = (n, invert = false) => {
+    const deltaLabel = (n, { invert = false, percent = false, position = false } = {}) => {
       if (n == null || Number(n) === 0) return "sin cambio";
       const v = Number(n);
       const up = invert ? v < 0 : v > 0;
       const sign = v > 0 ? "+" : "";
+      if (percent) return `${up ? "▲" : "▼"} ${sign}${Math.abs(v).toFixed(1)} pp`;
+      if (position) return `${v > 0 ? "↑" : "↓"} ${Math.abs(v).toFixed(1)}`;
       return `${up ? "▲" : "▼"} ${sign}${Math.abs(v) >= 10 ? GscModule.fmt(v) : v.toFixed?.(1) ?? v}`;
     };
 
@@ -3996,8 +4012,8 @@ class AppController {
           <dl>
             <div><dt>Clics</dt><dd>${esc(GscModule.fmt(t.clicks))}<small>${esc(deltaLabel(d.clicks))}</small></dd></div>
             <div><dt>Impresiones</dt><dd>${esc(GscModule.fmt(t.impressions))}<small>${esc(deltaLabel(d.impressions))}</small></dd></div>
-            <div><dt>CTR</dt><dd>${esc(GscModule.pct(t.ctr))}<small>${esc(deltaLabel(d.ctr != null ? d.ctr * 100 : null))}</small></dd></div>
-            <div><dt>Posición</dt><dd>${esc(GscModule.pos(t.position))}<small>${esc(deltaLabel(d.position))}</small></dd></div>
+            <div><dt>CTR</dt><dd>${esc(GscModule.pct(t.ctr))}<small>${esc(deltaLabel(d.ctr != null ? d.ctr * 100 : null, { percent: true }))}</small></dd></div>
+            <div><dt>Posición</dt><dd>${esc(GscModule.pos(t.position))}<small>${esc(deltaLabel(d.position, { position: true }))}</small></dd></div>
           </dl>
         </article>`;
       })

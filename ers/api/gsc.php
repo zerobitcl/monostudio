@@ -24,9 +24,13 @@ $tokenFile = $dataDir . '/gsc-token.json';
 
 const GSC_SCOPE = 'https://www.googleapis.com/auth/webmasters';
 const GSC_CACHE_TTL = 21600; // 6 h — "Actualizar" / fresh=1 fuerza refresh
+/** Respuesta parcial: no bloquear 6h; el operador debe poder completar al instante. */
+const GSC_PARTIAL_TTL = 300;
+/** Reusar indexStatus de la pasada anterior si es más reciente que esto. */
+const GSC_INDEX_REUSE_TTL = 86400;
 const GSC_MAX_MANUAL_PAGES = 40;
 const GSC_MAX_SITEMAP_URLS = 120;
-const GSC_MAX_QUERY_PROBES = 12;
+const GSC_MAX_QUERIES_PER_PAGE = 5;
 const GSC_MAX_URL_INSPECTIONS = 18;
 const GSC_MAX_INDEX_URLS = 8;
 const GSC_SITEMAP_SUBMIT_TTL = 900;
@@ -50,7 +54,7 @@ const GSC_KW_AI_TIMEOUT = 45;
 const GSC_KW_VERSION = '2026.10.12-hidden';
 
 /** Sube al cambiar la lógica de resolución de propiedad; sirve para saber qué versión está viva en el server. */
-const GSC_VERSION = '2026.09.08-report';
+const GSC_VERSION = '2026.10.31-pipeline';
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
@@ -577,6 +581,22 @@ function gscHumanizeError(string $message, string $host): string
     return $message;
 }
 
+/**
+ * Reusa la propiedad ya validada en caché (evita PUT sites + list + probe).
+ * Solo fuerza resolución completa si no hay candidata o el probe falla.
+ */
+function gscResolvePropertyCached(string $token, string $pageUrl, array &$sites, string $cachedProperty = ''): array
+{
+    $cachedProperty = trim($cachedProperty);
+    if ($cachedProperty !== '') {
+        $probe = gscProbeProperty($token, $cachedProperty);
+        if ($probe['ok']) {
+            return ['property' => $cachedProperty, 'error' => '', 'cached' => true];
+        }
+    }
+    return gscResolveProperty($token, $pageUrl, $sites);
+}
+
 function gscResolveProperty(string $token, string $pageUrl, array &$sites): array
 {
     $host = gscHost($pageUrl);
@@ -596,7 +616,7 @@ function gscResolveProperty(string $token, string $pageUrl, array &$sites): arra
         $tried[] = $candidate;
         $probe = gscProbeProperty($token, $candidate);
         if ($probe['ok']) {
-            return ['property' => $candidate, 'error' => ''];
+            return ['property' => $candidate, 'error' => '', 'cached' => false];
         }
         $lastError = $probe['error'] ?: $lastError;
     }
@@ -616,7 +636,81 @@ function gscResolveProperty(string $token, string $pageUrl, array &$sites): arra
             . $hint
             . ' Probé: ' . ($tried !== [] ? implode(', ', $tried) : '—')
             . ' [v' . GSC_VERSION . ']',
+        'cached' => false,
     ];
+}
+
+/** Top queries por URL a partir de una sola consulta page+query. */
+function gscQueriesByPage(array $payload, int $perPage = GSC_MAX_QUERIES_PER_PAGE): array
+{
+    $byPage = [];
+    foreach ($payload['rows'] ?? [] as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $page = (string) ($row['keys'][0] ?? '');
+        $query = trim((string) ($row['keys'][1] ?? ''));
+        if ($page === '' || $query === '') {
+            continue;
+        }
+        $key = rtrim($page, '/');
+        $entry = [
+            'query' => $query,
+            'clicks' => (int) round((float) ($row['clicks'] ?? 0)),
+            'impressions' => (int) round((float) ($row['impressions'] ?? 0)),
+        ];
+        $byPage[$key][] = $entry;
+        if ($page !== $key) {
+            $byPage[$page][] = $entry;
+        }
+    }
+    foreach ($byPage as $key => &$rows) {
+        usort($rows, static fn ($a, $b) => ($b['impressions'] <=> $a['impressions']) ?: ($b['clicks'] <=> $a['clicks']));
+        $seen = [];
+        $unique = [];
+        foreach ($rows as $row) {
+            $q = $row['query'];
+            if (isset($seen[$q])) {
+                continue;
+            }
+            $seen[$q] = true;
+            $unique[] = $row;
+            if (count($unique) >= $perPage) {
+                break;
+            }
+        }
+        $rows = $unique;
+    }
+    unset($rows);
+    return $byPage;
+}
+
+/**
+ * IndexStatus usable de la pasada anterior (< 24h). Evita re-inspeccionar
+ * en fresh/partial y agotar el presupuesto de 40s.
+ */
+function gscReuseIndexMap(array $prevCache): array
+{
+    $fetchedAt = (int) ($prevCache['fetchedAt'] ?? 0);
+    if ($fetchedAt <= 0 || (time() - $fetchedAt) >= GSC_INDEX_REUSE_TTL) {
+        return [];
+    }
+    $map = [];
+    foreach ($prevCache['pages'] ?? [] as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $url = (string) ($row['url'] ?? '');
+        $status = $row['indexStatus'] ?? null;
+        if ($url === '' || !is_array($status) || ($status['tone'] ?? '') === '') {
+            continue;
+        }
+        $map[$url] = [
+            'indexStatus' => $status,
+            'indexRequest' => is_array($row['indexRequest'] ?? null) ? $row['indexRequest'] : null,
+        ];
+    }
+    return $map;
 }
 
 function gscIndexRows(array $payload): array
@@ -1379,17 +1473,23 @@ function gscBuildSignals(array $rows): array
             ];
         }
 
-        if ($tone === 'down') {
-            $lost = (int) ($delta['clicks'] ?? 0);
+        $prevClicks = (int) ($row['previous']['clicks'] ?? 0);
+        $lost = (int) ($delta['clicks'] ?? 0);
+        $dropPct = $prevClicks > 0 ? ($lost / $prevClicks) : 0;
+        $decay = ($prevClicks >= 10 && $dropPct <= -0.3) || $tone === 'down';
+        if ($decay) {
             $posMove = round((float) ($delta['position'] ?? 0), 1);
+            $pctLabel = $prevClicks > 0 ? round($dropPct * 100) . '%' : (($lost > 0 ? '+' : '') . $lost . ' clics');
             $signals[] = [
                 'kind' => 'falling',
-                'severity' => abs($lost) >= 15 ? 3 : 2,
+                'severity' => ($dropPct <= -0.4 || abs($lost) >= 15) ? 3 : 2,
                 'title' => $title . ' está perdiendo clics',
-                'detail' => $posMove < 0
-                    ? 'Bajó ' . abs($posMove) . ' puestos frente a los 28 días previos.'
-                    : 'Menos clics que en los 28 días previos con posición estable.',
-                'metric' => ($lost > 0 ? '+' : '') . $lost . ' clics',
+                'detail' => $dropPct <= -0.3
+                    ? 'Caída del ' . abs((int) round($dropPct * 100)) . '% de clics vs los 28 días previos.'
+                    : ($posMove < 0
+                        ? 'Bajó ' . abs($posMove) . ' puestos frente a los 28 días previos.'
+                        : 'Menos clics que en los 28 días previos con posición estable.'),
+                'metric' => $pctLabel,
                 'url' => $url,
             ];
         }
@@ -2100,23 +2200,23 @@ if (defined('ERS_LIBRARY')) {
 $rawConfig = gscReadJson($configFile, []);
 $config = gscNormalizeConfig($rawConfig);
 $rawHosts = is_array($rawConfig['hosts'] ?? null) ? $rawConfig['hosts'] : null;
-$opsChanged = $rawHosts === null;
-if (is_array($rawHosts)) {
-    foreach ($config['hosts'] as $host => $entry) {
-        $prev = $rawHosts[$host] ?? null;
-        if (!is_array($prev) || gscHostOpsSig($prev) !== gscHostOpsSig($entry)) {
-            $opsChanged = true;
-            break;
+if ($rawHosts === null || ($rawConfig['hosts'] ?? null) !== $config['hosts']) {
+    // Solo invalida la caché del host cuya firma operativa cambió (sitemap/pages).
+    // reportLang / ga4Property no tocan métricas y no deben borrar la cartera.
+    if (is_array($rawHosts)) {
+        foreach ($config['hosts'] as $cfgHost => $entry) {
+            $prev = $rawHosts[$cfgHost] ?? null;
+            if (!is_array($prev) || gscHostOpsSig($prev) !== gscHostOpsSig($entry)) {
+                @unlink(gscHostCacheFile($dataDir, $cfgHost));
+            }
+        }
+        foreach ($rawHosts as $oldHost => $_) {
+            if (!isset($config['hosts'][$oldHost])) {
+                @unlink(gscHostCacheFile($dataDir, (string) $oldHost));
+            }
         }
     }
-}
-if ($rawHosts === null || ($rawConfig['hosts'] ?? null) !== $config['hosts']) {
     gscWriteJson($configFile, $config);
-}
-if ($opsChanged) {
-    foreach (glob($dataDir . '/gsc-cache*.json') ?: [] as $stale) {
-        @unlink($stale);
-    }
 }
 
 $serviceAccount = gscLoadServiceAccount($dataDir, $keyFilePreferred);
@@ -2400,11 +2500,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
         $pageSig = md5(json_encode([$host, $sitemapUrl, $manualPages, GSC_VERSION], JSON_UNESCAPED_SLASHES));
         $cached = gscReadJson($hostCacheFile, []);
         $fresh = (string) ($_GET['fresh'] ?? '') === '1';
+        $cacheTtl = !empty($cached['partial']) ? GSC_PARTIAL_TTL : GSC_CACHE_TTL;
         if (
             !$fresh
             && isset($cached['fetchedAt'])
             && empty($cached['error'])
-            && (time() - (int) $cached['fetchedAt']) < GSC_CACHE_TTL
+            && (time() - (int) $cached['fetchedAt']) < $cacheTtl
             && ($cached['pageSig'] ?? '') === $pageSig
         ) {
             $cached['cached'] = true;
@@ -2412,6 +2513,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             $cached['ga4Property'] = gscGa4Property((string) ($override['ga4Property'] ?? ''));
             gscJson($cached);
         }
+
+        $prevIndexMap = gscReuseIndexMap($cached);
+        $cachedProperty = (string) ($cached['diagnostics']['property'] ?? '');
 
         $token = gscAccessToken($serviceAccount, $tokenFile);
         $sites = [];
@@ -2421,7 +2525,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             // Seguimos: gscResolveProperty prueba candidatos aunque list sites falle.
         }
 
-        $primary = gscResolveProperty($token, $seedUrl, $sites);
+        $primary = gscResolvePropertyCached($token, $seedUrl, $sites, $cachedProperty);
         $primaryProperty = (string) ($primary['property'] ?? '');
         $sitemapItems = [];
         $sitemapApiError = '';
@@ -2472,11 +2576,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
         $groups = [];
         $unmatched = [];
         foreach ($pages as $page) {
-            $host = gscHost($page['url']);
-            if (!array_key_exists($host, $resolvedByHost)) {
-                $resolvedByHost[$host] = gscResolveProperty($token, $page['url'], $sites);
+            $pageHost = gscHost($page['url']);
+            if (!array_key_exists($pageHost, $resolvedByHost)) {
+                $resolvedByHost[$pageHost] = gscResolvePropertyCached(
+                    $token,
+                    $page['url'],
+                    $sites,
+                    $pageHost === $host ? $cachedProperty : ''
+                );
             }
-            $resolved = $resolvedByHost[$host];
+            $resolved = $resolvedByHost[$pageHost];
             $property = (string) ($resolved['property'] ?? '');
             if ($property === '') {
                 $unmatched[] = [
@@ -2490,16 +2599,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
 
         $nowMap = [];
         $prevMap = [];
+        $queriesByPage = [];
+        $deviceBucket = [];
+        $countryBucket = [];
         $totals = ['clicks' => 0, 'impressions' => 0, 'ctr' => 0, 'position' => 0];
         $totalsBefore = ['clicks' => 0, 'impressions' => 0, 'ctr' => 0, 'position' => 0];
         $propertyErrors = [];
         $weightNow = 0;
         $weightPrev = 0;
         $dailyBucket = [];
+        $partial = false;
 
-        // Las cinco consultas de una propiedad son independientes: van en paralelo.
+        // Métricas + queries page×query + device/country en paralelo.
         foreach ($groups as $property => $groupPages) {
-            $res = gscMultiFetch([
+            $jobs = [
                 'current' => gscAnalyticsJob($token, $property, $startIso, $endIso, ['dimensions' => ['page']]),
                 'previous' => gscAnalyticsJob($token, $property, $prevStartIso, $prevEndIso, ['dimensions' => ['page']]),
                 'totalsNow' => gscAnalyticsJob($token, $property, $startIso, $endIso),
@@ -2508,7 +2621,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
                     'dimensions' => ['date'],
                     'rowLimit' => GSC_HISTORY_DAYS + 10,
                 ]),
-            ]);
+                'device' => gscAnalyticsJob($token, $property, $startIso, $endIso, [
+                    'dimensions' => ['device'],
+                    'rowLimit' => 10,
+                ]),
+                'country' => gscAnalyticsJob($token, $property, $startIso, $endIso, [
+                    'dimensions' => ['country'],
+                    'rowLimit' => 15,
+                ]),
+            ];
+            if (gscTimeLeft($deadline) > 10) {
+                $jobs['pageQuery'] = gscAnalyticsJob($token, $property, $startIso, $endIso, [
+                    'dimensions' => ['page', 'query'],
+                    'rowLimit' => 5000,
+                ]);
+            } else {
+                $partial = true;
+            }
+
+            $res = gscMultiFetch($jobs);
 
             if (!$res['current']['ok']) {
                 $propertyErrors[$property] = gscJobError($res['current'], 'Error al consultar Search Console');
@@ -2518,6 +2649,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             $nowMap += gscIndexRows(is_array($res['current']['data']) ? $res['current']['data'] : []);
             if ($res['previous']['ok'] && is_array($res['previous']['data'])) {
                 $prevMap += gscIndexRows($res['previous']['data']);
+            }
+            if (($res['pageQuery']['ok'] ?? false) && is_array($res['pageQuery']['data'] ?? null)) {
+                foreach (gscQueriesByPage($res['pageQuery']['data']) as $urlKey => $rows) {
+                    $queriesByPage[$urlKey] = $rows;
+                }
+            }
+            if (($res['device']['ok'] ?? false) && is_array($res['device']['data'] ?? null)) {
+                foreach ($res['device']['data']['rows'] ?? [] as $row) {
+                    $name = strtolower((string) ($row['keys'][0] ?? ''));
+                    if ($name === '') {
+                        continue;
+                    }
+                    if (!isset($deviceBucket[$name])) {
+                        $deviceBucket[$name] = ['name' => $name, 'clicks' => 0, 'impressions' => 0];
+                    }
+                    $deviceBucket[$name]['clicks'] += (int) round((float) ($row['clicks'] ?? 0));
+                    $deviceBucket[$name]['impressions'] += (int) round((float) ($row['impressions'] ?? 0));
+                }
+            }
+            if (($res['country']['ok'] ?? false) && is_array($res['country']['data'] ?? null)) {
+                foreach ($res['country']['data']['rows'] ?? [] as $row) {
+                    $code = strtoupper((string) ($row['keys'][0] ?? ''));
+                    if ($code === '') {
+                        continue;
+                    }
+                    if (!isset($countryBucket[$code])) {
+                        $countryBucket[$code] = ['code' => $code, 'clicks' => 0, 'impressions' => 0];
+                    }
+                    $countryBucket[$code]['clicks'] += (int) round((float) ($row['clicks'] ?? 0));
+                    $countryBucket[$code]['impressions'] += (int) round((float) ($row['impressions'] ?? 0));
+                }
             }
 
             if ($res['daily']['ok']) {
@@ -2547,6 +2709,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             }
         }
 
+        $devices = array_values($deviceBucket);
+        usort($devices, static fn ($a, $b) => ($b['clicks'] <=> $a['clicks']) ?: ($b['impressions'] <=> $a['impressions']));
+        $countries = array_values($countryBucket);
+        usort($countries, static fn ($a, $b) => ($b['clicks'] <=> $a['clicks']) ?: ($b['impressions'] <=> $a['impressions']));
+        $countries = array_slice($countries, 0, 8);
+
+        // URLs con tráfico en GSC que el sitemap no listó: no se pierden.
+        $knownKeys = [];
+        foreach ($pages as $page) {
+            $knownKeys[gscPageKey((string) ($page['url'] ?? ''))] = true;
+        }
+        $trafficPages = [];
+        foreach ($nowMap as $urlKey => $row) {
+            $url = (string) ($row['keys'][0] ?? $urlKey);
+            if ($url === '' || !preg_match('#^https?://#i', $url)) {
+                continue;
+            }
+            if (!gscUrlBelongsToHost($url, $host)) {
+                continue;
+            }
+            $key = gscPageKey($url);
+            if (isset($knownKeys[$key])) {
+                continue;
+            }
+            $trafficPages[] = [
+                'url' => $url,
+                'label' => '',
+                '_impr' => (int) round((float) ($row['impressions'] ?? 0)),
+            ];
+        }
+        usort($trafficPages, static fn ($a, $b) => ($b['_impr'] <=> $a['_impr']));
+        $room = max(0, GSC_MAX_SITEMAP_URLS - count($pages));
+        $fromTraffic = 0;
+        foreach (array_slice($trafficPages, 0, $room) as $extra) {
+            unset($extra['_impr']);
+            $pages[] = $extra;
+            $knownKeys[gscPageKey($extra['url'])] = true;
+            $fromTraffic++;
+            if ($primaryProperty !== '') {
+                $groups[$primaryProperty][] = $extra;
+            }
+        }
+
         $totals['ctr'] = $totals['impressions'] > 0 ? $totals['clicks'] / $totals['impressions'] : 0;
         $totalsBefore['ctr'] = $totalsBefore['impressions'] > 0 ? $totalsBefore['clicks'] / $totalsBefore['impressions'] : 0;
         $totals['position'] = $weightNow > 0 ? $totals['position'] / $weightNow : 0;
@@ -2560,8 +2765,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
                 continue;
             }
             $seen[$key] = true;
-            $host = gscHost($page['url']);
-            $property = (string) ($resolvedByHost[$host]['property'] ?? '');
+            $pageHost = gscHost($page['url']);
+            $property = (string) ($resolvedByHost[$pageHost]['property'] ?? $primaryProperty);
             $error = null;
             foreach ($unmatched as $miss) {
                 if ($miss['page']['url'] === $page['url']) {
@@ -2575,6 +2780,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             $now = gscMetricRow($nowMap[$page['url']] ?? $nowMap[$key] ?? null);
             $prev = gscMetricRow($prevMap[$page['url']] ?? $prevMap[$key] ?? null);
             $delta = gscDelta($now, $prev);
+            $queries = $queriesByPage[$page['url']] ?? $queriesByPage[$key] ?? [];
+            $reused = $prevIndexMap[$page['url']] ?? null;
             $pageRows[] = [
                 'url' => $page['url'],
                 'label' => $page['label'] !== '' ? $page['label'] : $page['url'],
@@ -2583,16 +2790,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
                 'current' => $now,
                 'previous' => $prev,
                 'delta' => $delta,
-                'queries' => [],
-                'indexStatus' => null,
+                'queries' => $queries,
+                'indexStatus' => is_array($reused) ? ($reused['indexStatus'] ?? null) : null,
+                'indexRequest' => is_array($reused) ? ($reused['indexRequest'] ?? null) : null,
                 'thermometer' => gscThermometer($now, $delta, (float) $totals['ctr']),
             ];
         }
 
         usort($pageRows, static fn ($a, $b) => (($b['current']['impressions'] ?? 0) <=> ($a['current']['impressions'] ?? 0)) ?: (($b['current']['clicks'] ?? 0) <=> ($a['current']['clicks'] ?? 0)));
 
-        // Enriquecimiento opcional: si el presupuesto se agota, devolvemos lo básico.
-        $partial = false;
         $enrichable = [];
         foreach ($pageRows as $idx => $row) {
             if (($row['error'] ?? null) === null && ($row['property'] ?? '') !== '') {
@@ -2600,54 +2806,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             }
         }
 
-        if (gscTimeLeft($deadline) > 8) {
-            $queryJobs = [];
-            foreach (array_slice($enrichable, 0, GSC_MAX_QUERY_PROBES) as $idx) {
-                $queryJobs[$idx] = gscAnalyticsJob(
-                    $token,
-                    (string) $pageRows[$idx]['property'],
-                    $startIso,
-                    $endIso,
-                    [
-                        'dimensions' => ['query'],
-                        'rowLimit' => 5,
-                        'dimensionFilterGroups' => [[
-                            'filters' => [[
-                                'dimension' => 'page',
-                                'operator' => 'equals',
-                                'expression' => (string) $pageRows[$idx]['url'],
-                            ]],
-                        ]],
-                    ]
-                );
-            }
-
-            foreach (gscMultiFetch($queryJobs) as $idx => $res) {
-                if (!$res['ok']) {
-                    continue;
-                }
-                $queries = [];
-                foreach ($res['data']['rows'] ?? [] as $row) {
-                    $query = trim((string) ($row['keys'][0] ?? ''));
-                    if ($query === '') {
-                        continue;
-                    }
-                    $queries[] = [
-                        'query' => $query,
-                        'clicks' => (int) round((float) ($row['clicks'] ?? 0)),
-                        'impressions' => (int) round((float) ($row['impressions'] ?? 0)),
-                    ];
-                }
-                $pageRows[$idx]['queries'] = $queries;
-            }
-        } else {
-            $partial = true;
-        }
-
-        // La inspección de URL es la llamada más lenta de Google: siempre al final.
+        // Inspección solo de URLs sin indexStatus fresco (<24h).
         if (gscTimeLeft($deadline) > 10) {
             $inspectJobs = [];
-            foreach (array_slice($enrichable, 0, GSC_MAX_URL_INSPECTIONS) as $idx) {
+            foreach ($enrichable as $idx) {
+                if (count($inspectJobs) >= GSC_MAX_URL_INSPECTIONS) {
+                    break;
+                }
+                if (is_array($pageRows[$idx]['indexStatus'] ?? null) && ($pageRows[$idx]['indexStatus']['tone'] ?? '') !== '') {
+                    continue;
+                }
                 $inspectJobs[$idx] = gscInspectJob(
                     $token,
                     (string) $pageRows[$idx]['property'],
@@ -2655,22 +2823,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
                 );
             }
 
-            foreach (gscMultiFetch($inspectJobs) as $idx => $res) {
-                if ($res['ok']) {
-                    $index = $res['data']['inspectionResult']['indexStatusResult'] ?? [];
-                    $pageRows[$idx]['indexStatus'] = gscIndexLabel(is_array($index) ? $index : []);
-                    continue;
+            if ($inspectJobs !== []) {
+                foreach (gscMultiFetch($inspectJobs) as $idx => $res) {
+                    if ($res['ok']) {
+                        $index = $res['data']['inspectionResult']['indexStatusResult'] ?? [];
+                        $pageRows[$idx]['indexStatus'] = gscIndexLabel(is_array($index) ? $index : []);
+                        continue;
+                    }
+                    $pageRows[$idx]['indexStatus'] = [
+                        'label' => 'Sin inspección',
+                        'tone' => 'neutral',
+                        'coverage' => gscJobError($res, 'No se pudo inspeccionar la URL'),
+                        'reason' => gscJobError($res, 'No se pudo inspeccionar la URL'),
+                        'robots' => '',
+                        'fetch' => '',
+                        'indexing' => '',
+                        'lastCrawl' => '',
+                    ];
                 }
-                $pageRows[$idx]['indexStatus'] = [
-                    'label' => 'Sin inspección',
-                    'tone' => 'neutral',
-                    'coverage' => gscJobError($res, 'No se pudo inspeccionar la URL'),
-                    'reason' => gscJobError($res, 'No se pudo inspeccionar la URL'),
-                    'robots' => '',
-                    'fetch' => '',
-                    'indexing' => '',
-                    'lastCrawl' => '',
-                ];
             }
         } else {
             $partial = true;
@@ -2736,6 +2906,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             ], $sites)),
             'fromSitemap' => count($sitemapDiscovery['pages'] ?? []),
             'fromManual' => count($manualPages),
+            'fromTraffic' => $fromTraffic,
         ];
 
         // Sin propiedad accesible no hay métricas: devolvemos el motivo, no una tabla vacía.
@@ -2771,6 +2942,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
                 'impressions' => (int) $row['impressions'],
             ], $dailyVisible),
             'trend' => $trend,
+            'devices' => $devices,
+            'countries' => $countries,
             'inventory' => $inventory,
             'signals' => $signals,
             'diagnostics' => $diagnostics,
@@ -2826,7 +2999,13 @@ if ($action === 'keywords' || $action === 'keywords-ai') {
             } catch (Throwable $e) {
                 // gscResolveProperty prueba candidatos aunque list sites falle.
             }
-            $resolved = gscResolveProperty($token, 'https://' . $kwHost . '/', $sites);
+            $siteCache = gscReadJson(gscHostCacheFile($dataDir, $kwHost), []);
+            $resolved = gscResolvePropertyCached(
+                $token,
+                'https://' . $kwHost . '/',
+                $sites,
+                (string) ($siteCache['diagnostics']['property'] ?? $kw['property'] ?? '')
+            );
             $property = (string) ($resolved['property'] ?? '');
             if ($property === '') {
                 gscJson(['error' => (string) ($resolved['error'] ?? 'Search Console no ve este dominio.')], 400);

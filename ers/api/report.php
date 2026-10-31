@@ -61,6 +61,7 @@ function reportCopy(string $lang): array
             'visits' => 'Visitas',
             'stayed' => 'Se quedaron',
             'fromGoogle' => 'Desde el buscador',
+            'conversions' => 'Conversiones',
             'pages' => 'Cada página',
             'colPage' => 'Página',
             'colSeen' => 'Veces visible',
@@ -77,11 +78,18 @@ function reportCopy(string $lang): array
             'sourcesSpeed' => 'velocidad en celular',
             'generated' => 'Generado',
             'speedNote' => 'Celular',
+            'times' => 'veces',
+            'clicksShort' => 'clics',
+            'placeShort' => 'lugar',
+            'signNote' => 'Preparé este informe con los datos de Google de este período. Si un número no cierra, lo vemos juntos.',
+            'pageOf' => 'Página',
+            'of' => 'de',
             'headline' => 'En los últimos 28 días, %s recibió %s clics desde Google%s.',
             'deltaUp' => ', %s más que el mes anterior',
             'deltaDown' => ', %s menos que el mes anterior',
             'leadSearch' => 'Apareció %s veces en resultados y quedó, en promedio, en el lugar %s.',
             'leadGa' => 'En el sitio hubo %s personas y %s visitas. %s llegaron desde el buscador.',
+            'leadConv' => 'Se registraron %s conversiones en el período.',
             'leadOpp' => 'La búsqueda «%s» ya los deja cerca de la primera página: es el crecimiento más cercano.',
             'leadClose' => 'Abajo está el trabajo de cada página y lo que vamos a hacer en los próximos 30 días.',
             'devices' => ['mobile' => 'celular', 'desktop' => 'computador', 'tablet' => 'tablet'],
@@ -97,6 +105,7 @@ function reportCopy(string $lang): array
             'visits' => 'Visits',
             'stayed' => 'Stayed to look',
             'fromGoogle' => 'From search',
+            'conversions' => 'Conversions',
             'pages' => 'Each page',
             'colPage' => 'Page',
             'colSeen' => 'Times shown',
@@ -113,11 +122,18 @@ function reportCopy(string $lang): array
             'sourcesSpeed' => 'mobile speed',
             'generated' => 'Prepared',
             'speedNote' => 'Mobile',
+            'times' => 'times',
+            'clicksShort' => 'clicks',
+            'placeShort' => 'place',
+            'signNote' => 'I prepared this report with Google data for this period. If a number looks off, we can review it together.',
+            'pageOf' => 'Page',
+            'of' => 'of',
             'headline' => 'In the last 28 days, %s got %s clicks from Google%s.',
             'deltaUp' => ', %s more than the previous month',
             'deltaDown' => ', %s fewer than the previous month',
             'leadSearch' => 'The site showed up %s times and sat at an average place of %s.',
             'leadGa' => 'The site had %s people and %s visits. %s came from search.',
+            'leadConv' => 'There were %s conversions in the period.',
             'leadOpp' => 'The search “%s” already puts the site near the first page. That is the closest growth.',
             'leadClose' => 'Below is the work on each page, and what we will do in the next 30 days.',
             'devices' => ['mobile' => 'mobile', 'desktop' => 'desktop', 'tablet' => 'tablet'],
@@ -133,6 +149,7 @@ function reportCopy(string $lang): array
             'visits' => 'Visitas',
             'stayed' => 'Ficaram para ver',
             'fromGoogle' => 'Pela pesquisa',
+            'conversions' => 'Conversões',
             'pages' => 'Cada página',
             'colPage' => 'Página',
             'colSeen' => 'Vezes visível',
@@ -149,11 +166,18 @@ function reportCopy(string $lang): array
             'sourcesSpeed' => 'velocidade no celular',
             'generated' => 'Gerado',
             'speedNote' => 'Celular',
+            'times' => 'vezes',
+            'clicksShort' => 'cliques',
+            'placeShort' => 'posição',
+            'signNote' => 'Preparei este relatório com os dados do Google deste período. Se algum número não fechar, vemos juntos.',
+            'pageOf' => 'Página',
+            'of' => 'de',
             'headline' => 'Nos últimos 28 dias, %s recebeu %s cliques no Google%s.',
             'deltaUp' => ', %s a mais que o mês anterior',
             'deltaDown' => ', %s a menos que o mês anterior',
             'leadSearch' => 'Apareceu %s vezes nos resultados e ficou, em média, na posição %s.',
             'leadGa' => 'O site teve %s pessoas e %s visitas. %s chegaram pela pesquisa.',
+            'leadConv' => 'Foram registradas %s conversões no período.',
             'leadOpp' => 'A busca «%s» já deixa o site perto da primeira página: é o crescimento mais próximo.',
             'leadClose' => 'Abaixo está o trabalho de cada página e o que vamos fazer nos próximos 30 dias.',
             'devices' => ['mobile' => 'celular', 'desktop' => 'computador', 'tablet' => 'tablet'],
@@ -165,6 +189,9 @@ function reportCopy(string $lang): array
             'index' => ['Lograr que Google indexe esta página', 'Hoy no aparece en el índice. Sin eso, el resto del trabajo no tiene dónde rankear.'],
             'speed' => ['Acelerar la página en el celular', 'En el teléfono carga lento. Eso frena la posición y también a quien ya hizo clic.'],
             'falling' => ['Recuperar los clics que se perdieron', 'Bajó frente al mes anterior. Vamos a revisar si el contenido sigue respondiendo lo que la gente busca.'],
+            'leak' => ['Arreglar la página que recibe visitas pero no convierte', 'Google ya trae gente con intención de comprar o cotizar; en el sitio se van sin contactar. Revisar oferta, WhatsApp y velocidad en celular.'],
+            'gap' => ['Meter la búsqueda clave en el título y los encabezados', 'La gente ya busca esto y la página casi aparece arriba, pero esa frase no está en el título ni en los encabezados.'],
+            'cannibal' => ['Dejar de competir consigo mismos', 'Dos páginas del mismo sitio pelean por la misma búsqueda y se restan fuerza. Unificamos o marcamos cuál es la principal.'],
             'push' => ['Subir esta página a los primeros lugares', 'Ya aparece cerca de la primera página. Reforzamos el contenido para que suba y traiga más clics.'],
             'title' => ['Reescribir cómo se ve en Google', 'Se muestra seguido y poca gente hace clic. El título que ve el usuario no está convenciendo.'],
             'growing' => ['Ampliar lo que ya está creciendo', 'Esta página está ganando clics. La ampliamos ahora, antes de que se estanque.'],
@@ -174,6 +201,9 @@ function reportCopy(string $lang): array
             'index' => ['Get this page into Google’s index', 'It is not in the index today. Nothing else can rank until it is.'],
             'speed' => ['Make this page faster on a phone', 'It loads slowly on mobile. That holds the ranking back, and the people who already clicked.'],
             'falling' => ['Win back the clicks that dropped', 'It fell against the previous month. We will check that the page still answers what people search.'],
+            'leak' => ['Fix the page that gets visits but no contacts', 'Search already sends people with buying intent; they leave without converting. Check the offer, WhatsApp and mobile speed.'],
+            'gap' => ['Put the key search into the title and headings', 'People already search this and the page is near the top, but that phrase is missing from the title and headings.'],
+            'cannibal' => ['Stop competing with yourself', 'Two pages fight for the same search and split the signal. Merge them or pick a primary URL.'],
             'push' => ['Move this page into the top places', 'It already shows near the first page. We will strengthen the content so it climbs and earns more clicks.'],
             'title' => ['Rewrite how it looks in Google', 'It is shown often and few people click. The title they see is not convincing.'],
             'growing' => ['Expand what is already growing', 'This page is gaining clicks. We extend it now, before it stalls.'],
@@ -183,6 +213,9 @@ function reportCopy(string $lang): array
             'index' => ['Fazer o Google indexar esta página', 'Hoje ela não está no índice. Sem isso, o resto do trabalho não tem onde ranquear.'],
             'speed' => ['Acelerar a página no celular', 'No telefone ela carrega devagar. Isso segura a posição e também quem já clicou.'],
             'falling' => ['Recuperar os cliques que caíram', 'Caiu em relação ao mês anterior. Vamos ver se o conteúdo ainda responde ao que as pessoas buscam.'],
+            'leak' => ['Corrigir a página que recebe visitas e não converte', 'O Google já traz gente com intenção de comprar; no site elas saem sem contato. Revisar oferta, WhatsApp e velocidade no celular.'],
+            'gap' => ['Colocar a busca-chave no título e nos cabeçalhos', 'As pessoas já buscam isso e a página quase aparece no topo, mas a frase não está no título nem nos cabeçalhos.'],
+            'cannibal' => ['Parar de competir consigo mesmo', 'Duas páginas do mesmo site brigam pela mesma busca. Unificamos ou marcamos a principal.'],
             'push' => ['Levar esta página aos primeiros lugares', 'Já aparece perto da primeira página. Reforçamos o conteúdo para ela subir e trazer mais cliques.'],
             'title' => ['Reescrever como ela aparece no Google', 'É exibida bastante e pouca gente clica. O título que a pessoa vê não está convencendo.'],
             'growing' => ['Ampliar o que já está crescendo', 'Esta página está ganhando cliques. Ampliamos agora, antes que ela estanque.'],
@@ -644,20 +677,61 @@ function reportPsiPage(string $apiKey, string $url): ?array
     ];
 }
 
-function reportPsi(string $dataDir, string $host, string $apiKey, bool $fresh): array
+/** Home + hasta 2 URLs con más impresiones (PSI es lento: tope 3). */
+function reportPsiTargets(array $gsc, string $host): array
+{
+    $home = 'https://' . $host . '/';
+    $urls = [$home];
+    $seen = [reportNormPath($home) => true];
+    $rows = is_array($gsc['pages'] ?? null) ? $gsc['pages'] : [];
+    usort($rows, static fn ($a, $b) => ((int) ($b['current']['impressions'] ?? 0)) <=> ((int) ($a['current']['impressions'] ?? 0)));
+    foreach ($rows as $row) {
+        if (count($urls) >= 3) {
+            break;
+        }
+        if (!is_array($row) || !empty($row['error'])) {
+            continue;
+        }
+        $url = trim((string) ($row['url'] ?? ''));
+        if ($url === '' || (int) ($row['current']['impressions'] ?? 0) < 30) {
+            continue;
+        }
+        $key = reportNormPath($url);
+        if (isset($seen[$key])) {
+            continue;
+        }
+        $seen[$key] = true;
+        $urls[] = $url;
+    }
+    return $urls;
+}
+
+function reportPsi(string $dataDir, string $host, string $apiKey, bool $fresh, array $gsc = []): array
 {
     $file = $dataDir . '/psi-cache-' . md5($host) . '.json';
     $cached = gscReadJson($file, []);
     $pages = is_array($cached['pages'] ?? null) ? $cached['pages'] : [];
     $home = 'https://' . $host . '/';
-    $hit = $pages[$home] ?? null;
-    $stale = !is_array($hit) || (time() - (int) ($hit['at'] ?? 0)) >= REPORT_PSI_TTL;
-    if ($apiKey !== '' && ($fresh || $stale)) {
-        $measured = reportPsiPage($apiKey, $home);
-        if ($measured) {
-            $pages[$home] = $measured;
-            gscWriteJson($file, ['pages' => $pages]);
+    if ($apiKey === '') {
+        return ['pages' => $pages, 'home' => is_array($pages[$home] ?? null) ? $pages[$home] : null];
+    }
+
+    $targets = reportPsiTargets($gsc !== [] ? $gsc : ['pages' => []], $host);
+    $changed = false;
+    foreach ($targets as $url) {
+        $hit = $pages[$url] ?? null;
+        $stale = !is_array($hit) || (time() - (int) ($hit['at'] ?? 0)) >= REPORT_PSI_TTL;
+        if (!$fresh && !$stale) {
+            continue;
         }
+        $measured = reportPsiPage($apiKey, $url);
+        if ($measured) {
+            $pages[$url] = $measured;
+            $changed = true;
+        }
+    }
+    if ($changed) {
+        gscWriteJson($file, ['pages' => $pages]);
     }
     return ['pages' => $pages, 'home' => is_array($pages[$home] ?? null) ? $pages[$home] : null];
 }
@@ -678,7 +752,270 @@ function reportQueryFor(array $kw, string $path): string
     return '';
 }
 
-function reportPageAction(array $page, ?array $psi): string
+/** Intención comercial/local en español (Chile): precio, cotizar, ciudad, etc. */
+function reportIsTransactional(string $query): bool
+{
+    $q = ' ' . gscAscii($query) . ' ';
+    $needles = [
+        'precio', 'precios', 'cotiz', 'presupuesto', 'contratar', 'comprar', 'compra',
+        'urgencia', 'urgente', 'whatsapp', 'telefono', 'fono', 'llamar', 'contacto',
+        'servicio', 'servicios', 'empresa', 'mejor', 'barato', 'economico',
+        'cerca', 'cerca de', 'a domicilio',
+    ];
+    foreach ($needles as $n) {
+        if (str_contains($q, $n)) {
+            return true;
+        }
+    }
+    return (bool) preg_match('/\ben\s+[a-z]{4,}\b/u', $q);
+}
+
+function reportPageDecay(array $page): bool
+{
+    $now = (int) ($page['current']['clicks'] ?? 0);
+    $prev = (int) ($page['previous']['clicks'] ?? 0);
+    $dClicks = (int) ($page['delta']['clicks'] ?? ($now - $prev));
+    $dPos = (float) ($page['delta']['position'] ?? 0);
+    if ($prev >= 10 && $dClicks <= -1 && ($dClicks / $prev) <= -0.3) {
+        return true;
+    }
+    // position delta: positivo = mejoró; negativo = empeoró
+    if ($prev >= 5 && $dPos <= -1.5 && $dClicks < 0) {
+        return true;
+    }
+    return $dClicks <= -5;
+}
+
+/**
+ * Scrape liviano del HTML propio: title + H1/H2.
+ * Timeout corto; si falla, el informe sigue sin el gap.
+ */
+function reportFetchDomHints(string $url): ?array
+{
+    if (!preg_match('#^https?://#i', $url) || gscIsAgencyHost($url)) {
+        return null;
+    }
+    $html = '';
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_TIMEOUT => 5,
+            CURLOPT_CONNECTTIMEOUT => 3,
+            CURLOPT_USERAGENT => 'MonoStudio-Report/1.0',
+            CURLOPT_MAXREDIRS => 3,
+        ]);
+        $raw = curl_exec($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if (!is_string($raw) || $code < 200 || $code >= 400) {
+            return null;
+        }
+        $html = $raw;
+    } else {
+        $html = (string) (@file_get_contents($url, false, stream_context_create([
+            'http' => ['timeout' => 5, 'header' => "User-Agent: MonoStudio-Report/1.0\r\n", 'ignore_errors' => true],
+        ])) ?: '');
+        if ($html === '') {
+            return null;
+        }
+    }
+    if (!class_exists('DOMDocument')) {
+        return null;
+    }
+    $prev = libxml_use_internal_errors(true);
+    $dom = new DOMDocument();
+    @$dom->loadHTML('<?xml encoding="utf-8" ?>' . $html);
+    libxml_clear_errors();
+    libxml_use_internal_errors($prev);
+    $xpath = new DOMXPath($dom);
+    $textOf = static function (string $expr) use ($xpath): string {
+        $nodes = $xpath->query($expr);
+        $parts = [];
+        if ($nodes) {
+            foreach ($nodes as $node) {
+                $parts[] = trim(preg_replace('/\s+/u', ' ', $node->textContent ?? '') ?? '');
+            }
+        }
+        return gscAscii(implode(' ', array_filter($parts)));
+    };
+    $title = $textOf('//title');
+    $h1 = $textOf('//h1');
+    $h2 = $textOf('//h2');
+    $meta = '';
+    foreach ($xpath->query('//meta[translate(@name,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="description"]/@content') ?: [] as $attr) {
+        $meta = gscAscii(trim((string) $attr->nodeValue));
+        break;
+    }
+    return [
+        'title' => $title,
+        'h1' => $h1,
+        'h2' => $h2,
+        'meta' => $meta,
+        'titleLen' => function_exists('mb_strlen') ? mb_strlen($title) : strlen($title),
+    ];
+}
+
+function reportQueryInDom(string $query, array $dom): bool
+{
+    $needle = gscAscii($query);
+    if ($needle === '' || strlen($needle) < 3) {
+        return true;
+    }
+    $hay = $dom['title'] . ' ' . $dom['h1'] . ' ' . $dom['h2'];
+    return str_contains($hay, $needle);
+}
+
+/**
+ * Detectores Nivel 1: JOIN GSC↔GA4 (+ DOM opcional en quick wins).
+ * @return list<array{kind:string,path:string,query:string,title:string,detail:string,severity:int}>
+ */
+function reportBuildFindings(array $gsc, array $kw, ?array $ga, array $pages, string $host): array
+{
+    $findings = [];
+    $landings = [];
+    foreach ((is_array($ga) ? ($ga['landings'] ?? []) : []) as $row) {
+        if (is_array($row)) {
+            $landings[reportNormPath((string) ($row['path'] ?? '/'))] = $row;
+        }
+    }
+
+    // 1) Fuga de leads: keyword comercial + clics GSC + landing fría / sin conversión.
+    foreach ($pages as $page) {
+        $path = (string) ($page['path'] ?? '');
+        $query = (string) ($page['query'] ?? '');
+        $clicks = (int) ($page['clicks'] ?? 0);
+        $impr = (int) ($page['impressions'] ?? 0);
+        if ($path === '' || ($clicks < 5 && $impr < 80)) {
+            continue;
+        }
+        if ($query === '' || !reportIsTransactional($query)) {
+            continue;
+        }
+        $landing = $landings[reportNormPath($path)] ?? null;
+        if (!is_array($landing)) {
+            continue;
+        }
+        $sessions = (int) ($landing['sessions'] ?? 0);
+        $eng = (float) ($landing['engagementRate'] ?? 1);
+        $conv = (int) ($landing['conversions'] ?? 0);
+        if ($sessions < 3) {
+            continue;
+        }
+        if ($conv > 0 && $eng >= 0.35) {
+            continue;
+        }
+        $findings[] = [
+            'kind' => 'leak',
+            'path' => $path,
+            'query' => $query,
+            'title' => 'Fuga: llegan por «' . $query . '» y no convierten',
+            'detail' => $sessions . ' visitas en la página, engagement '
+                . round($eng * 100) . '%, conversiones ' . $conv
+                . '. El SEO trae demanda; la landing no cierra.',
+            'severity' => 3,
+        ];
+    }
+
+    // 2) Decay silencioso: −30% clics o caída clara de posición.
+    foreach ($gsc['pages'] ?? [] as $row) {
+        if (!is_array($row) || !empty($row['error']) || !reportPageDecay($row)) {
+            continue;
+        }
+        $path = reportPath((string) ($row['url'] ?? ''));
+        $prev = (int) ($row['previous']['clicks'] ?? 0);
+        $delta = (int) ($row['delta']['clicks'] ?? 0);
+        $pct = $prev > 0 ? (int) round(($delta / $prev) * 100) : 0;
+        $findings[] = [
+            'kind' => 'falling',
+            'path' => $path,
+            'query' => reportQueryFor($kw, $path),
+            'title' => 'Caída en ' . $path,
+            'detail' => $prev > 0
+                ? 'Clics ' . $pct . '% vs el período anterior (' . $delta . '). Actuar antes de que el cliente lo note.'
+                : 'Perdió ' . abs($delta) . ' clics vs el período anterior.',
+            'severity' => abs($pct) >= 40 || abs($delta) >= 15 ? 3 : 2,
+        ];
+    }
+
+    // 3) Canibalización (ya calculada en keywords).
+    foreach (array_slice($kw['buckets']['cannibal'] ?? [], 0, 3) as $c) {
+        if (!is_array($c)) {
+            continue;
+        }
+        $pagesList = is_array($c['pages'] ?? null) ? $c['pages'] : [];
+        if (count($pagesList) < 2) {
+            continue;
+        }
+        $paths = array_map(
+            static fn ($p) => reportNormPath((string) ($p['url'] ?? '')),
+            array_slice($pagesList, 0, 2)
+        );
+        $findings[] = [
+            'kind' => 'cannibal',
+            'path' => $paths[0] ?? '/',
+            'query' => (string) ($c['q'] ?? ''),
+            'title' => 'Canibalización: «' . ($c['q'] ?? '') . '»',
+            'detail' => implode(' y ', $paths) . ' compiten por la misma búsqueda ('
+                . (int) ($c['impressions'] ?? 0) . ' impresiones).',
+            'severity' => 2,
+        ];
+    }
+
+    // 4) Quick win: pos. 4–12 + keyword ausente en title/H1/H2 (DOM propio).
+    $domCache = [];
+    $gapCount = 0;
+    foreach (array_slice($kw['buckets']['striking'] ?? [], 0, 8) as $row) {
+        if ($gapCount >= 3 || !is_array($row) || !empty($row['brand'])) {
+            continue;
+        }
+        $pos = (float) ($row['position'] ?? 0);
+        $impr = (int) ($row['impressions'] ?? 0);
+        $query = trim((string) ($row['q'] ?? ''));
+        $pageUrl = trim((string) ($row['page'] ?? ''));
+        if ($query === '' || $pageUrl === '' || $pos < 4 || $pos > 12 || $impr < 40) {
+            continue;
+        }
+        if (!isset($domCache[$pageUrl])) {
+            $domCache[$pageUrl] = reportFetchDomHints($pageUrl);
+        }
+        $dom = $domCache[$pageUrl];
+        if (!is_array($dom) || reportQueryInDom($query, $dom)) {
+            continue;
+        }
+        $path = reportNormPath($pageUrl);
+        $findings[] = [
+            'kind' => 'gap',
+            'path' => $path,
+            'query' => $query,
+            'title' => 'Quick win: «' . $query . '» fuera del título',
+            'detail' => $impr . ' impresiones en posición ' . round($pos, 1)
+                . ', pero esa frase no está en title/H1/H2 de ' . $path . '.',
+            'severity' => 2,
+        ];
+        $gapCount++;
+    }
+
+    usort($findings, static fn ($a, $b) => ($b['severity'] <=> $a['severity']));
+    // Una finding por path+kind
+    $seen = [];
+    $out = [];
+    foreach ($findings as $f) {
+        $key = $f['kind'] . '|' . $f['path'] . '|' . $f['query'];
+        if (isset($seen[$key])) {
+            continue;
+        }
+        $seen[$key] = true;
+        $out[] = $f;
+        if (count($out) >= 8) {
+            break;
+        }
+    }
+    return $out;
+}
+
+function reportPageAction(array $page, ?array $psi, ?array $landing = null, string $query = ''): string
 {
     $tone = (string) ($page['indexStatus']['tone'] ?? '');
     $impr = (int) ($page['current']['impressions'] ?? 0);
@@ -694,8 +1031,19 @@ function reportPageAction(array $page, ?array $psi): string
     if ($slow && $impr >= 20) {
         return 'speed';
     }
-    if ($dClicks <= -5) {
+    if (reportPageDecay($page)) {
         return 'falling';
+    }
+    if (
+        is_array($landing)
+        && $query !== ''
+        && reportIsTransactional($query)
+        && $clicks >= 5
+        && (int) ($landing['sessions'] ?? 0) >= 3
+        && (int) ($landing['conversions'] ?? 0) === 0
+        && (float) ($landing['engagementRate'] ?? 1) < 0.45
+    ) {
+        return 'leak';
     }
     if ($pos >= 4 && $pos <= 20 && $impr >= 30) {
         return 'push';
@@ -728,7 +1076,10 @@ function reportPages(array $gsc, array $kw, ?array $ga, array $psi): array
         }
     }
 
-    $weight = ['index' => 0, 'falling' => 1, 'speed' => 2, 'push' => 3, 'title' => 4, 'growing' => 5, 'hold' => 6];
+    $weight = [
+        'index' => 0, 'leak' => 1, 'falling' => 2, 'speed' => 3,
+        'gap' => 4, 'cannibal' => 4, 'push' => 5, 'title' => 6, 'growing' => 7, 'hold' => 8,
+    ];
     $items = [];
     foreach ($gsc['pages'] ?? [] as $page) {
         if (!is_array($page) || !empty($page['error'])) {
@@ -737,21 +1088,24 @@ function reportPages(array $gsc, array $kw, ?array $ga, array $psi): array
         $path = reportPath((string) ($page['url'] ?? ''));
         $key = reportNormPath($path);
         $speed = $psiByPath[$key] ?? null;
-        $action = reportPageAction($page, $speed);
         $landing = $landings[$key] ?? null;
+        $query = reportQueryFor($kw, $path);
+        $action = reportPageAction($page, $speed, $landing, $query);
         $items[] = [
             'path' => $path,
+            'url' => (string) ($page['url'] ?? ''),
             'clicks' => (int) ($page['current']['clicks'] ?? 0),
             'impressions' => (int) ($page['current']['impressions'] ?? 0),
             'ctr' => (float) ($page['current']['ctr'] ?? 0),
             'position' => (float) ($page['current']['position'] ?? 0),
             'deltaClicks' => (int) ($page['delta']['clicks'] ?? 0),
-            'query' => reportQueryFor($kw, $path),
+            'query' => $query,
             'sessions' => is_array($landing) ? (int) $landing['sessions'] : null,
             'engagement' => is_array($landing) ? (float) $landing['engagementRate'] : null,
+            'conversions' => is_array($landing) ? (int) ($landing['conversions'] ?? 0) : null,
             'psi' => $speed,
             'action' => $action,
-            'weight' => $weight[$action] ?? 6,
+            'weight' => $weight[$action] ?? 8,
         ];
     }
     usort($items, static fn ($a, $b) => ($a['weight'] <=> $b['weight']) ?: ($b['impressions'] <=> $a['impressions']));
@@ -792,7 +1146,8 @@ function reportNarrative(string $dataDir, string $host, string $lang, array $dos
         . 'Idioma obligatorio: ' . reportLangName($lang) . '. No mezcles idiomas. '
         . 'Usá solo cifras que estén en el JSON. No inventes búsquedas, páginas ni porcentajes. '
         . 'Un clic de Google y una visita de Analytics no son lo mismo: no los presentes como si coincidieran. '
-        . 'Sin jerga (nada de CTR, indexación, severidad, Search Console, API). '
+        . 'Si hay findings (leak, gap, cannibal, falling) u opportunities, el lead y los moves deben partir de ahí. '
+        . 'Sin jerga (nada de CTR, indexación, severidad, Search Console, API, LCP). '
         . 'headline: una frase. lead: dos o tres frases, el hallazgo primero. '
         . 'pages: una frase por path que esté en el JSON, diciendo qué vamos a hacer. '
         . 'moves: como máximo 4 trabajos de los próximos 30 días, cada uno atado a un path real. '
@@ -907,7 +1262,7 @@ function reportFill(string $tpl, array $args): string
     return $out;
 }
 
-function reportFallback(array $copy, string $name, array $search, ?array $ga, array $pages, string $lang): array
+function reportFallback(array $copy, string $name, array $search, ?array $ga, array $pages, string $lang, array $findings = []): array
 {
     $delta = (int) ($search['clicksDelta'] ?? 0);
     $clause = '';
@@ -927,28 +1282,67 @@ function reportFallback(array $copy, string $name, array $search, ?array $ga, ar
             reportNum((float) $ga['current']['sessions'], $lang),
             reportNum((float) ($ga['organic']['sessions'] ?? 0), $lang),
         ]);
-    }
-    $opp = '';
-    foreach ($pages as $page) {
-        if (($page['action'] ?? '') === 'push' && ($page['query'] ?? '') !== '') {
-            $opp = (string) $page['query'];
-            break;
+        $conv = (int) ($ga['current']['conversions'] ?? 0);
+        if ($conv > 0) {
+            $lead .= ' ' . reportFill($copy['leadConv'], [reportNum((float) $conv, $lang)]);
         }
     }
-    if ($opp !== '') {
-        $lead .= ' ' . reportFill($copy['leadOpp'], [$opp]);
+    if ($findings !== []) {
+        $top = $findings[0];
+        $lead .= ' ' . reportPlain((string) ($top['detail'] ?? $top['title'] ?? ''), 280);
+    } else {
+        $opp = '';
+        foreach ($pages as $page) {
+            if (($page['action'] ?? '') === 'push' && ($page['query'] ?? '') !== '') {
+                $opp = (string) $page['query'];
+                break;
+            }
+        }
+        if ($opp !== '') {
+            $lead .= ' ' . reportFill($copy['leadOpp'], [$opp]);
+        }
     }
     $lead .= ' ' . $copy['leadClose'];
 
     $lines = [];
     $moves = [];
+    foreach ($findings as $f) {
+        if (count($moves) >= 4) {
+            break;
+        }
+        $kind = (string) ($f['kind'] ?? 'hold');
+        $pair = $copy['act'][$kind] ?? null;
+        $moves[] = [
+            'title' => reportPlain((string) ($f['title'] ?? ($pair[0] ?? 'Acción')), 120),
+            'detail' => reportPlain((string) ($f['detail'] ?? ($pair[1] ?? '')), 280),
+            'path' => (string) ($f['path'] ?? '/'),
+        ];
+    }
     foreach ($pages as $page) {
         $action = (string) ($page['action'] ?? 'hold');
         $pair = $copy['act'][$action] ?? $copy['act']['hold'];
         $lines[$page['path']] = $pair[1];
         if ($action !== 'hold' && count($moves) < 4) {
-            $moves[] = ['title' => $pair[0], 'detail' => $pair[1], 'path' => $page['path']];
+            $dup = false;
+            foreach ($moves as $m) {
+                if (($m['path'] ?? '') === $page['path']) {
+                    $dup = true;
+                    break;
+                }
+            }
+            if (!$dup) {
+                $moves[] = ['title' => $pair[0], 'detail' => $pair[1], 'path' => $page['path']];
+            }
         }
+    }
+    // Si un finding gap/leak apunta a un path, refuerza la línea de esa página.
+    foreach ($findings as $f) {
+        $path = (string) ($f['path'] ?? '');
+        $kind = (string) ($f['kind'] ?? '');
+        if ($path === '' || !isset($copy['act'][$kind])) {
+            continue;
+        }
+        $lines[$path] = $copy['act'][$kind][1];
     }
     return ['headline' => $headline, 'lead' => $lead, 'pages' => $lines, 'moves' => $moves];
 }
@@ -1000,11 +1394,14 @@ function reportRender(array $model): string
         $prevSessions = (int) ($ga['previous']['sessions'] ?? 0);
         $sessionDelta = reportDelta((float) $cur['sessions'] - $prevSessions, 'count', $lang, $copy);
         $share = $cur['sessions'] > 0 ? reportPct($ga['organic']['sessions'] / $cur['sessions'], $lang) : '—';
+        $conv = (int) ($cur['conversions'] ?? 0);
         $gaHtml = '<div class="kpis kpis--ga">'
             . $kpi($copy['people'], reportNum((float) $cur['users'], $lang), reportDelta((float) $cur['users'] - (float) ($ga['previous']['users'] ?? 0), 'count', $lang, $copy))
             . $kpi($copy['visits'], reportNum((float) $cur['sessions'], $lang), $sessionDelta)
             . $kpi($copy['stayed'], reportPct((float) $cur['engagementRate'], $lang), ['text' => '', 'tone' => 'flat'])
-            . $kpi($copy['fromGoogle'], $share, ['text' => reportNum((float) $ga['organic']['sessions'], $lang), 'tone' => 'flat'])
+            . ($conv > 0
+                ? $kpi($copy['conversions'], reportNum((float) $conv, $lang), ['text' => reportNum((float) ($ga['organic']['conversions'] ?? 0), $lang) . ' ' . $copy['fromGoogle'], 'tone' => 'flat'])
+                : $kpi($copy['fromGoogle'], $share, ['text' => reportNum((float) $ga['organic']['sessions'], $lang), 'tone' => 'flat']))
             . '</div>';
 
         $chips = '';
@@ -1029,8 +1426,47 @@ function reportRender(array $model): string
                 $deviceBits[] = reportPct($device['sessions'] / $deviceTotal, $lang) . ' ' . $label;
             }
         }
+        // Si GA no trae device, usamos el mix de Search Console.
+        if ($deviceBits === [] && !empty($model['gscDevices'])) {
+            $gscDevTotal = 0;
+            foreach ($model['gscDevices'] as $device) {
+                $gscDevTotal += (int) ($device['clicks'] ?? 0);
+            }
+            if ($gscDevTotal > 0) {
+                foreach ($model['gscDevices'] as $device) {
+                    $key = strtolower((string) ($device['name'] ?? ''));
+                    $label = $copy['devices'][$key] ?? $key;
+                    $clicks = (int) ($device['clicks'] ?? 0);
+                    if ($label === '' || $clicks < 1) {
+                        continue;
+                    }
+                    $deviceBits[] = reportPct($clicks / $gscDevTotal, $lang) . ' ' . $label;
+                }
+            }
+        }
         if ($chips !== '' || $deviceBits) {
             $gaHtml .= '<p class="mix">' . $chips . ($deviceBits ? '<span class="chip">' . $e(implode(' · ', $deviceBits)) . '</span>' : '') . '</p>';
+        }
+    } elseif (!empty($model['gscDevices'])) {
+        // Sin GA4: al menos el mix de dispositivos desde Search Console.
+        $gscDevTotal = 0;
+        foreach ($model['gscDevices'] as $device) {
+            $gscDevTotal += (int) ($device['clicks'] ?? 0);
+        }
+        if ($gscDevTotal > 0) {
+            $bits = [];
+            foreach ($model['gscDevices'] as $device) {
+                $key = strtolower((string) ($device['name'] ?? ''));
+                $label = $copy['devices'][$key] ?? $key;
+                $clicks = (int) ($device['clicks'] ?? 0);
+                if ($label === '' || $clicks < 1) {
+                    continue;
+                }
+                $bits[] = reportPct($clicks / $gscDevTotal, $lang) . ' ' . $label;
+            }
+            if ($bits) {
+                $gaHtml = '<p class="mix"><span class="chip">' . $e(implode(' · ', $bits)) . '</span></p>';
+            }
         }
     }
 
@@ -1063,8 +1499,8 @@ function reportRender(array $model): string
         }
         $place = $page['position'] > 0 ? reportNum((float) $page['position'], $lang, 1) : '—';
         $cards .= '<article class="card"><header><strong>' . $e((string) $page['path']) . '</strong><span>'
-            . $e(reportNum((float) $page['impressions'], $lang)) . ' veces · '
-            . $e(reportNum((float) $page['clicks'], $lang)) . ' clics · lugar '
+            . $e(reportNum((float) $page['impressions'], $lang)) . ' ' . $e($copy['times']) . ' · '
+            . $e(reportNum((float) $page['clicks'], $lang)) . ' ' . $e($copy['clicksShort']) . ' · ' . $e($copy['placeShort']) . ' '
             . $e($place) . '</span></header>'
             . ($query !== '' ? '<p class="query">' . $e($copy['searched']) . ' «' . $e($query) . '»</p>' : '')
             . ($speed !== '' ? '<p class="query">' . $speed . '</p>' : '')
@@ -1117,7 +1553,7 @@ function reportRender(array $model): string
     p { orphans: 3; widows: 3; }
 CSS;
 
-    return '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>'
+    return '<!DOCTYPE html><html lang="' . $e($lang) . '"><head><meta charset="utf-8"><title>'
         . $e($copy['title'] . ' — ' . $model['name']) . '</title><style>' . $css . '</style></head><body><article class="sheet">'
         . '<header class="mast"><div><p class="kicker">' . $e($copy['kicker']) . '</p><h1>' . $e($model['name']) . '</h1><p class="who">'
         . $e($copy['title']) . '</p></div><p class="when">' . $e($model['rangeLabel']) . '<br>' . $e($model['generated']) . '</p></header>'
@@ -1127,7 +1563,7 @@ CSS;
         . ($moves !== '' ? '<h2>' . $e($copy['moves']) . '</h2><div class="stack">' . $moves . '</div>' : '')
         . '<section class="close"><p class="note">' . $e($copy['caveat']) . ' ' . $e(implode(' · ', $sources)) . ' · ' . $e($model['host']) . '</p>'
         . '<aside class="sign"><div class="mark">ER</div><div><p class="sign__name">Eduardo Rojas</p><p class="sign__role">Mono Studio</p>'
-        . '<p class="sign__note">Preparé este informe con los datos de Google de este período. Si un número no cierra, lo vemos juntos.</p></div></aside>'
+        . '<p class="sign__note">' . $e($copy['signNote']) . '</p></div></aside>'
         . '</section></article></body></html>';
 }
 
@@ -1136,6 +1572,52 @@ function reportFileName(string $name): string
     $slug = strtolower(gscAscii($name));
     $slug = trim(preg_replace('/[^a-z0-9]+/', '-', $slug) ?? '', '-');
     return 'informe-' . ($slug !== '' ? $slug : 'cliente') . '-' . gmdate('Y-m-d') . '.pdf';
+}
+
+function reportHtmlCacheFile(string $dataDir, string $host): string
+{
+    return $dataDir . '/report-html-' . md5($host) . '.json';
+}
+
+/** Auto-puebla keywords si el operador aún no abrió esa pestaña. */
+function reportEnsureKeywords(string $dataDir, array $sa, string $host, array $gsc): array
+{
+    $kwFile = gscKeywordCacheFile($dataDir, $host);
+    $kw = gscReadJson($kwFile, []);
+    $valid = isset($kw['buckets'])
+        && isset($kw['fetchedAt'])
+        && ($kw['version'] ?? '') === GSC_VERSION
+        && ($kw['kwVersion'] ?? '') === GSC_KW_VERSION;
+    if ($valid && (time() - (int) $kw['fetchedAt']) < GSC_CACHE_TTL) {
+        return $kw;
+    }
+    if ($sa === []) {
+        return isset($kw['buckets']) ? $kw : [];
+    }
+    try {
+        $token = gscAccessToken($sa, $dataDir . '/gsc-token.json');
+        $sites = [];
+        try {
+            $sites = gscListSites($token);
+        } catch (Throwable) {
+            // resolve prueba candidatos
+        }
+        $resolved = gscResolvePropertyCached(
+            $token,
+            'https://' . $host . '/',
+            $sites,
+            (string) ($gsc['diagnostics']['property'] ?? $kw['property'] ?? '')
+        );
+        $property = (string) ($resolved['property'] ?? '');
+        if ($property === '') {
+            return isset($kw['buckets']) ? $kw : [];
+        }
+        $kw = gscFetchKeywords($token, $property, $host);
+        gscWriteJson($kwFile, $kw);
+        return $kw;
+    } catch (Throwable) {
+        return isset($kw['buckets']) ? $kw : [];
+    }
 }
 
 function reportCompose(string $dataDir, array $sa, string $host, string $lang, bool $fresh): array
@@ -1153,7 +1635,7 @@ function reportCompose(string $dataDir, array $sa, string $host, string $lang, b
 
     $prefs = reportHostConfig($dataDir, $host);
     $windows = reportWindows($gsc);
-    $kw = gscReadJson(gscKeywordCacheFile($dataDir, $host), []);
+    $kw = reportEnsureKeywords($dataDir, $sa, $host, $gsc);
     if (!isset($kw['buckets'])) {
         $kw = [];
     }
@@ -1175,7 +1657,7 @@ function reportCompose(string $dataDir, array $sa, string $host, string $lang, b
     $psi = ['pages' => [], 'home' => null];
     if ($psiKey !== '') {
         try {
-            $psi = reportPsi($dataDir, $host, $psiKey, $fresh);
+            $psi = reportPsi($dataDir, $host, $psiKey, $fresh, $gsc);
         } catch (Throwable) {
             $psi = ['pages' => [], 'home' => null];
         }
@@ -1195,32 +1677,98 @@ function reportCompose(string $dataDir, array $sa, string $host, string $lang, b
         'positionDelta' => (float) ($period['delta']['position'] ?? $gsc['totalsDelta']['position'] ?? 0),
     ];
 
+    $gscDevices = array_values(array_filter(
+        is_array($gsc['devices'] ?? null) ? $gsc['devices'] : [],
+        static fn ($d) => is_array($d) && (int) ($d['clicks'] ?? 0) > 0
+    ));
+
+    $opportunities = [];
+    foreach (array_slice($kw['buckets']['striking'] ?? [], 0, 5) as $row) {
+        if (!is_array($row) || !empty($row['brand']) || (int) ($row['gain'] ?? 0) < 1) {
+            continue;
+        }
+        $opportunities[] = [
+            'query' => (string) ($row['q'] ?? ''),
+            'position' => (float) ($row['position'] ?? 0),
+            'impressions' => (int) ($row['impressions'] ?? 0),
+            'potentialClicks' => (int) ($row['gain'] ?? 0),
+            'path' => reportNormPath((string) ($row['page'] ?? '')),
+        ];
+    }
+
+    $findings = reportBuildFindings($gsc, $kw, $ga, $pages, $host);
+    // Si el DOM detectó gap en un path, marca la acción de esa página.
+    $gapPaths = [];
+    foreach ($findings as $f) {
+        if (($f['kind'] ?? '') === 'gap') {
+            $gapPaths[reportNormPath((string) ($f['path'] ?? ''))] = true;
+        }
+    }
+    foreach ($pages as &$page) {
+        $p = reportNormPath((string) ($page['path'] ?? ''));
+        if (isset($gapPaths[$p]) && in_array($page['action'], ['push', 'hold', 'growing'], true)) {
+            $page['action'] = 'gap';
+        }
+    }
+    unset($page);
+
     $dossierPages = array_map(static fn ($page) => [
         'path' => $page['path'],
         'clicks' => $page['clicks'],
         'impressions' => $page['impressions'],
         'position' => round($page['position'], 1),
+        'deltaClicks' => $page['deltaClicks'],
         'query' => $page['query'],
         'action' => $page['action'],
         'sessions' => $page['sessions'],
+        'engagement' => $page['engagement'] !== null ? round((float) $page['engagement'], 3) : null,
+        'conversions' => $page['conversions'],
         'mobileScore' => is_array($page['psi'] ?? null) ? ($page['psi']['score'] ?? null) : null,
+        'lcp' => is_array($page['psi'] ?? null) ? ($page['psi']['lcp'] ?? '') : '',
     ], $pages);
-    $signature = md5(json_encode([$lang, $search, $dossierPages, $ga['fetchedAt'] ?? 0], JSON_UNESCAPED_UNICODE) ?: '');
+    $signature = md5(json_encode([
+        $lang,
+        $search,
+        $dossierPages,
+        $opportunities,
+        $findings,
+        $gscDevices,
+        $ga['fetchedAt'] ?? 0,
+        $ga['current']['conversions'] ?? 0,
+    ], JSON_UNESCAPED_UNICODE) ?: '');
     $narrative = reportNarrative($dataDir, $host, $lang, [
         'client' => $name,
         'host' => $host,
         'range' => $windows,
-        'search' => $search,
+        'search' => $search + ['devices' => $gscDevices],
         'analytics' => $ga ? [
             'people' => $ga['current']['users'],
             'visits' => $ga['current']['sessions'],
             'stayed' => reportPct((float) $ga['current']['engagementRate'], 'en'),
             'fromSearch' => $ga['organic']['sessions'],
+            'conversions' => (int) ($ga['current']['conversions'] ?? 0),
+            'organicConversions' => (int) ($ga['organic']['conversions'] ?? 0),
+            'channels' => array_slice(array_map(static fn ($c) => [
+                'name' => (string) ($c['name'] ?? ''),
+                'sessions' => (int) ($c['sessions'] ?? 0),
+            ], $ga['channels'] ?? []), 0, 5),
+            'devices' => array_map(static fn ($d) => [
+                'name' => (string) ($d['name'] ?? ''),
+                'sessions' => (int) ($d['sessions'] ?? 0),
+            ], $ga['devices'] ?? []),
         ] : null,
+        'findings' => array_map(static fn ($f) => [
+            'kind' => $f['kind'],
+            'path' => $f['path'],
+            'query' => $f['query'],
+            'title' => $f['title'],
+            'detail' => $f['detail'],
+        ], $findings),
+        'opportunities' => $opportunities,
         'pages' => $dossierPages,
     ], $signature, $fresh);
 
-    $fallback = reportFallback($copy, $name, $search, $ga, $pages, $lang);
+    $fallback = reportFallback($copy, $name, $search, $ga, $pages, $lang, $findings);
     $lines = $fallback['pages'];
     foreach ($narrative['pages'] ?? [] as $path => $line) {
         if (is_string($line) && $line !== '') {
@@ -1256,17 +1804,29 @@ function reportCompose(string $dataDir, array $sa, string $host, string $lang, b
             'position' => reportDelta((float) $search['positionDelta'], 'places', $lang, $copy),
         ],
         'ga' => $ga ? ($ga + ['ok' => true]) : null,
+        'gscDevices' => $gscDevices,
         'pages' => $pages,
         'lines' => $lines,
         'moves' => $moves,
-        'hasSpeed' => $psi['home'] !== null,
+        'hasSpeed' => $psi['home'] !== null || count(array_filter($pages, static fn ($p) => is_array($p['psi'] ?? null))) > 0,
     ];
 
+    $html = reportRender($model);
+    $fileName = reportFileName($name);
+    gscWriteJson(reportHtmlCacheFile($dataDir, $host), [
+        'signature' => $signature,
+        'lang' => $lang,
+        'fileName' => $fileName,
+        'html' => $html,
+        'fetchedAt' => time(),
+    ]);
+
     return [
-        'html' => reportRender($model),
-        'fileName' => reportFileName($name),
+        'html' => $html,
+        'fileName' => $fileName,
         'lang' => $lang,
         'clientName' => $name,
+        'signature' => $signature,
         'ga' => $gaMeta,
         'psi' => ['ok' => $psi['home'] !== null, 'configured' => $psiKey !== ''],
         'narrative' => (string) ($narrative['source'] ?? 'template'),
@@ -1274,8 +1834,33 @@ function reportCompose(string $dataDir, array $sa, string $host, string $lang, b
     ];
 }
 
-function reportPdf(string $apiKey, string $html, string $fileName): string
+function reportCachedHtml(string $dataDir, string $host, string $lang): ?array
 {
+    $cached = gscReadJson(reportHtmlCacheFile($dataDir, $host), []);
+    if (
+        ($cached['lang'] ?? '') === $lang
+        && is_string($cached['html'] ?? null)
+        && $cached['html'] !== ''
+        && is_string($cached['fileName'] ?? null)
+        && $cached['fileName'] !== ''
+    ) {
+        return [
+            'html' => (string) $cached['html'],
+            'fileName' => (string) $cached['fileName'],
+            'signature' => (string) ($cached['signature'] ?? ''),
+        ];
+    }
+    return null;
+}
+
+function reportPdf(string $apiKey, string $html, string $fileName, string $lang = 'es'): string
+{
+    $copy = reportCopy($lang);
+    $footer = '<div style="font-size:9px;width:100%;padding:0 18px;color:#7a746a;font-family:Arial,sans-serif;">'
+        . '<span style="float:left">Eduardo Rojas · Mono Studio</span>'
+        . '<span style="float:right">' . htmlspecialchars($copy['pageOf'], ENT_QUOTES | ENT_HTML5, 'UTF-8')
+        . ' <span class="pageNumber"></span> ' . htmlspecialchars($copy['of'], ENT_QUOTES | ENT_HTML5, 'UTF-8')
+        . ' <span class="totalPages"></span></span></div>';
     $res = gscHttp('POST', 'https://v2.api2pdf.com/chrome/pdf/html', [
         'html' => $html,
         'inline' => false,
@@ -1285,7 +1870,7 @@ function reportPdf(string $apiKey, string $html, string $fileName): string
             'landscape' => false,
             'displayHeaderFooter' => true,
             'headerTemplate' => '<span></span>',
-            'footerTemplate' => '<div style="font-size:9px;width:100%;padding:0 18px;color:#7a746a;font-family:Arial,sans-serif;"><span style="float:left">Eduardo Rojas · Mono Studio</span><span style="float:right">Página <span class="pageNumber"></span> de <span class="totalPages"></span></span></div>',
+            'footerTemplate' => $footer,
             'marginTop' => '0.48in',
             'marginBottom' => '0.66in',
             'marginLeft' => '0.48in',
@@ -1348,8 +1933,22 @@ if ($isEntry) {
             if ($host === '') {
                 gscJson(['error' => 'Indica el dominio del cliente'], 400);
             }
-            $lang = 'es';
+            $prefs = reportHostConfig($dataDir, $host);
+            $lang = gscReportLang((string) ($input['lang'] ?? $prefs['reportLang'] ?? 'es'));
             $fresh = in_array((string) ($input['fresh'] ?? ''), ['1', 'true'], true);
+
+            if ($action === 'pdf' && !$fresh) {
+                $cachedHtml = reportCachedHtml($dataDir, $host, $lang);
+                if ($cachedHtml !== null) {
+                    $apiKey = reportSecret($dataDir, 'api2pdf.json');
+                    if ($apiKey === '') {
+                        gscJson(['error' => 'Falta la clave de api2pdf. Copiá ers/data/api2pdf.example.json a api2pdf.json.'], 400);
+                    }
+                    $url = reportPdf($apiKey, $cachedHtml['html'], $cachedHtml['fileName'], $lang);
+                    gscJson(['ok' => true, 'url' => $url, 'fileName' => $cachedHtml['fileName'], 'fromCache' => true]);
+                }
+            }
+
             $built = reportCompose($dataDir, $sa, $host, $lang, $fresh);
             if ($action === 'build') {
                 gscJson(['ok' => true] + $built);
@@ -1358,7 +1957,7 @@ if ($isEntry) {
             if ($apiKey === '') {
                 gscJson(['error' => 'Falta la clave de api2pdf. Copiá ers/data/api2pdf.example.json a api2pdf.json.'], 400);
             }
-            $url = reportPdf($apiKey, $built['html'], $built['fileName']);
+            $url = reportPdf($apiKey, $built['html'], $built['fileName'], $lang);
             gscJson(['ok' => true, 'url' => $url, 'fileName' => $built['fileName']]);
         }
 

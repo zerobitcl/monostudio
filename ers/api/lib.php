@@ -476,6 +476,33 @@ function ersBuildAgenda(array $store): array
     return array_slice($items, 0, 40);
 }
 
+/** IDs descartados en la UI (formato seo:{host}:{signalId}). */
+function ersDismissedSeoIds(string $host = ''): array
+{
+    $hidden = [];
+    foreach (ersReadStore()['dismissed'] ?? [] as $item) {
+        $id = (string) ($item['id'] ?? '');
+        if ($id === '' || !str_starts_with($id, 'seo:')) {
+            continue;
+        }
+        if ($host !== '' && !str_starts_with($id, 'seo:' . $host . ':')) {
+            continue;
+        }
+        $hidden[$id] = true;
+    }
+    return $hidden;
+}
+
+function ersSeoSignalKey(string $host, array $signal): string
+{
+    $signalId = (string) ($signal['id'] ?? '');
+    if ($signalId === '') {
+        $url = (string) ($signal['url'] ?? '');
+        $signalId = (string) ($signal['kind'] ?? 'signal') . '|' . ($url !== '' ? $url : 'site');
+    }
+    return 'seo:' . $host . ':' . $signalId;
+}
+
 function ersSeoSummary(string $host): array
 {
     $host = strtolower(trim($host));
@@ -523,17 +550,24 @@ function ersSeoSummary(string $host): array
             'ctr' => $row['current']['ctr'] ?? 0,
             'position' => $row['current']['position'] ?? 0,
             'deltaClicks' => $row['delta']['clicks'] ?? 0,
+            'deltaCtr' => $row['delta']['ctr'] ?? 0,
+            'deltaPosition' => $row['delta']['position'] ?? 0,
             'index' => $row['indexStatus']['label'] ?? '',
             'thermometer' => $row['thermometer']['label'] ?? '',
         ];
     }
 
+    $hidden = ersDismissedSeoIds($host);
     $signals = [];
-    foreach (array_slice($data['signals'] ?? [], 0, 10) as $s) {
-        if (!is_array($s)) {
+    foreach ($data['signals'] ?? [] as $s) {
+        if (!is_array($s) || count($signals) >= 10) {
+            continue;
+        }
+        if (isset($hidden[ersSeoSignalKey($host, $s)])) {
             continue;
         }
         $signals[] = [
+            'id' => $s['id'] ?? '',
             'kind' => $s['kind'] ?? '',
             'title' => $s['title'] ?? '',
             'detail' => $s['detail'] ?? '',
@@ -617,6 +651,34 @@ function ersKeywordSummary(string $host, int $perBucket = 8): array
     ];
 }
 
+function ersFmtSigned(float $n, int $decimals = 0): string
+{
+    if (abs($n) < ($decimals > 0 ? 0.05 : 1)) {
+        return 'sin cambio';
+    }
+    $sign = $n > 0 ? '+' : '−';
+    return $sign . number_format(abs($n), $decimals, '.', '');
+}
+
+/** Posición: positivo = mejoró (subió puestos). */
+function ersFmtPosDelta(float $n): string
+{
+    if (abs($n) < 0.05) {
+        return 'sin cambio';
+    }
+    return ($n > 0 ? '↑ ' : '↓ ') . number_format(abs($n), 1, '.', '') . ' puestos';
+}
+
+function ersReadJsonCache(string $file): array
+{
+    if (!is_file($file)) {
+        return [];
+    }
+    $raw = file_get_contents($file);
+    $data = is_string($raw) ? json_decode($raw, true) : null;
+    return is_array($data) ? $data : [];
+}
+
 function ersBuildSeoReportMarkdown(string $host, array $summary, ?array $client): string
 {
     $name = $client['name'] ?? $host;
@@ -637,17 +699,25 @@ function ersBuildSeoReportMarkdown(string $host, array $summary, ?array $client)
     $d = $summary['period28']['delta'] ?? [];
     $lines[] = '## Últimos 28 días';
     $lines[] = sprintf(
-        '- Clics: %s (Δ %s)',
+        '- Clics: %s (%s)',
         $t['clicks'] ?? 0,
-        $d['clicks'] ?? 0
+        ersFmtSigned((float) ($d['clicks'] ?? 0))
     );
     $lines[] = sprintf(
-        '- Impresiones: %s (Δ %s)',
+        '- Impresiones: %s (%s)',
         $t['impressions'] ?? 0,
-        $d['impressions'] ?? 0
+        ersFmtSigned((float) ($d['impressions'] ?? 0))
     );
-    $lines[] = sprintf('- CTR: %.1f%%', (($t['ctr'] ?? 0) * 100));
-    $lines[] = sprintf('- Posición: %.1f', $t['position'] ?? 0);
+    $lines[] = sprintf(
+        '- CTR: %.1f%% (%s pp)',
+        (($t['ctr'] ?? 0) * 100),
+        ersFmtSigned(((float) ($d['ctr'] ?? 0)) * 100, 1)
+    );
+    $lines[] = sprintf(
+        '- Posición: %.1f (%s)',
+        $t['position'] ?? 0,
+        ersFmtPosDelta((float) ($d['position'] ?? 0))
+    );
     $lines[] = '';
 
     $inv = $summary['inventory'] ?? [];
@@ -660,6 +730,51 @@ function ersBuildSeoReportMarkdown(string $host, array $summary, ?array $client)
             $inv['notIndexed'] ?? 0,
             $inv['blocked'] ?? 0,
             $inv['withData'] ?? 0
+        );
+        $lines[] = '';
+    }
+
+    $gscCache = ersReadJsonCache(ersDataDir() . '/gsc-cache-' . md5($host) . '.json');
+    $gscDevices = is_array($gscCache['devices'] ?? null) ? $gscCache['devices'] : [];
+    if ($gscDevices !== []) {
+        $bits = [];
+        foreach (array_slice($gscDevices, 0, 3) as $d) {
+            $bits[] = strtolower((string) ($d['name'] ?? '')) . ' ' . (int) ($d['clicks'] ?? 0) . ' clics';
+        }
+        if ($bits) {
+            $lines[] = '## Dispositivos (Search Console)';
+            $lines[] = '- ' . implode(' · ', $bits);
+            $lines[] = '';
+        }
+    }
+
+    $ga = ersReadJsonCache(ersDataDir() . '/ga4-cache-' . md5($host) . '.json');
+    if (!empty($ga['ok']) || ((int) ($ga['current']['sessions'] ?? 0) > 0)) {
+        $cur = $ga['current'] ?? [];
+        $org = $ga['organic'] ?? [];
+        $lines[] = '## Analytics (caché)';
+        $lines[] = sprintf(
+            '- Personas: %s · Visitas: %s · Desde búsqueda: %s · Engagement: %.0f%% · Conversiones: %s',
+            (int) ($cur['users'] ?? 0),
+            (int) ($cur['sessions'] ?? 0),
+            (int) ($org['sessions'] ?? 0),
+            ((float) ($cur['engagementRate'] ?? 0)) * 100,
+            (int) ($cur['conversions'] ?? 0)
+        );
+        $lines[] = '';
+    }
+
+    $psi = ersReadJsonCache(ersDataDir() . '/psi-cache-' . md5($host) . '.json');
+    $homePsi = is_array($psi['pages']['https://' . $host . '/'] ?? null)
+        ? $psi['pages']['https://' . $host . '/']
+        : null;
+    if (is_array($homePsi) && ($homePsi['score'] ?? null) !== null) {
+        $lines[] = '## Velocidad móvil (home)';
+        $lines[] = sprintf(
+            '- Score: %s%s%s',
+            (int) $homePsi['score'],
+            ($homePsi['lcp'] ?? '') !== '' ? ' · LCP ' . $homePsi['lcp'] : '',
+            ($homePsi['field'] ?? '') !== '' ? ' · campo ' . $homePsi['field'] : ''
         );
         $lines[] = '';
     }
@@ -688,12 +803,14 @@ function ersBuildSeoReportMarkdown(string $host, array $summary, ?array $client)
     if (!empty($summary['topPages'])) {
         $lines[] = '## Páginas top';
         foreach ($summary['topPages'] as $p) {
+            $posDelta = isset($p['deltaPosition']) ? ersFmtPosDelta((float) $p['deltaPosition']) : '';
             $lines[] = sprintf(
-                '- %s · %s clics (Δ %s) · pos %s · %s',
+                '- %s · %s clics (%s) · pos %s%s · %s',
                 $p['url'] ?? '',
                 $p['clicks'] ?? 0,
-                $p['deltaClicks'] ?? 0,
+                ersFmtSigned((float) ($p['deltaClicks'] ?? 0)),
                 isset($p['position']) ? number_format((float) $p['position'], 1) : '—',
+                $posDelta !== '' && $posDelta !== 'sin cambio' ? ' (' . $posDelta . ')' : '',
                 $p['index'] ?: ($p['thermometer'] ?: '—')
             );
         }
