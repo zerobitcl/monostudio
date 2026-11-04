@@ -149,7 +149,15 @@ function ersSanitizeClients($clients): array
         $client['notes'] = ersSanitizeNotes($client['notes'] ?? []);
         $client['watches'] = ersSanitizeWatches($client['watches'] ?? []);
         $client['siteUrl'] = ersClip(trim((string) ($client['siteUrl'] ?? '')), 300);
-        $client['githubRepo'] = ersClip(trim((string) ($client['githubRepo'] ?? '')), 300);
+        // Normalizar a owner/repo si viene URL de GitHub (evita basura de paste).
+        $gh = trim((string) ($client['githubRepo'] ?? ''));
+        $gh = preg_replace('/[\x{200B}-\x{200D}\x{FEFF}\x{00A0}]/u', '', $gh) ?? $gh;
+        $gh = trim($gh, " \t\n\r\0\x0B\"'`“”‘’");
+        if ($gh !== '' && preg_match('~(?:github\.com[/:]|git@github\.com:)([^/\s?#]+)/([^/\s?#]+)~i', $gh, $m)) {
+            $repoName = preg_replace('~\.git$~i', '', $m[2]) ?? $m[2];
+            $gh = $m[1] . '/' . rtrim((string) $repoName, '/');
+        }
+        $client['githubRepo'] = ersClip($gh, 300);
         $checkIn = ersSanitizeCheckIn($client['lastCheckIn'] ?? null);
         if ($checkIn) {
             $client['lastCheckIn'] = $checkIn;
@@ -368,6 +376,7 @@ function ersClientPublic(array $client): array
         'nextBillingDate' => $client['nextBillingDate'] ?? '',
         'phone' => $client['phone'] ?? '',
         'siteUrl' => $client['siteUrl'] ?? '',
+        'githubRepo' => (string) ($client['githubRepo'] ?? ''),
         'inDevelopment' => !empty($client['inDevelopment']),
         'lastCheckIn' => $client['lastCheckIn'] ?? null,
         'notes' => array_map(static function ($n) {

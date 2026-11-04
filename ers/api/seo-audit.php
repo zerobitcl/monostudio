@@ -63,28 +63,94 @@ function seoAuditLoadGithubConfig(): array
     return ['token' => $token];
 }
 
+/** Limpia basura invisible de pastes (ZWSP, BOM, NBSP, barras unicode, etc.). */
+function seoAuditCleanRepoRaw(string $raw): string
+{
+    $raw = trim($raw);
+    // BOM / zero-width / bidi marks
+    $raw = preg_replace('/[\x{200B}-\x{200D}\x{FEFF}\x{2060}\x{00AD}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u', '', $raw) ?? $raw;
+    // NBSP y espacios raros → espacio normal, luego trim
+    $raw = preg_replace('/[\x{00A0}\x{202F}\x{2000}-\x{200A}\x{205F}\x{3000}]+/u', ' ', $raw) ?? $raw;
+    // Barras que se ven igual a "/" pero rompen el regex ASCII
+    $raw = str_replace(
+        ["\u{2215}", "\u{2044}", "\u{FF0F}", "\u{29F8}", "\\"],
+        ['/', '/', '/', '/', ''],
+        $raw
+    );
+    $raw = trim($raw);
+    // Comillas tipográficas / wraps al pegar
+    $raw = trim($raw, " \t\n\r\0\x0B\"'`“”‘’");
+    return $raw;
+}
+
 /** Normaliza owner/repo desde URL o slug. */
 function seoAuditParseRepo(string $raw): array
 {
-    $raw = trim($raw);
+    $raw = seoAuditCleanRepoRaw($raw);
     if ($raw === '') {
         return ['owner' => '', 'repo' => '', 'slug' => ''];
     }
-    if (preg_match('#github\.com[/:]([^/\s]+)/([^/\s?#]+)#i', $raw, $m)) {
+    // Acepta URL completa, ssh y slug. Extrae el primer owner/repo razonable.
+    // Delimitador ~ (no #): el # dentro de [^?#] rompía el patrón y toda URL fallaba.
+    if (preg_match('~(?:github\.com[/:]|git@github\.com:)([^/\s?#]+)/([^/\s?#]+)~i', $raw, $m)
+        || preg_match('~^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/?~', $raw, $m)
+    ) {
         $owner = $m[1];
-        $repo = preg_replace('#\.git$#i', '', $m[2]) ?? $m[2];
-    } elseif (preg_match('#^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$#', $raw, $m)) {
-        $owner = $m[1];
-        $repo = preg_replace('#\.git$#i', '', $m[2]) ?? $m[2];
+        $repo = preg_replace('~\.git$~i', '', $m[2]) ?? $m[2];
+        $repo = rtrim($repo, '/');
     } else {
         return ['owner' => '', 'repo' => '', 'slug' => ''];
     }
     $owner = trim($owner);
     $repo = trim($repo);
-    if ($owner === '' || $repo === '') {
+    if ($owner === '' || $repo === '' || !preg_match('~^[A-Za-z0-9_.-]+$~', $owner) || !preg_match('~^[A-Za-z0-9_.-]+$~', $repo)) {
         return ['owner' => '', 'repo' => '', 'slug' => ''];
     }
     return ['owner' => $owner, 'repo' => $repo, 'slug' => $owner . '/' . $repo];
+}
+
+/** Repo de la ficha del cliente (store) para este host. */
+function seoAuditRepoFromStore(string $host): string
+{
+    if ($host === '') {
+        return '';
+    }
+    $store = gscReadJson(ersStorePath(), []);
+    foreach ($store['clients'] ?? [] as $client) {
+        if (!is_array($client)) {
+            continue;
+        }
+        $clientHost = gscSanitizeHost((string) ($client['siteUrl'] ?? ''));
+        if ($clientHost === $host) {
+            return seoAuditCleanRepoRaw((string) ($client['githubRepo'] ?? ''));
+        }
+    }
+    return '';
+}
+
+/**
+ * Elige un repo parseable: request primero, si falla cae a la ficha.
+ * Devuelve el slug owner/repo (no la URL cruda) para el resto del flujo.
+ */
+function seoAuditResolveRepo(string $host, string $repoRaw): string
+{
+    $candidates = [
+        seoAuditCleanRepoRaw($repoRaw),
+        seoAuditRepoFromStore($host),
+    ];
+    foreach ($candidates as $candidate) {
+        if ($candidate === '') {
+            continue;
+        }
+        $parsed = seoAuditParseRepo($candidate);
+        if ($parsed['slug'] !== '') {
+            return $parsed['slug'];
+        }
+    }
+    // Devolver crudo limpio para que el error muestre qué llegó.
+    return seoAuditCleanRepoRaw($repoRaw) !== ''
+        ? seoAuditCleanRepoRaw($repoRaw)
+        : seoAuditRepoFromStore($host);
 }
 
 function seoAuditInventoryUrls(array $siteCache, string $host): array
@@ -456,9 +522,13 @@ function seoAuditScorePath(string $path): int
 
 function seoAuditRunRepoScan(string $dataDir, string $host, string $repoRaw, bool $fresh = false): array
 {
+    $repoRaw = seoAuditResolveRepo($host, $repoRaw);
     $parsed = seoAuditParseRepo($repoRaw);
     if ($parsed['slug'] === '') {
-        throw new RuntimeException('Repo inválido. Usá owner/repo o la URL de GitHub.');
+        $hint = $repoRaw === ''
+            ? 'No hay repo en la ficha del cliente.'
+            : ('Valor recibido: "' . ersClip($repoRaw, 80) . '".');
+        throw new RuntimeException('Repo inválido. Usá owner/repo o https://github.com/owner/repo. ' . $hint);
     }
 
     $cacheFile = seoAuditRepoFile($dataDir, $host);
@@ -946,6 +1016,7 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
     $dom = seoAuditDomCache($dataDir, $host);
     $domProgress = seoAuditDomProgress($dom, $urls);
 
+    $repoRaw = seoAuditResolveRepo($host, $repoRaw);
     $parsed = seoAuditParseRepo($repoRaw);
     $repo = gscReadJson(seoAuditRepoFile($dataDir, $host), []);
     $repoOk = ($repo['host'] ?? '') === $host

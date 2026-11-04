@@ -3264,7 +3264,13 @@ class AppController {
 
   githubRepoForHost(host) {
     const client = this.clients.find((c) => GscModule.hostOf(c.siteUrl) === host);
-    return String(client?.githubRepo || "").trim();
+    const raw = String(client?.githubRepo || "").trim();
+    if (!raw) return "";
+    // Mandar siempre owner/repo: evita líos de encoding con URLs en query/POST.
+    const fromUrl = raw.match(/github\.com[/:]([^/\s?#]+)/([^/\s?#]+)/i);
+    if (fromUrl) return `${fromUrl[1]}/${fromUrl[2].replace(/\.git$/i, "")}`;
+    const slug = raw.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/?$/);
+    return slug ? `${slug[1]}/${slug[2]}` : raw;
   }
 
   async refreshAuditStatus() {
