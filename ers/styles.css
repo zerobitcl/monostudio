@@ -2456,6 +2456,77 @@ body {
   width: fit-content;
 }
 
+.cursor-audit {
+  display: grid;
+  gap: 14px;
+  margin: 18px 0 8px;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(46, 123, 255, 0.28);
+  background: linear-gradient(165deg, rgba(46, 123, 255, 0.08), rgba(7, 8, 15, 0.35) 55%, transparent);
+}
+
+.cursor-audit__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.cursor-audit__progress {
+  display: grid;
+  gap: 8px;
+}
+
+.cursor-audit__bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.cursor-audit__bar > span {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--neon-blue, #2e7bff), var(--neon-green, #39ffb6));
+  transition: width 0.35s ease;
+}
+
+.cursor-audit__status {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--txt-secondary);
+}
+
+.cursor-audit__result {
+  display: grid;
+  gap: 10px;
+}
+
+.cursor-audit__prompt {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border);
+  background: rgba(7, 8, 15, 0.55);
+  color: var(--txt-primary);
+  font: 0.78rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.cursor-audit__copy-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.cursor-audit.is-busy {
+  animation: kw-pulse 1.6s ease-in-out infinite;
+}
+
 /* ==========================================================
    Hoy — agenda operativa
    ========================================================== */

@@ -29,7 +29,7 @@ const GSC_PARTIAL_TTL = 300;
 /** Reusar indexStatus de la pasada anterior si es más reciente que esto. */
 const GSC_INDEX_REUSE_TTL = 86400;
 const GSC_MAX_MANUAL_PAGES = 40;
-const GSC_MAX_SITEMAP_URLS = 120;
+const GSC_MAX_SITEMAP_URLS = 400;
 const GSC_MAX_QUERIES_PER_PAGE = 5;
 const GSC_MAX_URL_INSPECTIONS = 18;
 const GSC_MAX_INDEX_URLS = 8;

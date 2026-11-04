@@ -183,6 +183,7 @@ class BillingModule {
     if (!Array.isArray(client.notes)) client.notes = [];
     if (!Array.isArray(client.watches)) client.watches = [];
     if (typeof client.siteUrl !== "string") client.siteUrl = "";
+    if (typeof client.githubRepo !== "string") client.githubRepo = "";
     return client;
   }
 
@@ -418,6 +419,59 @@ class GscModule {
     } catch {
       return String(url || "");
     }
+  }
+}
+
+/** Auditoría SEO integral (DOM por lotes + GitHub + prompt Cursor). */
+class SeoAuditModule {
+  static API = "./api/seo-audit.php";
+
+  static #gateway(status) {
+    if ([502, 503, 504].includes(status)) {
+      return "El servidor cortó por tiempo. Volvé a pulsar Continuar lote: lo ya leído queda guardado.";
+    }
+    return `La auditoría respondió ${status}`;
+  }
+
+  static async #read(res) {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || SeoAuditModule.#gateway(res.status));
+    return data;
+  }
+
+  static status(host, repo = "") {
+    const qs = `action=status&host=${encodeURIComponent(host)}&repo=${encodeURIComponent(repo || "")}&_=${Date.now()}`;
+    return fetch(`${SeoAuditModule.API}?${qs}`, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    }).then((res) => SeoAuditModule.#read(res));
+  }
+
+  static domBatch(host, fresh = false) {
+    return fetch(`${SeoAuditModule.API}?action=dom-batch`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ host, fresh }),
+    }).then((res) => SeoAuditModule.#read(res));
+  }
+
+  static repoScan(host, repo, fresh = false) {
+    return fetch(`${SeoAuditModule.API}?action=repo-scan`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ host, repo, fresh }),
+    }).then((res) => SeoAuditModule.#read(res));
+  }
+
+  static cursorAudit(host, fresh = false) {
+    return fetch(`${SeoAuditModule.API}?action=cursor-audit`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ host, fresh }),
+    }).then((res) => SeoAuditModule.#read(res));
   }
 }
 
@@ -992,6 +1046,10 @@ class AppController {
     this.kwAnalyzing = false;
     this.gaCatalog = null;
     this.growthItems = [];
+    /** Estado auditoría Cursor por host (status API). */
+    this.auditData = new Map();
+    this.auditBusy = false;
+    this.auditAutoLoop = false;
     this.reportBusy = false;
     this.chatOpen = false;
     this.chatBusy = false;
@@ -1035,11 +1093,14 @@ class AppController {
       "btnGscRefresh", "btnSeoIndex", "btnSeoBrief", "btnClientReport", "btnSeoPrint", "btnReportPdf", "btnReportFresh", "btnSeoBriefClose",
       "gscConfigForm", "gscSitemapUrl", "gscPages", "gscGa4Property", "ga4Properties", "ga4Hint",
       "growthPanel", "growthMeta", "growthList",
+      "cursorAuditPanel", "cursorAuditMeta", "cursorAuditProgress", "cursorAuditBar",
+      "cursorAuditStatus", "cursorAuditResult", "cursorAuditSummary", "cursorAuditChanges",
+      "cursorAuditPrompt", "btnAuditBatch", "btnAuditGenerate", "btnAuditCopy",
       "briefTitle", "reportFrame",
       "clientModal", "requestModal", "taskModal", "notebookModal",
       "clientForm", "clientModalTitle", "clientSubmitBtn", "btnDeleteClient", "clientIdField",
       "clientName", "clientValue", "clientValueLabel", "clientValueHint",
-      "clientBillingDate", "clientPhone", "clientSiteUrl", "clientDev",
+      "clientBillingDate", "clientPhone", "clientSiteUrl", "clientGithubRepo", "clientDev",
       "planAnual", "planMensual", "contactActions", "linkWhatsApp", "linkCall",
       "requestForm", "requestClientSelect",
       "taskForm", "taskTitle", "taskClientSelect", "taskDueDate", "taskArea",
@@ -1283,6 +1344,9 @@ class AppController {
       const btn = e.target.closest("[data-kw-task]");
       if (btn) this.taskFromKeywordAction(Number(btn.dataset.kwTask));
     });
+    this.dom.btnAuditBatch.addEventListener("click", () => this.runAuditBatch({ autoContinue: true }));
+    this.dom.btnAuditGenerate.addEventListener("click", () => this.generateCursorAudit());
+    this.dom.btnAuditCopy.addEventListener("click", () => this.copyCursorPrompt());
 
     this.dom.btnViewOrbit.addEventListener("click", () => this.setView("orbit"));
     this.dom.btnViewList.addEventListener("click", () => this.setView("list"));
@@ -2768,6 +2832,7 @@ class AppController {
     this.updateChatContextLabel();
     this.renderSeo();
     if (!SeoStore.get(host)) this.loadSeoHost(host);
+    else if (!this.auditData.has(host)) this.refreshAuditStatus();
   }
 
   async loadSeoHost(host, fresh = false) {
@@ -2781,6 +2846,7 @@ class AppController {
     }
     try {
       SeoStore.set(host, await GscModule.site(host, fresh));
+      if (fresh) this.auditData.delete(host);
     } catch (err) {
       SeoStore.set(host, { error: err.message, signals: [] });
     } finally {
@@ -3196,6 +3262,253 @@ class AppController {
     }
   }
 
+  githubRepoForHost(host) {
+    const client = this.clients.find((c) => GscModule.hostOf(c.siteUrl) === host);
+    return String(client?.githubRepo || "").trim();
+  }
+
+  async refreshAuditStatus() {
+    const host = this.seoHost;
+    if (!host || this.auditBusy) {
+      this.renderCursorAudit();
+      return;
+    }
+    try {
+      const status = await SeoAuditModule.status(host, this.githubRepoForHost(host));
+      this.auditData.set(host, status);
+    } catch (err) {
+      this.auditData.set(host, { error: err.message, host });
+    }
+    if (this.module === "seo" && host === this.seoHost) this.renderCursorAudit();
+  }
+
+  renderCursorAudit() {
+    const host = this.seoHost;
+    const seo = host ? SeoStore.get(host) : null;
+    const panel = this.dom.cursorAuditPanel;
+    if (!host || !seo?.totals) {
+      panel.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+    panel.classList.toggle("is-busy", this.auditBusy);
+
+    const status = this.auditData.get(host);
+    const dom = status?.dom || {};
+    const repo = status?.repo || {};
+    const audit = status?.audit || {};
+    const done = Number(dom.done || 0);
+    const total = Number(dom.total || seo.pages?.length || 0);
+    const pct = total > 0 ? Math.round((done / Math.max(total, 1)) * 100) : Number(dom.pct || 0);
+
+    this.dom.cursorAuditProgress.hidden = false;
+    this.dom.cursorAuditBar.style.width = `${Math.min(100, pct)}%`;
+
+    const parts = [];
+    if (status?.error) {
+      parts.push(status.error);
+    } else if (!status) {
+      parts.push("Cargando progreso…");
+    } else {
+      parts.push(`HTML ${done}/${total || "—"}`);
+      if (repo.configured) {
+        parts.push(repo.ready ? `Repo ${repo.slug || "listo"}` : "Repo pendiente");
+      } else {
+        parts.push("Sin repo (opcional)");
+      }
+      if (audit.ready) {
+        parts.push(audit.stale ? "Análisis desactualizado" : "Análisis listo");
+      }
+    }
+    this.dom.cursorAuditStatus.textContent = parts.join(" · ");
+    this.dom.cursorAuditMeta.textContent = repo.configured
+      ? `Cruza GSC + HTML + ${repo.slug || "GitHub"}`
+      : "Cruza GSC + HTML del sitio. Agregá el repo en la ficha del cliente para mapear archivos.";
+
+    const canGenerate = Boolean(status?.canGenerate) && !this.auditBusy;
+    this.dom.btnAuditBatch.disabled = this.auditBusy || (status && !status.siteReady);
+    this.dom.btnAuditBatch.textContent = this.auditBusy
+      ? "Trabajando…"
+      : dom.complete
+        ? "Releer HTML"
+        : done > 0
+          ? "Continuar lote"
+          : "Empezar lotes";
+    this.dom.btnAuditGenerate.disabled = !canGenerate && !(audit.ready && audit.stale);
+    this.dom.btnAuditGenerate.textContent = this.auditBusy
+      ? "Generando…"
+      : audit.ready && !audit.stale
+        ? "Rehacer análisis"
+        : audit.ready && audit.stale
+          ? "Actualizar análisis"
+          : "Generar análisis";
+
+    const insights = audit.insights;
+    const result = this.dom.cursorAuditResult;
+    if (!insights) {
+      result.hidden = true;
+      this.dom.cursorAuditSummary.textContent = "";
+      this.dom.cursorAuditChanges.innerHTML = "";
+      this.dom.cursorAuditPrompt.value = "";
+      return;
+    }
+
+    result.hidden = false;
+    this.dom.cursorAuditSummary.textContent = insights.resumenSimple || "";
+    this.dom.cursorAuditPrompt.value = insights.cursorPrompt || "";
+    this.dom.btnAuditCopy.disabled = !insights.cursorPrompt;
+
+    const list = this.dom.cursorAuditChanges;
+    list.innerHTML = "";
+    (insights.cambios || []).forEach((c) => {
+      const li = document.createElement("li");
+      li.className = `kw-action is-${c.impacto || "medio"}`;
+      const top = document.createElement("div");
+      top.className = "kw-action__top";
+      const strong = document.createElement("strong");
+      strong.textContent = c.titulo || "";
+      const tags = document.createElement("div");
+      tags.className = "kw-action__tags";
+      const impact = document.createElement("span");
+      impact.className = `seo-tag${c.impacto === "alto" ? " is-up" : ""}`;
+      impact.textContent = `Impacto ${c.impacto || "medio"}`;
+      const effort = document.createElement("span");
+      effort.className = "seo-tag";
+      effort.textContent = `Esfuerzo ${c.esfuerzo || "medio"}`;
+      tags.append(impact, effort);
+      top.append(strong, tags);
+      li.appendChild(top);
+      if (c.porque) {
+        const p = document.createElement("p");
+        p.className = "kw-action__detail";
+        p.textContent = c.porque;
+        li.appendChild(p);
+      }
+      const foot = document.createElement("div");
+      foot.className = "kw-action__foot";
+      if (c.url) {
+        const a = document.createElement("a");
+        a.className = "kw__page";
+        a.href = c.url;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.textContent = GscModule.pagePath(c.url);
+        foot.appendChild(a);
+      }
+      if (c.archivo) {
+        const file = document.createElement("span");
+        file.className = "seo-tag";
+        file.textContent = c.archivo;
+        foot.appendChild(file);
+      }
+      if (foot.childNodes.length) li.appendChild(foot);
+      list.appendChild(li);
+    });
+  }
+
+  async runAuditBatch({ autoContinue = false } = {}) {
+    const host = this.seoHost;
+    if (!host || this.auditBusy) return;
+    this.auditBusy = true;
+    this.auditAutoLoop = autoContinue;
+    const restart = Boolean(this.auditData.get(host)?.dom?.complete);
+    this.renderCursorAudit();
+    try {
+      const repo = this.githubRepoForHost(host);
+      if (repo) {
+        try {
+          await SeoAuditModule.repoScan(host, repo, false);
+        } catch (err) {
+          // El HTML sigue siendo útil aunque falle el repo.
+          this.showToast(err.message || "No se pudo leer el repo", 4200);
+        }
+      }
+
+      let guard = 0;
+      let first = true;
+      do {
+        const batch = await SeoAuditModule.domBatch(host, first && restart);
+        first = false;
+        const status = await SeoAuditModule.status(host, repo);
+        this.auditData.set(host, status);
+        this.renderCursorAudit();
+        if (!batch.partial && batch.complete) break;
+        if (!this.auditAutoLoop) break;
+        guard += 1;
+      } while (guard < 40 && this.seoHost === host && this.auditAutoLoop);
+
+      const finalStatus = this.auditData.get(host);
+      if (finalStatus?.dom?.complete) {
+        this.showToast("HTML del sitio completo");
+      } else if (finalStatus?.dom?.done > 0) {
+        this.showToast(`Lote listo · ${finalStatus.dom.done}/${finalStatus.dom.total} páginas`);
+      }
+    } catch (err) {
+      this.showToast(err.message || "No se pudo continuar el lote", 4200);
+      try {
+        this.auditData.set(host, await SeoAuditModule.status(host, this.githubRepoForHost(host)));
+      } catch {
+        /* ignore */
+      }
+    } finally {
+      this.auditBusy = false;
+      this.auditAutoLoop = false;
+      if (this.module === "seo" && host === this.seoHost) this.renderCursorAudit();
+    }
+  }
+
+  async generateCursorAudit() {
+    const host = this.seoHost;
+    if (!host || this.auditBusy) return;
+    this.auditBusy = true;
+    this.renderCursorAudit();
+    try {
+      const repo = this.githubRepoForHost(host);
+      if (repo) {
+        const st = this.auditData.get(host);
+        if (!st?.repo?.ready) {
+          await SeoAuditModule.repoScan(host, repo, false);
+        }
+      }
+      const prev = this.auditData.get(host);
+      const fresh = Boolean(prev?.audit?.ready);
+      const data = await SeoAuditModule.cursorAudit(host, fresh);
+      const status = await SeoAuditModule.status(host, repo);
+      if (data.insights) {
+        status.audit = {
+          ready: true,
+          stale: false,
+          generatedAt: data.generatedAt,
+          model: data.model,
+          insights: data.insights,
+          coverage: data.coverage,
+        };
+      }
+      this.auditData.set(host, status);
+      this.showToast("Análisis integral listo");
+    } catch (err) {
+      this.showToast(err.message || "No se pudo generar el análisis", 4500);
+    } finally {
+      this.auditBusy = false;
+      if (this.module === "seo" && host === this.seoHost) this.renderCursorAudit();
+    }
+  }
+
+  async copyCursorPrompt() {
+    const text = this.dom.cursorAuditPrompt.value;
+    if (!text) {
+      this.showToast("Todavía no hay prompt");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      this.dom.cursorAuditPrompt.select();
+      document.execCommand("copy");
+    }
+    this.showToast("Prompt copiado · pegalo en Cursor");
+  }
+
   async taskFromKeywordAction(index) {
     const host = this.seoHost;
     const action = this.kwData.get(host)?.ai?.insights?.acciones?.[index];
@@ -3256,6 +3569,7 @@ class AppController {
       this.dom.btnSeoBrief.hidden = true;
       this.dom.btnClientReport.hidden = true;
       this.dom.growthPanel.hidden = true;
+      this.dom.cursorAuditPanel.hidden = true;
       this.dom.seoPeriodToggle.hidden = true;
       this.dom.btnSeoIndex.hidden = true;
       this.dom.kwPanel.hidden = true;
@@ -3283,9 +3597,13 @@ class AppController {
     this.renderSeoPages(data);
     this.renderKeywords();
     this.renderGrowth();
+    this.renderCursorAudit();
     this.renderGaHint();
     this.renderSeoDiagnostics(data);
     this.syncSeoForm(data);
+    if (hasMetrics && this.seoHost && !this.auditData.has(this.seoHost) && !this.auditBusy) {
+      this.refreshAuditStatus();
+    }
   }
 
   #seoNotice(text, tone) {
@@ -4268,6 +4586,7 @@ class AppController {
     this.dom.clientBillingDate.value = client.nextBillingDate;
     this.dom.clientPhone.value = client.phone ?? "";
     this.dom.clientSiteUrl.value = client.siteUrl ?? "";
+    this.dom.clientGithubRepo.value = client.githubRepo ?? "";
     this.dom.clientDev.checked = Boolean(client.inDevelopment);
     (client.planType === "anual" ? this.dom.planAnual : this.dom.planMensual).checked = true;
 
@@ -4298,6 +4617,7 @@ class AppController {
       nextBillingDate: data.get("nextBillingDate"),
       phone: String(data.get("phone") || "").trim(),
       siteUrl: String(data.get("siteUrl") || "").trim(),
+      githubRepo: String(data.get("githubRepo") || "").trim(),
       inDevelopment: data.get("inDevelopment") === "on",
     };
 
@@ -4306,7 +4626,11 @@ class AppController {
     if (this.editingClientId) {
       const idx = this.clients.findIndex((c) => c.id === this.editingClientId);
       if (idx === -1) return;
+      const prevHost = GscModule.hostOf(this.clients[idx].siteUrl);
       this.clients[idx] = { ...this.clients[idx], ...payload };
+      const nextHost = GscModule.hostOf(payload.siteUrl);
+      if (prevHost) this.auditData.delete(prevHost);
+      if (nextHost && nextHost !== prevHost) this.auditData.delete(nextHost);
     } else {
       this.clients.push({ id: crypto.randomUUID(), notes: [], watches: [], ...payload });
     }

@@ -149,6 +149,7 @@ function ersSanitizeClients($clients): array
         $client['notes'] = ersSanitizeNotes($client['notes'] ?? []);
         $client['watches'] = ersSanitizeWatches($client['watches'] ?? []);
         $client['siteUrl'] = ersClip(trim((string) ($client['siteUrl'] ?? '')), 300);
+        $client['githubRepo'] = ersClip(trim((string) ($client['githubRepo'] ?? '')), 300);
         $checkIn = ersSanitizeCheckIn($client['lastCheckIn'] ?? null);
         if ($checkIn) {
             $client['lastCheckIn'] = $checkIn;

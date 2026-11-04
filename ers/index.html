@@ -218,6 +218,33 @@
         <ul class="growth__list" id="growthList"></ul>
       </section>
 
+      <section class="cursor-audit" id="cursorAuditPanel" hidden aria-labelledby="cursorAuditTitle">
+        <header class="kw__head">
+          <div>
+            <h3 id="cursorAuditTitle">Auditoría Cursor</h3>
+            <p class="kw__meta" id="cursorAuditMeta"></p>
+          </div>
+          <div class="cursor-audit__actions">
+            <button class="btn btn--ghost" id="btnAuditBatch" type="button">Continuar lote</button>
+            <button class="btn btn--neon" id="btnAuditGenerate" type="button">Generar análisis</button>
+          </div>
+        </header>
+        <div class="cursor-audit__progress" id="cursorAuditProgress" hidden>
+          <div class="cursor-audit__bar" aria-hidden="true"><span id="cursorAuditBar"></span></div>
+          <p class="cursor-audit__status" id="cursorAuditStatus"></p>
+        </div>
+        <div class="cursor-audit__result" id="cursorAuditResult" hidden>
+          <h4 class="kw-ai__label">Qué se va a hacer</h4>
+          <p class="kw-ai__summary" id="cursorAuditSummary"></p>
+          <ol class="kw-ai__actions" id="cursorAuditChanges"></ol>
+          <h4 class="kw-ai__label">Prompt para Cursor</h4>
+          <textarea class="cursor-audit__prompt" id="cursorAuditPrompt" readonly rows="12" spellcheck="false"></textarea>
+          <div class="cursor-audit__copy-row">
+            <button class="btn btn--neon" id="btnAuditCopy" type="button">Copiar prompt para Cursor</button>
+          </div>
+        </div>
+      </section>
+
       <section class="kw" id="kwPanel" aria-labelledby="kwTitle" hidden>
         <header class="kw__head">
           <div>
@@ -332,6 +359,12 @@
       <label class="field">
         <span>Sitio web <em class="field__optional">(habilita el módulo SEO)</em></span>
         <input type="url" name="siteUrl" id="clientSiteUrl" maxlength="300" placeholder="https://cliente.cl" />
+      </label>
+
+      <label class="field">
+        <span>Repo GitHub <em class="field__optional">(auditoría Cursor)</em></span>
+        <input type="text" name="githubRepo" id="clientGithubRepo" maxlength="300" placeholder="owner/repo o https://github.com/owner/repo" />
+        <small class="field__hint">Privado o público. El PAT vive en ers/data/github.json del servidor.</small>
       </label>
 
       <div class="contact-actions" id="contactActions" hidden>

@@ -11,6 +11,9 @@ ers/data/gemini.json
 ers/data/daily.json
 ers/data/daily-state.json
 
+# GitHub PAT (auditoría SEO → Cursor)
+ers/data/github.json
+
 # Informe de cliente: PDF, PageSpeed y token de Analytics
 ers/data/api2pdf.json
 ers/data/psi.json
@@ -29,3 +32,4 @@ ers/data/*-*.json
 !ers/data/store.example.json
 !ers/data/gsc.example.json
 !ers/data/gemini.example.json
+!ers/data/github.example.json
