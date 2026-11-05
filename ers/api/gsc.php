@@ -1427,130 +1427,15 @@ function gscPageTitle(array $row): string
 }
 
 /**
- * Convierte métricas en acciones. La severidad (3 alta → 1 baja) es lo único que
- * el front necesita para priorizar; así el orden vive en un solo lugar.
- *
- * Páginas fuera del índice son siempre gravedad 3, y si hay ≥1 se antepone
- * una señal de sitio para que el operador lo vea como incidente, no como detalle.
+ * Señales del operador. Los umbrales viven en findings.php; aquí solo se
+ * proyectan a los kinds que la agenda ya usa.
  */
 function gscBuildSignals(array $rows): array
 {
-    $signals = [];
-    $notIndexedUrls = [];
-
-    foreach ($rows as $row) {
-        $url = (string) ($row['url'] ?? '');
-        $title = gscPageTitle($row);
-        $now = is_array($row['current'] ?? null) ? $row['current'] : [];
-        $delta = is_array($row['delta'] ?? null) ? $row['delta'] : [];
-        $tone = (string) ($row['thermometer']['tone'] ?? '');
-        $indexTone = (string) ($row['indexStatus']['tone'] ?? '');
-        $indexReason = (string) ($row['indexStatus']['reason']
-            ?? $row['indexStatus']['coverage']
-            ?? 'Google no la tiene en el índice.');
-
-        if (!empty($row['error'])) {
-            $signals[] = [
-                'kind' => 'blocked',
-                'severity' => 3,
-                'title' => 'Sin acceso a ' . $title,
-                'detail' => 'Search Console rechazó esta URL. Revisa permisos del bot en la propiedad.',
-                'metric' => 'Bloqueada',
-                'url' => $url,
-            ];
-            continue;
-        }
-
-        if ($indexTone === 'issue') {
-            $notIndexedUrls[] = $title;
-            $signals[] = [
-                'kind' => 'noindex',
-                'severity' => 3,
-                'title' => $title . ' no está indexada',
-                'detail' => $indexReason,
-                'metric' => 'CRÍTICO · Pedir indexación',
-                'url' => $url,
-            ];
-        }
-
-        $prevClicks = (int) ($row['previous']['clicks'] ?? 0);
-        $lost = (int) ($delta['clicks'] ?? 0);
-        $dropPct = $prevClicks > 0 ? ($lost / $prevClicks) : 0;
-        $decay = ($prevClicks >= 10 && $dropPct <= -0.3) || $tone === 'down';
-        if ($decay) {
-            $posMove = round((float) ($delta['position'] ?? 0), 1);
-            $pctLabel = $prevClicks > 0 ? round($dropPct * 100) . '%' : (($lost > 0 ? '+' : '') . $lost . ' clics');
-            $signals[] = [
-                'kind' => 'falling',
-                'severity' => ($dropPct <= -0.4 || abs($lost) >= 15) ? 3 : 2,
-                'title' => $title . ' está perdiendo clics',
-                'detail' => $dropPct <= -0.3
-                    ? 'Caída del ' . abs((int) round($dropPct * 100)) . '% de clics vs los 28 días previos.'
-                    : ($posMove < 0
-                        ? 'Bajó ' . abs($posMove) . ' puestos frente a los 28 días previos.'
-                        : 'Menos clics que en los 28 días previos con posición estable.'),
-                'metric' => $pctLabel,
-                'url' => $url,
-            ];
-        }
-
-        if ($tone === 'push') {
-            $signals[] = [
-                'kind' => 'push',
-                'severity' => 2,
-                'title' => $title . ' pide un empujón',
-                'detail' => 'Aparece mucho pero casi nadie entra: reescribe title y meta description.',
-                'metric' => 'CTR ' . round(((float) ($now['ctr'] ?? 0)) * 100, 1)
-                    . '% · Pos. ' . round((float) ($now['position'] ?? 0), 1),
-                'url' => $url,
-            ];
-        }
-
-        if ((int) ($now['impressions'] ?? 0) === 0 && $indexTone !== 'issue') {
-            $signals[] = [
-                'kind' => 'zombie',
-                'severity' => 1,
-                'title' => $title . ' no aparece en búsquedas',
-                'detail' => 'Cero impresiones en 28 días: falta contenido, enlaces internos o intención de búsqueda.',
-                'metric' => '0 impresiones',
-                'url' => $url,
-            ];
-        }
+    if (!function_exists('findingsSignalsFromRows')) {
+        require_once __DIR__ . '/findings.php';
     }
-
-    $notCount = count($notIndexedUrls);
-    if ($notCount > 0) {
-        $sample = array_slice($notIndexedUrls, 0, 4);
-        $extra = $notCount > 4 ? ' y ' . ($notCount - 4) . ' más' : '';
-        array_unshift($signals, [
-            'kind' => 'site-noindex',
-            'severity' => 3,
-            'title' => $notCount === 1
-                ? '1 página fuera del índice'
-                : $notCount . ' páginas fuera del índice',
-            'detail' => 'Incidente grave: sin indexación no hay tráfico orgánico. Revisar: '
-                . implode(', ', $sample) . $extra . '.',
-            'metric' => 'CRÍTICO',
-            'url' => '',
-        ]);
-    }
-
-    usort($signals, static fn ($a, $b) => ($b['severity'] <=> $a['severity']));
-    // Mantener la señal de sitio arriba aunque el sort reordene por título.
-    usort($signals, static function ($a, $b) {
-        $aSite = ($a['kind'] ?? '') === 'site-noindex' ? 1 : 0;
-        $bSite = ($b['kind'] ?? '') === 'site-noindex' ? 1 : 0;
-        if ($aSite !== $bSite) {
-            return $bSite <=> $aSite;
-        }
-        return ($b['severity'] <=> $a['severity']);
-    });
-    $signals = array_slice($signals, 0, 24);
-
-    foreach ($signals as $i => $signal) {
-        $signals[$i]['id'] = $signal['kind'] . '|' . ($signal['url'] !== '' ? $signal['url'] : 'site');
-    }
-    return $signals;
+    return findingsSignalsFromRows($rows);
 }
 
 /** Inventario: cuántas páginas existen, cuántas rinden y cuántas están indexadas. */

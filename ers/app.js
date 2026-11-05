@@ -1094,7 +1094,7 @@ class AppController {
       "gscConfigForm", "gscSitemapUrl", "gscPages", "gscGa4Property", "ga4Properties", "ga4Hint",
       "growthPanel", "growthMeta", "growthList",
       "cursorAuditPanel", "cursorAuditMeta", "cursorAuditProgress", "cursorAuditBar",
-      "cursorAuditStatus", "cursorAuditResult", "cursorAuditSummary", "cursorAuditChanges",
+      "cursorAuditStatus", "cursorAuditCoverage", "cursorAuditCounts", "cursorAuditResult", "cursorAuditSummary", "cursorAuditChanges",
       "cursorAuditPrompt", "btnAuditBatch", "btnAuditGenerate", "btnAuditCopy",
       "briefTitle", "reportFrame",
       "clientModal", "requestModal", "taskModal", "notebookModal",
@@ -3267,7 +3267,7 @@ class AppController {
     const raw = String(client?.githubRepo || "").trim();
     if (!raw) return "";
     // Mandar siempre owner/repo: evita líos de encoding con URLs en query/POST.
-    const fromUrl = raw.match(/github\.com[/:]([^/\s?#]+)/([^/\s?#]+)/i);
+    const fromUrl = raw.match(/github\.com[/:]([^/\s?#]+)\/([^/\s?#]+)/i);
     if (fromUrl) return `${fromUrl[1]}/${fromUrl[2].replace(/\.git$/i, "")}`;
     const slug = raw.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/?$/);
     return slug ? `${slug[1]}/${slug[2]}` : raw;
@@ -3327,9 +3327,60 @@ class AppController {
       }
     }
     this.dom.cursorAuditStatus.textContent = parts.join(" · ");
+    const coverage = status?.coverage || {};
+    const sourceLabels = [
+      ["gsc", "Search Console"],
+      ["ga4", "Analytics"],
+      ["psi", "PageSpeed"],
+      ["dom", "HTML"],
+      ["repo", "Repo"],
+    ];
+    const coverageEl = this.dom.cursorAuditCoverage;
+    if (coverageEl) {
+    coverageEl.hidden = !status || status.error;
+    coverageEl.replaceChildren();
+    if (!coverageEl.hidden) {
+      sourceLabels.forEach(([key, label]) => {
+        const chip = document.createElement("span");
+        const on = Boolean(coverage[key]);
+        chip.className = on ? "is-on" : "is-off";
+        chip.textContent = `${on ? "✓" : "○"} ${label}`;
+        coverageEl.appendChild(chip);
+      });
+      if (coverage.ga4 && !coverage.keyEvents) {
+        const chip = document.createElement("span");
+        chip.className = "is-off";
+        chip.textContent = "Sin contactos medidos";
+        coverageEl.appendChild(chip);
+      }
+    }
+    }
+    const counts = status?.findingCounts || {};
+    const countEl = this.dom.cursorAuditCounts;
+    if (!countEl) {
+      this.dom.cursorAuditMeta.textContent = repo.configured
+        ? `Un solo análisis: Search Console, Analytics, velocidad, HTML y ${repo.slug || "el repo"}.`
+        : "Un solo análisis: Search Console, Analytics, velocidad y HTML. El repo se suma desde la ficha del cliente.";
+    } else {
+    const countLabels = [
+      ["index", "Indexación"],
+      ["demand", "Demanda"],
+      ["onpage", "Página"],
+      ["conversion", "Contactos"],
+      ["speed", "Velocidad"],
+      ["code", "Código"],
+    ];
+    const countBits = countLabels
+      .filter(([key]) => Number(counts[key] || 0) > 0)
+      .map(([key, label]) => `${label} ${counts[key]}`);
+    countEl.hidden = countBits.length === 0;
+    countEl.textContent = countBits.length
+      ? `${counts.total || countBits.length} hallazgos · ${countBits.join(" · ")}`
+      : "";
     this.dom.cursorAuditMeta.textContent = repo.configured
-      ? `Cruza GSC + HTML + ${repo.slug || "GitHub"}`
-      : "Cruza GSC + HTML del sitio. Agregá el repo en la ficha del cliente para mapear archivos.";
+      ? `Un solo análisis: Search Console, Analytics, velocidad, HTML y ${repo.slug || "el repo"}.`
+      : "Un solo análisis: Search Console, Analytics, velocidad y HTML. El repo se suma desde la ficha del cliente.";
+    }
 
     const canGenerate = Boolean(status?.canGenerate) && !this.auditBusy;
     this.dom.btnAuditBatch.disabled = this.auditBusy || (status && !status.siteReady);
@@ -4235,7 +4286,9 @@ class AppController {
       const report = await ReportModule.build(this.seoHost, this.reportLang(), fresh);
       if (!report.html) throw new Error(report.error || "El informe vino vacío");
       this.dom.reportFrame.srcdoc = report.html;
-      if (report.ga && !report.ga.ok && report.ga.message) this.showToast(report.ga.message, 5600);
+      if (report.contactsMeasured === false) {
+        this.showToast("Sin contactos medidos: el informe muestra las personas que llegaron desde Google", 5600);
+      } else if (report.ga && !report.ga.ok && report.ga.message) this.showToast(report.ga.message, 5600);
       else if (report.narrative === "template" && report.narrativeError) this.showToast(report.narrativeError, 4200);
       else this.showToast(report.narrative === "gemini" ? "Informe listo" : "Informe listo, con el texto base");
     } catch (err) {

@@ -2494,11 +2494,36 @@ body {
   transition: width 0.35s ease;
 }
 
-.cursor-audit__status {
+.cursor-audit__status,
+.cursor-audit__counts {
   margin: 0;
   font-size: 0.78rem;
   line-height: 1.45;
   color: var(--txt-secondary);
+}
+
+.cursor-audit__sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cursor-audit__sources span {
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--txt-secondary);
+}
+
+.cursor-audit__sources span.is-on {
+  color: var(--neon-green, #39ffb6);
+  border-color: rgba(57, 255, 182, 0.45);
+}
+
+.cursor-audit__sources span.is-off {
+  opacity: 0.55;
 }
 
 .cursor-audit__result {

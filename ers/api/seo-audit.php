@@ -15,6 +15,8 @@ declare(strict_types=1);
 define('ERS_LIBRARY', true);
 require_once __DIR__ . '/gsc.php';
 require_once __DIR__ . '/lib.php';
+require_once __DIR__ . '/dossier.php';
+require_once __DIR__ . '/findings.php';
 
 const SEO_AUDIT_DOM_BATCH = 18;
 const SEO_AUDIT_DOM_BUDGET = 42;
@@ -22,7 +24,7 @@ const SEO_AUDIT_DOM_TTL = 604800; // 7 días: re-scrape si el HTML cambió de fi
 const SEO_AUDIT_REPO_TTL = 21600; // 6 h
 const SEO_AUDIT_REPO_BYTES = 110000;
 const SEO_AUDIT_AI_TIMEOUT = 75;
-const SEO_AUDIT_VERSION = '2026.11.03-cursor';
+const SEO_AUDIT_VERSION = '2026.11.05-integral';
 
 header('X-Content-Type-Options: nosniff');
 
@@ -166,142 +168,11 @@ function seoAuditInventoryUrls(array $siteCache, string $host): array
     return array_keys($urls);
 }
 
-/**
- * Scrape SEO del HTML: title, headings, meta, canonical, robots, OG.
- */
+/** El scrape vive en el dossier: una sola lectura para informe y auditoría. */
 function seoAuditFetchDom(string $url): array
 {
-    $empty = [
-        'ok' => false,
-        'status' => 0,
-        'title' => '',
-        'h1' => '',
-        'h2' => '',
-        'meta' => '',
-        'canonical' => '',
-        'robots' => '',
-        'ogTitle' => '',
-        'ogDescription' => '',
-        'error' => '',
-        'fetchedAt' => time(),
-    ];
-
-    if (!preg_match('#^https?://#i', $url) || gscIsAgencyHost($url)) {
-        $empty['error'] = 'URL no válida';
-        return $empty;
-    }
-
-    $html = '';
-    $code = 0;
-    if (function_exists('curl_init')) {
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_TIMEOUT => 6,
-            CURLOPT_CONNECTTIMEOUT => 3,
-            CURLOPT_USERAGENT => 'MonoStudio-SeoAudit/1.0',
-            CURLOPT_MAXREDIRS => 3,
-            CURLOPT_SSL_VERIFYPEER => true,
-        ]);
-        $raw = curl_exec($ch);
-        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $err = curl_error($ch);
-        curl_close($ch);
-        if (!is_string($raw)) {
-            $empty['status'] = $code;
-            $empty['error'] = $err !== '' ? $err : 'sin respuesta';
-            return $empty;
-        }
-        $html = $raw;
-    } else {
-        $ctx = stream_context_create([
-            'http' => [
-                'timeout' => 6,
-                'header' => "User-Agent: MonoStudio-SeoAudit/1.0\r\n",
-                'ignore_errors' => true,
-            ],
-        ]);
-        $raw = @file_get_contents($url, false, $ctx);
-        if (!is_string($raw) || $raw === '') {
-            $empty['error'] = 'sin respuesta';
-            return $empty;
-        }
-        $html = $raw;
-        $code = 200;
-    }
-
-    if ($code < 200 || $code >= 400) {
-        $empty['status'] = $code;
-        $empty['error'] = 'HTTP ' . $code;
-        $empty['fetchedAt'] = time();
-        return $empty;
-    }
-
-    if (!class_exists('DOMDocument')) {
-        $empty['status'] = $code;
-        $empty['error'] = 'DOMDocument no disponible';
-        return $empty;
-    }
-
-    // Truncar HTML gigante: basta el <head> + primeros headings.
-    if (strlen($html) > 350000) {
-        $html = substr($html, 0, 350000);
-    }
-
-    $prev = libxml_use_internal_errors(true);
-    $dom = new DOMDocument();
-    @$dom->loadHTML('<?xml encoding="utf-8" ?>' . $html);
-    libxml_clear_errors();
-    libxml_use_internal_errors($prev);
-    $xpath = new DOMXPath($dom);
-
-    $textOf = static function (string $expr, int $limit = 0) use ($xpath): string {
-        $nodes = $xpath->query($expr);
-        $parts = [];
-        if ($nodes) {
-            foreach ($nodes as $i => $node) {
-                if ($limit > 0 && $i >= $limit) {
-                    break;
-                }
-                $parts[] = trim(preg_replace('/\s+/u', ' ', $node->textContent ?? '') ?? '');
-            }
-        }
-        return gscAscii(implode(' · ', array_filter($parts)));
-    };
-
-    $attrOf = static function (string $expr) use ($xpath): string {
-        foreach ($xpath->query($expr) ?: [] as $attr) {
-            return gscAscii(trim((string) $attr->nodeValue));
-        }
-        return '';
-    };
-
-    $title = $textOf('//title', 1);
-    $h1 = $textOf('//h1', 3);
-    $h2 = $textOf('//h2', 8);
-    $meta = $attrOf('//meta[translate(@name,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="description"]/@content');
-    $canonical = $attrOf('//link[translate(@rel,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="canonical"]/@href');
-    $robots = $attrOf('//meta[translate(@name,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="robots"]/@content');
-    $ogTitle = $attrOf('//meta[translate(@property,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="og:title"]/@content');
-    $ogDescription = $attrOf('//meta[translate(@property,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="og:description"]/@content');
-
-    return [
-        'ok' => true,
-        'status' => $code,
-        'title' => ersClip($title, 200),
-        'h1' => ersClip($h1, 240),
-        'h2' => ersClip($h2, 500),
-        'meta' => ersClip($meta, 320),
-        'canonical' => ersClip($canonical, 500),
-        'robots' => ersClip($robots, 120),
-        'ogTitle' => ersClip($ogTitle, 200),
-        'ogDescription' => ersClip($ogDescription, 320),
-        'error' => '',
-        'fetchedAt' => time(),
-    ];
+    return dossierFetchDom($url);
 }
-
 function seoAuditDomCache(string $dataDir, string $host): array
 {
     $cache = gscReadJson(seoAuditDomFile($dataDir, $host), []);
@@ -328,7 +199,9 @@ function seoAuditDomProgress(array $domCache, array $urls): array
     $now = time();
     foreach ($urls as $url) {
         $row = $pages[$url] ?? null;
+        // h1Count marca el scrape ampliado: sin ese campo hay que releer.
         $fresh = is_array($row)
+            && array_key_exists('h1Count', $row)
             && (($row['fetchedAt'] ?? 0) > 0)
             && ($now - (int) $row['fetchedAt']) < SEO_AUDIT_DOM_TTL;
         if ($fresh) {
@@ -873,6 +746,45 @@ function seoAuditSanitizeCursor(array $raw, string $host, array $knownUrls, arra
     ];
 }
 
+function seoAuditFallbackRaw(array $findings): array
+{
+    $cambios = [];
+    foreach (array_slice($findings, 0, 12) as $f) {
+        $sev = (int) ($f['severity'] ?? 1);
+        $cambios[] = [
+            'titulo' => (string) ($f['lines']['es']['title'] ?? $f['kind']),
+            'porque' => (string) ($f['techText'] ?? ''),
+            'impacto' => $sev >= 3 ? 'alto' : ($sev === 2 ? 'medio' : 'bajo'),
+            'esfuerzo' => in_array($f['kind'], ['gap', 'titleMissing', 'metaMissing', 'schema', 'og', 'measure', 'alts'], true) ? 'bajo' : 'medio',
+            'url' => (string) ($f['url'] ?? ''),
+            'archivo' => (string) ($f['file'] ?? ''),
+        ];
+    }
+    return [
+        'resumenSimple' => 'La redacción automática no llegó. Los cambios salen directo de los datos del sitio, en orden de prioridad.',
+        'cambios' => $cambios,
+        'cursorPrompt' => '',
+    ];
+}
+
+function seoAuditFingerprint(array $dossier): string
+{
+    return md5((string) ($dossier['fingerprint'] ?? '') . '|' . SEO_AUDIT_VERSION);
+}
+
+function seoAuditMeasurementNote(): string
+{
+    return <<<TXT
+
+## Medición
+Analytics no tiene eventos clave de contacto. Antes de cerrar el trabajo, instrumentá y marcá como key events:
+- click_whatsapp (clic en wa.me o api.whatsapp.com)
+- phone_click (clic en tel:)
+- generate_lead o form_submit (envío del formulario)
+No inventes el ID de medición. Si no está en el repo, dejá el snippet comentado y preguntá.
+TXT;
+}
+
 function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): array
 {
     $cfg = ersLoadGeminiConfig();
@@ -885,26 +797,19 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
         throw new RuntimeException('Primero actualizá el SEO del sitio.');
     }
     $urls = seoAuditInventoryUrls($site, $host);
-    $dom = seoAuditDomCache($dataDir, $host);
-    $domProgress = seoAuditDomProgress($dom, $urls);
-    if ($domProgress['done'] === 0) {
+    $sa = gscLoadServiceAccount($dataDir, $dataDir . '/gsc-service-account.json');
+    $dossier = dossierBuild($dataDir, $sa, $host, $fresh, true);
+    if (empty($dossier['ok'])) {
+        throw new RuntimeException('Primero actualizá el SEO del sitio.');
+    }
+    $domProgress = $dossier['domProgress'] ?? ['done' => 0, 'total' => 0, 'complete' => false];
+    if ((int) ($domProgress['done'] ?? 0) === 0) {
         throw new RuntimeException('Todavía no hay HTML scrapeado. Pulsá “Continuar lote” al menos una vez.');
     }
 
-    $kw = gscReadJson(gscKeywordCacheFile($dataDir, $host), []);
-    $repo = gscReadJson(seoAuditRepoFile($dataDir, $host), []);
-    if (($repo['host'] ?? '') !== $host) {
-        $repo = [];
-    }
-
-    $fingerprint = md5(json_encode([
-        'site' => (int) ($site['fetchedAt'] ?? 0),
-        'kw' => (int) ($kw['fetchedAt'] ?? 0),
-        'dom' => (int) ($dom['updatedAt'] ?? 0),
-        'domDone' => $domProgress['done'],
-        'repo' => (int) ($repo['fetchedAt'] ?? 0),
-        'v' => SEO_AUDIT_VERSION,
-    ], JSON_UNESCAPED_UNICODE) ?: '');
+    $repo = $dossier['repo'] ?? [];
+    $findings = findingsDetect($dossier);
+    $fingerprint = seoAuditFingerprint($dossier);
 
     $cacheFile = seoAuditCursorFile($dataDir, $host);
     $cached = gscReadJson($cacheFile, []);
@@ -919,44 +824,40 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
         return $cached;
     }
 
+    $search = $dossier['search'] ?? [];
+    $paths = array_slice($repo['paths'] ?? [], 0, 80);
     $parts = [
         'Sitio: ' . $host,
-        'Cobertura HTML: ' . $domProgress['done'] . '/' . $domProgress['total']
-            . ($domProgress['complete'] ? ' (completo)' : ' (parcial; seguí con más lotes si querés más precisión)'),
+        'Clics 28d: ' . (int) ($search['clicks'] ?? 0) . ' (delta ' . (int) ($search['clicksDelta'] ?? 0) . ')',
+        'Impresiones: ' . (int) ($search['impressions'] ?? 0),
+        'Contactos (key events): ' . (int) ($dossier['ga']['contacts'] ?? 0)
+            . (!empty($dossier['sources']['keyEvents']) ? '' : ' — sin eventos clave'),
+        'HTML: ' . (int) ($domProgress['done'] ?? 0) . '/' . (int) ($domProgress['total'] ?? 0),
+        'Repo: ' . (($repo['slug'] ?? '') !== '' ? $repo['slug'] : 'no conectado'),
+        'PSI home: ' . (string) ($dossier['psi']['home']['score'] ?? '—'),
         '',
-        seoAuditSiteDigest($site),
+        '## HALLAZGOS (lista cerrada: no agregues problemas que no estén aquí)',
+        findingsCursorBlock($findings),
         '',
+        '## PATHS DEL REPO',
+        $paths === [] ? 'Sin repo. El prompt debe decir que se aplique en el proyecto local abierto en Cursor.' : implode("\n", array_map(static fn ($p) => '- ' . $p, $paths)),
     ];
 
-    if (is_array($kw['buckets'] ?? null) && function_exists('gscKeywordsAiPrompt')) {
-        $parts[] = '## KEYWORDS GSC';
-        $parts[] = gscKeywordsAiPrompt($kw);
-        $parts[] = '';
-    }
-
-    $parts[] = seoAuditDomLines($dom, $urls);
-    $parts[] = '';
-    $parts[] = seoAuditRepoLines($repo);
-
     $system = <<<TXT
-Sos un consultor SEO senior + tech lead. Vas a cruzar Search Console, HTML en vivo y (si hay) el repo GitHub del sitio.
-Respondés en español neutro-chileno, directo, sin relleno.
+Sos un tech lead. Los problemas YA están detectados en HALLAZGOS. No descubras otros. No inventes métricas, URLs ni archivos.
+Respondés en español neutro-chileno, directo.
 
 Salida JSON:
-- resumenSimple: 3 a 8 frases en lenguaje claro (sin jerga: nada de CTR, LCP, indexación técnica). Explicá qué se va a mejorar y por qué importa al negocio.
-- cambios: lista priorizada (máx 12) de trabajos concretos. url = URL del sitio si aplica. archivo = path real del repo si aparece en los paths; si no hay repo o no sabés el archivo, dejá "".
-- cursorPrompt: prompt MAESTRO largo para pegar en Cursor Agent. Debe incluir:
+- resumenSimple: 3 a 6 frases, sin jerga (nada de CTR, LCP, indexación). Qué se va a mejorar y por qué le importa al negocio.
+- cambios: máx 12, agrupados por archivo cuando haya path. Uno o más hallazgos por cambio. url y archivo solo si aparecen en los datos; si no, "".
+- cursorPrompt: prompt para Cursor Agent, en este orden:
   1) Contexto del sitio y objetivo
-  2) Hallazgos cruzados (datos ↔ HTML ↔ código)
-  3) Lista ordenada de cambios con archivos concretos cuando existan
-  4) Criterios de aceptación
-  5) Reglas: no inventar archivos ni rutas; no tocar secretos; preguntar si falta un path; priorizar quick wins
+  2) Cambios ordenados por archivo, citando el id/kind del hallazgo que cubren
+  3) Criterios de aceptación comprobables
+  4) Reglas: no inventar archivos ni rutas; no tocar secretos; preguntar si falta un path; primero impacto alto y esfuerzo bajo
+  5) Si no hay key events, una sección Medición (click_whatsapp, phone_click, generate_lead)
 
-REGLAS
-- Usá SOLO URLs y paths que aparecen en los datos.
-- No inventes métricas.
-- Si el repo no está, el cursorPrompt debe decir que se aplique en el proyecto local abierto en Cursor.
-- Priorizá impacto alto / esfuerzo bajo.
+Cubrí todos los hallazgos de severidad 3 y 2. Los de severidad 1 pueden ir al final o agrupados.
 TXT;
 
     $payload = [
@@ -981,10 +882,15 @@ TXT;
     $text = trim((string) preg_replace('#^```(?:json)?|```$#m', '', $text));
     $raw = json_decode($text, true);
     if (!is_array($raw)) {
-        throw new RuntimeException('Gemini no devolvió un análisis válido. Reintenta.');
+        $raw = seoAuditFallbackRaw($findings);
     }
 
     $insights = seoAuditSanitizeCursor($raw, $host, $urls, $repo['paths'] ?? []);
+    $closed = "\n\n## Hallazgos detectados (lista cerrada, no omitir)\n" . findingsCursorBlock($findings);
+    if (empty($dossier['sources']['keyEvents'])) {
+        $closed = seoAuditMeasurementNote() . $closed;
+    }
+    $insights['cursorPrompt'] = ersClip(trim((string) ($insights['cursorPrompt'] ?? '') . $closed), 24000);
     $out = [
         'ok' => true,
         'cached' => false,
@@ -994,12 +900,14 @@ TXT;
         'generatedAt' => time(),
         'fingerprint' => $fingerprint,
         'coverage' => [
-            'domDone' => $domProgress['done'],
-            'domTotal' => $domProgress['total'],
-            'domComplete' => $domProgress['complete'],
+            'domDone' => (int) ($domProgress['done'] ?? 0),
+            'domTotal' => (int) ($domProgress['total'] ?? 0),
+            'domComplete' => (bool) ($domProgress['complete'] ?? false),
             'repo' => ($repo['slug'] ?? '') !== '',
             'repoSlug' => (string) ($repo['slug'] ?? ''),
-            'keywords' => is_array($kw['buckets'] ?? null),
+            'keywords' => !empty($dossier['sources']['keywords']),
+            'sources' => $dossier['sources'] ?? [],
+            'findingCounts' => findingsCounts($findings),
         ],
         'insights' => $insights,
         'version' => SEO_AUDIT_VERSION,
@@ -1028,14 +936,9 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
     $hasCursor = ($cursor['host'] ?? '') === $host && is_array($cursor['insights'] ?? null);
 
     $kw = gscReadJson(gscKeywordCacheFile($dataDir, $host), []);
-    $fingerprint = md5(json_encode([
-        'site' => (int) ($site['fetchedAt'] ?? 0),
-        'kw' => (int) ($kw['fetchedAt'] ?? 0),
-        'dom' => (int) ($dom['updatedAt'] ?? 0),
-        'domDone' => $domProgress['done'],
-        'repo' => (int) ($repo['fetchedAt'] ?? 0),
-        'v' => SEO_AUDIT_VERSION,
-    ], JSON_UNESCAPED_UNICODE) ?: '');
+    $dossier = dossierRead($dataDir, $host);
+    $findings = !empty($dossier['ok']) ? findingsDetect($dossier) : [];
+    $fingerprint = seoAuditFingerprint($dossier);
 
     if ($hasCursor) {
         $cursor['stale'] = ($cursor['fingerprint'] ?? '') !== $fingerprint;
@@ -1067,6 +970,10 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
             'error' => '',
         ],
         'keywordsReady' => isset($kw['fetchedAt']),
+        'coverage' => is_array($dossier['sources'] ?? null) ? $dossier['sources'] : [
+            'gsc' => false, 'ga4' => false, 'keyEvents' => false, 'psi' => false, 'dom' => false, 'repo' => false, 'keywords' => false,
+        ],
+        'findingCounts' => findingsCounts($findings),
         'audit' => $hasCursor ? [
             'ready' => true,
             'stale' => (bool) ($cursor['stale'] ?? false),

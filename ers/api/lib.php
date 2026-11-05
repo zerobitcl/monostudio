@@ -691,193 +691,91 @@ function ersReadJsonCache(string $file): array
 
 function ersBuildSeoReportMarkdown(string $host, array $summary, ?array $client): string
 {
-    $name = $client['name'] ?? $host;
+    require_once __DIR__ . '/dossier.php';
+    require_once __DIR__ . '/findings.php';
+
+    $safeHost = gscSanitizeHost($host);
+    $name = $client['name'] ?? ($safeHost !== '' ? $safeHost : 'Cliente');
+    $dossier = $safeHost !== '' ? dossierRead(ersDataDir(), $safeHost) : ['ok' => false];
+    if (empty($dossier['ok'])) {
+        $why = $summary['message'] ?? 'Sin datos SEO. Abrí el módulo SEO y pulsá Actualizar.';
+        return "# Informe SEO — {$name}\n\n{$why}\n";
+    }
+
+    $findings = findingsDetect($dossier);
+    $search = $dossier['search'] ?? [];
+    $ga = is_array($dossier['ga'] ?? null) ? $dossier['ga'] : null;
+    $sources = $dossier['sources'] ?? [];
+    $flags = [];
+    foreach (['gsc' => 'Search Console', 'ga4' => 'Analytics', 'keyEvents' => 'Contactos', 'psi' => 'PageSpeed', 'dom' => 'HTML', 'repo' => 'Repo', 'keywords' => 'Keywords'] as $key => $label) {
+        $flags[] = (!empty($sources[$key]) ? 'sí' : 'no') . ' ' . $label;
+    }
+
     $lines = [
         '# Informe SEO — ' . $name,
         '',
-        'Host: `' . $host . '`',
+        'Host: `' . $safeHost . '`',
         'Generado: ' . gmdate('Y-m-d H:i') . ' UTC',
+        'Fuentes: ' . implode(' · ', $flags),
         '',
+        '## 28 días',
+        '- Clics: ' . (int) ($search['clicks'] ?? 0) . ' (' . ersFmtSigned((float) ($search['clicksDelta'] ?? 0)) . ')',
+        '- Impresiones: ' . (int) ($search['impressions'] ?? 0) . ' (' . ersFmtSigned((float) ($search['impressionsDelta'] ?? 0)) . ')',
+        '- Posición: ' . number_format((float) ($search['position'] ?? 0), 1) . ' (' . ersFmtPosDelta((float) ($search['positionDelta'] ?? 0)) . ')',
     ];
-
-    if (empty($summary['available'])) {
-        $lines[] = $summary['message'] ?? 'Sin datos SEO.';
-        return implode("\n", $lines);
+    if ($ga) {
+        $lines[] = '- Personas: ' . (int) ($ga['current']['users'] ?? 0)
+            . ' · Visitas: ' . (int) ($ga['current']['sessions'] ?? 0)
+            . ' · Desde Google: ' . (int) ($ga['organic']['sessions'] ?? 0);
+        $lines[] = '- Contactos (key events): ' . (int) ($ga['contacts'] ?? 0)
+            . (!empty($ga['hasKeyEvents']) ? '' : ' — sin medición de WhatsApp, llamadas o formularios');
     }
-
-    $t = $summary['period28']['totals'] ?? [];
-    $d = $summary['period28']['delta'] ?? [];
-    $lines[] = '## Últimos 28 días';
-    $lines[] = sprintf(
-        '- Clics: %s (%s)',
-        $t['clicks'] ?? 0,
-        ersFmtSigned((float) ($d['clicks'] ?? 0))
-    );
-    $lines[] = sprintf(
-        '- Impresiones: %s (%s)',
-        $t['impressions'] ?? 0,
-        ersFmtSigned((float) ($d['impressions'] ?? 0))
-    );
-    $lines[] = sprintf(
-        '- CTR: %.1f%% (%s pp)',
-        (($t['ctr'] ?? 0) * 100),
-        ersFmtSigned(((float) ($d['ctr'] ?? 0)) * 100, 1)
-    );
-    $lines[] = sprintf(
-        '- Posición: %.1f (%s)',
-        $t['position'] ?? 0,
-        ersFmtPosDelta((float) ($d['position'] ?? 0))
-    );
+    $home = $dossier['psi']['home'] ?? null;
+    if (is_array($home) && ($home['score'] ?? null) !== null) {
+        $lines[] = '- Velocidad celular: ' . (int) $home['score']
+            . (($home['field'] ?? '') !== '' ? ' · ' . $home['field'] : '');
+    }
     $lines[] = '';
-
-    $inv = $summary['inventory'] ?? [];
-    if ($inv) {
-        $lines[] = '## Inventario';
-        $lines[] = sprintf(
-            '- Indexadas: %s/%s · Fuera: %s · Bloqueadas: %s · Con tráfico: %s',
-            $inv['indexed'] ?? 0,
-            $inv['checked'] ?? 0,
-            $inv['notIndexed'] ?? 0,
-            $inv['blocked'] ?? 0,
-            $inv['withData'] ?? 0
-        );
-        $lines[] = '';
+    $lines[] = '## Hallazgos';
+    if ($findings === []) {
+        $lines[] = '- Sin hallazgos con los datos que hay.';
     }
-
-    $gscCache = ersReadJsonCache(ersDataDir() . '/gsc-cache-' . md5($host) . '.json');
-    $gscDevices = is_array($gscCache['devices'] ?? null) ? $gscCache['devices'] : [];
-    if ($gscDevices !== []) {
-        $bits = [];
-        foreach (array_slice($gscDevices, 0, 3) as $d) {
-            $bits[] = strtolower((string) ($d['name'] ?? '')) . ' ' . (int) ($d['clicks'] ?? 0) . ' clics';
-        }
-        if ($bits) {
-            $lines[] = '## Dispositivos (Search Console)';
-            $lines[] = '- ' . implode(' · ', $bits);
-            $lines[] = '';
-        }
+    $labels = [
+        'index' => 'Indexación',
+        'demand' => 'Demanda',
+        'onpage' => 'Página',
+        'conversion' => 'Contactos',
+        'speed' => 'Velocidad',
+        'code' => 'Código',
+    ];
+    $grouped = [];
+    foreach ($findings as $f) {
+        $grouped[(string) ($f['category'] ?? 'demand')][] = $f;
     }
-
-    $ga = ersReadJsonCache(ersDataDir() . '/ga4-cache-' . md5($host) . '.json');
-    if (!empty($ga['ok']) || ((int) ($ga['current']['sessions'] ?? 0) > 0)) {
-        $cur = $ga['current'] ?? [];
-        $org = $ga['organic'] ?? [];
-        $lines[] = '## Analytics (caché)';
-        $lines[] = sprintf(
-            '- Personas: %s · Visitas: %s · Desde búsqueda: %s · Engagement: %.0f%% · Conversiones: %s',
-            (int) ($cur['users'] ?? 0),
-            (int) ($cur['sessions'] ?? 0),
-            (int) ($org['sessions'] ?? 0),
-            ((float) ($cur['engagementRate'] ?? 0)) * 100,
-            (int) ($cur['conversions'] ?? 0)
-        );
-        $lines[] = '';
-    }
-
-    $psi = ersReadJsonCache(ersDataDir() . '/psi-cache-' . md5($host) . '.json');
-    $homePsi = is_array($psi['pages']['https://' . $host . '/'] ?? null)
-        ? $psi['pages']['https://' . $host . '/']
-        : null;
-    if (is_array($homePsi) && ($homePsi['score'] ?? null) !== null) {
-        $lines[] = '## Velocidad móvil (home)';
-        $lines[] = sprintf(
-            '- Score: %s%s%s',
-            (int) $homePsi['score'],
-            ($homePsi['lcp'] ?? '') !== '' ? ' · LCP ' . $homePsi['lcp'] : '',
-            ($homePsi['field'] ?? '') !== '' ? ' · campo ' . $homePsi['field'] : ''
-        );
-        $lines[] = '';
-    }
-
-    if (!empty($summary['analysis'])) {
-        $lines[] = '## Lectura';
-        foreach ($summary['analysis'] as $a) {
-            $lines[] = '- **' . ($a['title'] ?? '') . '**: ' . ($a['body'] ?? '');
+    foreach ($labels as $key => $label) {
+        if (($grouped[$key] ?? []) === []) {
+            continue;
         }
         $lines[] = '';
-    }
-
-    if (!empty($summary['signals'])) {
-        $lines[] = '## Señales';
-        foreach ($summary['signals'] as $s) {
-            $lines[] = sprintf(
-                '- [S%s] %s — %s',
-                $s['severity'] ?? 0,
-                $s['title'] ?? '',
-                $s['detail'] ?? ''
-            );
+        $lines[] = '### ' . $label;
+        foreach ($grouped[$key] as $f) {
+            $file = ($f['file'] ?? '') !== '' ? ' · `' . $f['file'] . '`' : '';
+            $lines[] = '- **' . ($f['lines']['es']['title'] ?? $f['kind']) . '** — ' . ($f['techText'] ?? '')
+                . ' (`' . $f['path'] . '`)' . $file;
         }
+    }
+    $tasks = array_slice($dossier['tasks'] ?? [], 0, 6);
+    if ($tasks !== []) {
         $lines[] = '';
-    }
-
-    if (!empty($summary['topPages'])) {
-        $lines[] = '## Páginas top';
-        foreach ($summary['topPages'] as $p) {
-            $posDelta = isset($p['deltaPosition']) ? ersFmtPosDelta((float) $p['deltaPosition']) : '';
-            $lines[] = sprintf(
-                '- %s · %s clics (%s) · pos %s%s · %s',
-                $p['url'] ?? '',
-                $p['clicks'] ?? 0,
-                ersFmtSigned((float) ($p['deltaClicks'] ?? 0)),
-                isset($p['position']) ? number_format((float) $p['position'], 1) : '—',
-                $posDelta !== '' && $posDelta !== 'sin cambio' ? ' (' . $posDelta . ')' : '',
-                $p['index'] ?: ($p['thermometer'] ?: '—')
-            );
+        $lines[] = '## Hecho en el período';
+        foreach ($tasks as $task) {
+            $lines[] = '- ' . $task['title'];
         }
     }
-
-    $kw = ersKeywordSummary($host, 6);
-    if (!empty($kw['available'])) {
-        $ks = $kw['summary'] ?? [];
-        $lines[] = '';
-        $lines[] = '## Keywords';
-        $lines[] = sprintf(
-            '- %s queries · %d%% de clics son de marca · ~%s clics/mes recuperables',
-            $ks['queries'] ?? 0,
-            round(((float) ($ks['brandShare'] ?? 0)) * 100),
-            $ks['potentialClicks'] ?? 0
-        );
-        if ((int) ($ks['hiddenClicks'] ?? 0) > 0) {
-            $lines[] = sprintf(
-                '- %s de %s clics vienen de búsquedas que Google anonimiza (cola larga)',
-                $ks['hiddenClicks'],
-                $ks['siteClicks'] ?? 0
-            );
-        }
-        $groups = ['top' => 'Más buscadas', 'striking' => 'Oportunidades (pos. 4-20)', 'rising' => 'En alza'];
-        foreach ($groups as $key => $label) {
-            $rows = $kw['buckets'][$key] ?? [];
-            if ($rows === []) {
-                continue;
-            }
-            $lines[] = '';
-            $lines[] = '### ' . $label;
-            foreach ($rows as $r) {
-                $lines[] = sprintf(
-                    '- %s · %s clics · %s imp · pos %s%s',
-                    $r['query'],
-                    $r['clicks'],
-                    $r['impressions'],
-                    number_format((float) $r['position'], 1),
-                    $key === 'striking' && $r['potentialClicks'] > 0 ? ' · +' . $r['potentialClicks'] . ' clics posibles' : ''
-                );
-            }
-        }
-        if (!empty($kw['ai']['acciones'])) {
-            $lines[] = '';
-            $lines[] = '### Plan sugerido (IA)';
-            foreach ($kw['ai']['acciones'] as $a) {
-                $lines[] = '- **' . ($a['titulo'] ?? '') . '**: ' . ($a['detalle'] ?? '');
-            }
-        }
-    }
-
     $lines[] = '';
-    $lines[] = '_Mono Studio OS · borrador desde caché GSC_';
+    $lines[] = '_Mono Studio OS · mismo dossier que el informe cliente y el prompt de Cursor_';
     return implode("\n", $lines);
 }
-
-/** Acciones que requieren confirmación explícita del usuario. */
 function ersSensitiveTools(): array
 {
     return ['updateBillingDate', 'updatePlanValue', 'completeRequest'];
