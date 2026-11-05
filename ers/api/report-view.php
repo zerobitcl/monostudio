@@ -11,7 +11,7 @@ if (!defined('ERS_LIBRARY')) {
     exit;
 }
 
-const REPORT_HTML_VERSION = '2026.11.05-client';
+const REPORT_HTML_VERSION = '2026.11.05-client2';
 
 function reportExtra(string $lang): array
 {
@@ -24,7 +24,10 @@ function reportExtra(string $lang): array
             'channels' => 'De dónde llegan',
             'queries' => 'Cómo los buscan',
             'done' => 'Lo que hicimos',
-            'doneEmpty' => 'En este período no quedaron trabajos cerrados en la agenda.',
+            'now' => 'En marcha',
+            'nowLine' => 'Son páginas públicas. Quedan corregidas en este ciclo, no para el mes que viene.',
+            'nowLineOne' => 'Es una página pública. Queda corregida en este ciclo, no para el mes que viene.',
+            'pageOne' => 'página',
             'found' => 'Lo que encontramos',
             'foundEmpty' => 'No hay un problema que cambie el mes. Seguimos midiendo.',
             'next' => 'Próximos 30 días',
@@ -70,7 +73,10 @@ function reportExtra(string $lang): array
             'channels' => 'Where they come from',
             'queries' => 'How they search',
             'done' => 'What we did',
-            'doneEmpty' => 'No closed tasks were logged for this period.',
+            'now' => 'In progress',
+            'nowLine' => 'These are public pages. They are fixed in this cycle, not left for next month.',
+            'nowLineOne' => 'This is a public page. It is fixed in this cycle, not left for next month.',
+            'pageOne' => 'page',
             'found' => 'What we found',
             'foundEmpty' => 'Nothing here would change the month. We keep measuring.',
             'next' => 'Next 30 days',
@@ -116,7 +122,10 @@ function reportExtra(string $lang): array
             'channels' => 'De onde chegam',
             'queries' => 'Como buscam',
             'done' => 'O que fizemos',
-            'doneEmpty' => 'Não há trabalhos encerrados neste período.',
+            'now' => 'Em andamento',
+            'nowLine' => 'São páginas públicas. Ficam corrigidas neste ciclo, não para o mês que vem.',
+            'nowLineOne' => 'É uma página pública. Fica corrigida neste ciclo, não para o mês que vem.',
+            'pageOne' => 'página',
             'found' => 'O que encontramos',
             'foundEmpty' => 'Não há um problema que mude o mês. Seguimos medindo.',
             'next' => 'Próximos 30 dias',
@@ -201,7 +210,8 @@ function reportFigure(array $figure, string $lang, array $copy): string
         return reportFill($copy['impactLoss'], [reportNum((float) $n, $lang)]);
     }
     if ($unit === 'pages') {
-        return reportNum((float) $n, $lang) . ' ' . $copy['pagesShort'];
+        $word = (int) $n === 1 ? ($copy['pageOne'] ?? 'página') : $copy['pagesShort'];
+        return reportNum((float) $n, $lang) . ' ' . $word;
     }
     if ($unit === 'impressions') {
         return reportNum((float) $n, $lang) . ' ' . $copy['times'];
@@ -252,6 +262,9 @@ function reportVerdictTone(array $dossier, array $findings): string
     $sev2 = false;
     foreach ($findings as $f) {
         if (($f['audience'] ?? '') === 'cursor') {
+            continue;
+        }
+        if (($f['category'] ?? '') === 'index') {
             continue;
         }
         if ((int) ($f['severity'] ?? 0) >= 3) {
@@ -466,6 +479,51 @@ function reportIcon(string $category): string
     return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">' . $d . '</svg>';
 }
 
+function reportJoinNames(array $names, string $lang): string
+{
+    $conj = ['es' => 'y', 'en' => 'and', 'pt' => 'e'][$lang] ?? 'y';
+    $names = array_values(array_filter($names, static fn ($n) => $n !== ''));
+    if (count($names) <= 1) {
+        return $names[0] ?? '';
+    }
+    $last = array_pop($names);
+    return implode(', ', $names) . ' ' . $conj . ' ' . $last;
+}
+
+/** Una sola tarjeta: las páginas públicas fuera de Google se corrigen ahora. */
+function reportIndexNow(array $findings, string $lang, array $copy): ?array
+{
+    $rows = array_values(array_filter($findings, static function ($f) {
+        return ($f['category'] ?? '') === 'index'
+            && in_array($f['kind'] ?? '', ['noindex', 'blocked', 'robotsMeta', 'canonical'], true)
+            && !findingsIsPrivatePath((string) ($f['path'] ?? '/'));
+    }));
+    $sitemap = array_values(array_filter($findings, static fn ($f) => ($f['kind'] ?? '') === 'sitemap'));
+    if ($rows === [] && $sitemap === []) {
+        return null;
+    }
+    if ($rows === []) {
+        $lines = $sitemap[0]['lines'][$lang] ?? $sitemap[0]['lines']['es'];
+        return ['title' => $lines['title'], 'line' => $lines['line'], 'number' => ''];
+    }
+    $names = [];
+    foreach ($rows as $f) {
+        $names[] = findingsPublicName((string) ($f['path'] ?? '/'));
+    }
+    $names = array_values(array_unique($names));
+    $n = count($names);
+    $shown = array_slice($names, 0, 4);
+    $title = reportJoinNames($shown, $lang);
+    if ($n > 4) {
+        $title .= ' +' . ($n - 4);
+    }
+    return [
+        'title' => $title,
+        'line' => $n === 1 ? $copy['nowLineOne'] : $copy['nowLine'],
+        'number' => reportNum((float) $n, $lang) . ' ' . ($n === 1 ? $copy['pageOne'] : $copy['pagesShort']),
+    ];
+}
+
 function reportNarrative(string $dataDir, string $host, string $lang, array $brief, string $signature, bool $fresh): array
 {
     $file = $dataDir . '/report-narrative-' . md5($host) . '.json';
@@ -490,8 +548,10 @@ function reportNarrative(string $dataDir, string $host, string $lang, array $bri
         . 'No inventes cifras, búsquedas ni páginas. No pongas números en las frases: el número va aparte. '
         . 'Sin jerga (nada de CTR, indexación, Search Console, API, LCP, severidad). '
         . 'verdict: una frase, acorde al tono que viene en el JSON (good, watch o bad). No cambies el tono. '
+        . 'No hables de páginas fuera de Google ni de indexación: si hay páginas públicas sin mostrar, ya se están corrigiendo y no son un plan de 30 días. '
         . 'findings: una entrada por cada id del JSON, título corto y una frase de qué vamos a hacer. '
         . 'moves: máximo 3 trabajos de los próximos 30 días, cada uno con category speed, content, contacts o google. '
+        . 'El título de un move no puede ser igual al título de un finding. Es el trabajo, en verbo. '
         . 'Texto plano, sin markdown.';
 
     $empty = ['source' => 'template', 'error' => '', 'verdict' => '', 'findings' => [], 'moves' => []];
@@ -650,8 +710,17 @@ function reportRender(array $model): string
     foreach ($model['tasks'] as $task) {
         $done .= '<li>' . $e((string) $task['title']) . '</li>';
     }
-    if ($done === '') {
-        $done = '<li class="muted">' . $e($copy['doneEmpty']) . '</li>';
+    $doneBlock = $done !== ''
+        ? '<h2>' . $e($copy['done']) . '</h2><ul class="done">' . $done . '</ul>'
+        : '';
+
+    $now = $model['now'] ?? null;
+    $nowBlock = '';
+    if (is_array($now) && ($now['title'] ?? '') !== '') {
+        $num = (string) ($now['number'] ?? '');
+        $nowBlock = '<h2>' . $e($copy['now']) . '</h2><article class="found now"><div><strong>'
+            . $e((string) $now['title']) . '</strong><p>' . $e((string) ($now['line'] ?? ''))
+            . '</p></div>' . ($num !== '' ? '<em>' . $e($num) . '</em>' : '') . '</article>';
     }
 
     $found = '';
@@ -713,6 +782,7 @@ function reportRender(array $model): string
     .done { margin: 0; padding: 0 0 0 18px; }
     .done li { margin: 0 0 6px; }
     .found { display: flex; justify-content: space-between; gap: 16px; background: #fff; padding: 12px 14px; margin: 0 0 8px; break-inside: avoid; page-break-inside: avoid; }
+    .found.now { border-left: 3px solid #12141c; }
     .found strong { display: block; font-size: 15px; }
     .found p { margin: 4px 0 0; max-width: 62ch; }
     .found em { font-style: normal; font-weight: 650; color: #1d4ed8; text-align: right; max-width: 16ch; }
@@ -738,7 +808,7 @@ CSS;
         . '<section class="page"><div class="light is-' . $e($tone) . '"><i></i><div><strong>' . $e($lightWord)
         . '</strong><p>' . $e((string) $model['verdict']) . '</p></div></div>'
         . '<div class="kpis">' . $kpis . '</div>' . $chart . $channels . $queryBlock . '</section>'
-        . '<section class="page page2"><h2>' . $e($copy['done']) . '</h2><ul class="done">' . $done . '</ul>'
+        . '<section class="page page2">' . $nowBlock . $doneBlock
         . '<h2>' . $e($copy['found']) . '</h2>' . $found
         . ($moves !== '' ? '<h2>' . $e($copy['next']) . '</h2>' . $moves : '')
         . '<div class="foot"><p class="note">' . $e($copy['footnote']) . ' · ' . $e($model['host']) . '</p>'
@@ -757,6 +827,7 @@ function reportCompose(string $dataDir, array $sa, string $host, string $lang, b
     $top = findingsTop($findings, 3);
     $tone = reportVerdictTone($dossier, $findings);
     $copy = reportPhrases($lang);
+    $now = reportIndexNow($findings, $lang, $copy);
     $name = (string) ($dossier['client']['name'] ?? $host);
     $windows = $dossier['windows'];
     $kpis = reportKpis($dossier, $lang, $copy);
@@ -776,7 +847,7 @@ function reportCompose(string $dataDir, array $sa, string $host, string $lang, b
         ];
         if (count($fallbackMoves) < 3) {
             $fallbackMoves[] = [
-                'title' => $lines['title'],
+                'title' => $copy['cat' . ucfirst($cat)] ?? $lines['title'],
                 'detail' => $lines['line'],
                 'category' => $cat,
             ];
@@ -790,6 +861,7 @@ function reportCompose(string $dataDir, array $sa, string $host, string $lang, b
         $dossier['search'],
         $dossier['ga']['keyEvents'] ?? 0,
         array_column($top, 'id'),
+        $now['title'] ?? '',
         $dossier['fingerprint'] ?? '',
     ], JSON_UNESCAPED_UNICODE) ?: '');
 
@@ -842,6 +914,7 @@ function reportCompose(string $dataDir, array $sa, string $host, string $lang, b
         'channels' => reportChannelSlices($dossier, $lang, $copy),
         'queries' => reportTopQueries($dossier, 3),
         'tasks' => array_slice($dossier['tasks'] ?? [], 0, 4),
+        'now' => $now,
         'found' => $found,
         'moves' => array_slice($moves, 0, 3),
     ];

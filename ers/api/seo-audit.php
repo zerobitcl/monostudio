@@ -24,7 +24,7 @@ const SEO_AUDIT_DOM_TTL = 604800; // 7 días: re-scrape si el HTML cambió de fi
 const SEO_AUDIT_REPO_TTL = 21600; // 6 h
 const SEO_AUDIT_REPO_BYTES = 110000;
 const SEO_AUDIT_AI_TIMEOUT = 75;
-const SEO_AUDIT_VERSION = '2026.11.05-integral';
+const SEO_AUDIT_VERSION = '2026.11.05-index-now';
 
 header('X-Content-Type-Options: nosniff');
 
@@ -852,10 +852,11 @@ Salida JSON:
 - cambios: máx 12, agrupados por archivo cuando haya path. Uno o más hallazgos por cambio. url y archivo solo si aparecen en los datos; si no, "".
 - cursorPrompt: prompt para Cursor Agent, en este orden:
   1) Contexto del sitio y objetivo
-  2) Cambios ordenados por archivo, citando el id/kind del hallazgo que cubren
-  3) Criterios de aceptación comprobables
-  4) Reglas: no inventar archivos ni rutas; no tocar secretos; preguntar si falta un path; primero impacto alto y esfuerzo bajo
-  5) Si no hay key events, una sección Medición (click_whatsapp, phone_click, generate_lead)
+  2) Si hay bloque CORREGIR AHORA, ese es el primer grupo de cambios: una URL pública por cambio, quitar noindex, corregir canonical o pedir indexación. No postergar. No indexes login, gracias, admin, carrito ni preview.
+  3) El resto, ordenado por archivo, citando el id/kind del hallazgo
+  4) Criterios de aceptación comprobables
+  5) Reglas: no inventar archivos ni rutas; no tocar secretos; preguntar si falta un path
+  6) Si no hay key events, una sección Medición (click_whatsapp, phone_click, generate_lead)
 
 Cubrí todos los hallazgos de severidad 3 y 2. Los de severidad 1 pueden ir al final o agrupados.
 TXT;

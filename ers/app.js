@@ -3381,6 +3381,9 @@ class AppController {
       ? `Un solo análisis: Search Console, Analytics, velocidad, HTML y ${repo.slug || "el repo"}.`
       : "Un solo análisis: Search Console, Analytics, velocidad y HTML. El repo se suma desde la ficha del cliente.";
     }
+    if (Number(counts.index || 0) > 0) {
+      this.dom.cursorAuditMeta.textContent += " La indexación de páginas públicas va primera. Login, gracias, admin y carrito no se tocan.";
+    }
 
     const canGenerate = Boolean(status?.canGenerate) && !this.auditBusy;
     this.dom.btnAuditBatch.disabled = this.auditBusy || (status && !status.siteReady);

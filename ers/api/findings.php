@@ -147,6 +147,44 @@ function findingsLandings(array $dossier): array
     return $out;
 }
 
+/**
+ * Login, gracias, admin, carrito y similares pueden ir en noindex a propósito.
+ * Una página pública (sobre nosotros, equipo, servicios) no.
+ */
+function findingsIsPrivatePath(string $path): bool
+{
+    $slug = strtolower(trim(dossierNormPath($path), '/'));
+    if ($slug === '') {
+        return false;
+    }
+    $first = explode('/', $slug)[0];
+    $exact = [
+        'wp-admin', 'wp-login.php', 'admin', 'login', 'signin', 'sign-in', 'registro', 'register',
+        'cuenta', 'account', 'mi-cuenta', 'my-account', 'carrito', 'cart', 'checkout', 'pago',
+        'gracias', 'thank-you', 'thanks', 'confirmacion', 'preview', 'borrador', 'draft',
+        'private', 'privado', 'search', 'buscar', 'busqueda', 'feed', 'xmlrpc.php', '404', 'cdn-cgi',
+    ];
+    if (in_array($first, $exact, true) || in_array($slug, $exact, true)) {
+        return true;
+    }
+    foreach (['gracias-', 'thank-', 'preview-', 'draft-', 'private-', 'wp-', 'account-', 'checkout-'] as $prefix) {
+        if (str_starts_with($first, $prefix)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function findingsPublicName(string $path): string
+{
+    $slug = trim(dossierNormPath($path), '/');
+    if ($slug === '') {
+        return 'Inicio';
+    }
+    $last = basename(str_replace('\\', '/', $slug));
+    return ucwords(str_replace(['-', '_'], ' ', $last));
+}
+
 function findingsContactRate(array $dossier): float
 {
     $ga = $dossier['ga'] ?? null;
@@ -169,6 +207,9 @@ function findingsIndex(array $dossier): array
     $noindex = 0;
     foreach ($dossier['pages'] ?? [] as $page) {
         $path = (string) ($page['path'] ?? '/');
+        if (findingsIsPrivatePath($path)) {
+            continue;
+        }
         $title = (string) ($page['title'] ?? $path);
         $url = (string) ($page['url'] ?? '');
         if (($page['error'] ?? '') !== '') {
@@ -231,6 +272,9 @@ function findingsIndex(array $dossier): array
     $canonical = 0;
     foreach ($dossier['pages'] ?? [] as $page) {
         $path = (string) ($page['path'] ?? '/');
+        if (findingsIsPrivatePath($path)) {
+            continue;
+        }
         $dom = findingsDom($dossier, $path);
         if ($dom === null || (int) $page['impressions'] < 10) {
             continue;
@@ -1321,42 +1365,17 @@ function findingsDetect(array $dossier): array
     return findingsAttachFiles($out, $dossier);
 }
 
-function findingsNoindexRollup(array $rows): array
-{
-    $n = count($rows);
-    $sample = array_slice(array_map(static fn ($f) => (string) ($f['lines']['es']['title'] ?? $f['path']), $rows), 0, 3);
-    return findingsMake(
-        'noindexRollup',
-        'index',
-        3,
-        max(array_map(static fn ($f) => (int) $f['impact'], $rows)),
-        findingsFigure($n, 'pages', 'risk'),
-        '/',
-        '',
-        '',
-        ['count' => $n, 'paths' => array_slice(array_map(static fn ($f) => $f['path'], $rows), 0, 6)],
-        findingsSay(
-            $n . ' páginas no aparecen en Google',
-            'Mientras no estén en el buscador, el resto del trabajo no tiene dónde verse. ' . implode(', ', $sample) . '.',
-            $n . ' pages are missing from Google',
-            'Until they are in search, the rest of the work has nowhere to show. ' . implode(', ', $sample) . '.',
-            $n . ' páginas não aparecem no Google',
-            'Enquanto não estiverem na busca, o resto do trabalho não tem onde aparecer. ' . implode(', ', $sample) . '.'
-        ),
-        $n . ' URLs no indexadas. Ver la lista completa en los hallazgos.'
-    );
-}
-
-/** Los 3 que ve el cliente: sin notas internas, y las no indexadas van juntas. */
+/**
+ * Los 3 que ve el cliente. La indexación de páginas públicas no entra:
+ * eso se corrige en el ciclo, no se informa como hallazgo del mes.
+ */
 function findingsTop(array $findings, int $limit = 3): array
 {
     $visible = array_values(array_filter(
         $findings,
-        static fn ($f) => ($f['audience'] ?? 'both') !== 'cursor'
+        static fn ($f) => ($f['audience'] ?? 'both') !== 'cursor' && ($f['category'] ?? '') !== 'index'
     ));
-    $noindex = array_values(array_filter($visible, static fn ($f) => ($f['kind'] ?? '') === 'noindex'));
-    $rest = array_values(array_filter($visible, static fn ($f) => ($f['kind'] ?? '') !== 'noindex'));
-    $pool = count($noindex) >= 2 ? array_merge([findingsNoindexRollup($noindex)], $rest) : $visible;
+    $pool = $visible;
     usort($pool, static fn ($a, $b) => ($b['severity'] <=> $a['severity']) ?: ($b['impact'] <=> $a['impact']));
     $strong = array_values(array_filter($pool, static fn ($f) => (int) ($f['severity'] ?? 0) >= 2));
     return array_slice($strong !== [] ? $strong : $pool, 0, $limit);
@@ -1374,11 +1393,8 @@ function findingsCounts(array $findings): array
     return $out;
 }
 
-function findingsCursorBlock(array $findings): string
+function findingsCursorLines(array $findings): string
 {
-    if ($findings === []) {
-        return 'Sin hallazgos sobre los datos disponibles.';
-    }
     $lines = [];
     foreach ($findings as $i => $f) {
         $n = $i + 1;
@@ -1394,6 +1410,31 @@ function findingsCursorBlock(array $findings): string
         }
     }
     return implode("\n", $lines);
+}
+
+function findingsCursorBlock(array $findings): string
+{
+    if ($findings === []) {
+        return 'Sin hallazgos sobre los datos disponibles.';
+    }
+    $now = [];
+    $later = [];
+    foreach ($findings as $f) {
+        if (($f['category'] ?? '') === 'index') {
+            $now[] = $f;
+        } else {
+            $later[] = $f;
+        }
+    }
+    $chunks = [];
+    if ($now !== []) {
+        $chunks[] = "CORREGIR AHORA — indexación de páginas públicas. Un cambio por URL, antes que cualquier otro trabajo. No quites noindex de páginas privadas (login, gracias, admin, carrito, preview).\n"
+            . findingsCursorLines($now);
+    }
+    if ($later !== []) {
+        $chunks[] = "DESPUÉS — solo cuando la indexación pública ya esté corregida\n" . findingsCursorLines($later);
+    }
+    return implode("\n\n", $chunks);
 }
 
 /**
