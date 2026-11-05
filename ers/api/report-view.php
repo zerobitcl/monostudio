@@ -920,7 +920,7 @@ function reportCompose(string $dataDir, array $sa, string $host, string $lang, b
     ];
 
     $html = reportRender($model);
-    $fileName = reportFileName($name);
+    $fileName = 'mono-studio-' . reportFileName($name);
     gscWriteJson(reportHtmlCacheFile($dataDir, $host), [
         'version' => REPORT_HTML_VERSION,
         'signature' => $signature,

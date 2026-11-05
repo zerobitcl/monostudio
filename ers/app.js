@@ -491,20 +491,20 @@ class ReportModule {
     }).then((res) => ReportModule.#read(res));
   }
 
-  static build(host, lang, fresh = false) {
-    const qs = `action=build&host=${encodeURIComponent(host)}&lang=${encodeURIComponent(lang)}${fresh ? "&fresh=1" : ""}&_=${Date.now()}`;
+  static build(host, lang, fresh = false, variant = "studio") {
+    const qs = `action=build&host=${encodeURIComponent(host)}&lang=${encodeURIComponent(lang)}&variant=${encodeURIComponent(variant)}${fresh ? "&fresh=1" : ""}&_=${Date.now()}`;
     return fetch(`${ReportModule.API}?${qs}`, {
       cache: "no-store",
       headers: { Accept: "application/json" },
     }).then((res) => ReportModule.#read(res));
   }
 
-  static pdf(host, lang, fresh = false) {
+  static pdf(host, lang, fresh = false, variant = "studio") {
     return fetch(`${ReportModule.API}?action=pdf`, {
       method: "POST",
       cache: "no-store",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ host, lang, fresh: fresh ? 1 : 0 }),
+      body: JSON.stringify({ host, lang, variant, fresh: fresh ? 1 : 0 }),
     }).then((res) => ReportModule.#read(res));
   }
 
@@ -1090,7 +1090,7 @@ class AppController {
       "kwPanel", "kwMeta", "kwStats", "kwAi", "kwTabs", "kwHint", "kwHead", "kwBody", "kwEmpty", "btnKwAi",
       "seoClicks", "seoImpressions", "seoCtr", "seoPosition",
       "seoClicksDelta", "seoImpressionsDelta", "seoCtrDelta", "seoPositionDelta",
-      "btnGscRefresh", "btnSeoIndex", "btnSeoBrief", "btnClientReport", "btnSeoPrint", "btnReportPdf", "btnReportFresh", "btnSeoBriefClose",
+      "btnGscRefresh", "btnSeoIndex", "btnSeoBrief", "btnClientReport", "btnStudioReport", "btnSeoPrint", "btnReportPdf", "btnReportFresh", "btnSeoBriefClose",
       "gscConfigForm", "gscSitemapUrl", "gscPages", "gscGa4Property", "ga4Properties", "ga4Hint",
       "growthPanel", "growthMeta", "growthList",
       "cursorAuditPanel", "cursorAuditMeta", "cursorAuditProgress", "cursorAuditBar",
@@ -1316,8 +1316,9 @@ class AppController {
     this.dom.btnGscRefresh.addEventListener("click", () => this.loadSeoHost(this.seoHost, true));
     this.dom.btnSeoIndex.addEventListener("click", () => this.requestIndex(this.seoHost));
     this.dom.btnSeoBrief.addEventListener("click", () => this.openSeoReport());
-    this.dom.btnClientReport.addEventListener("click", () => this.openClientReport());
-    this.dom.btnReportFresh?.addEventListener("click", () => this.openClientReport({ fresh: true }));
+    this.dom.btnClientReport.addEventListener("click", () => this.openClientReport({ variant: "client" }));
+    this.dom.btnStudioReport?.addEventListener("click", () => this.openClientReport({ variant: "studio" }));
+    this.dom.btnReportFresh?.addEventListener("click", () => this.openClientReport({ fresh: true, variant: this.reportVariant }));
     this.dom.btnReportPdf.addEventListener("click", () => this.downloadClientReport());
     this.dom.growthList.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-growth-task]");
@@ -1824,7 +1825,14 @@ class AppController {
     this.dom.btnSeoPrint.hidden = client;
     this.dom.reportFrame.hidden = !client;
     this.dom.seoBriefBody.hidden = client;
-    this.dom.briefTitle.textContent = client ? "Informe cliente" : "Informe SEO";
+    this.dom.briefTitle.textContent = !client
+      ? "Informe SEO"
+      : this.reportVariant === "studio"
+        ? "Informe Mono Studio"
+        : "Informe cliente";
+    if (this.dom.btnReportFresh) {
+      this.dom.btnReportFresh.textContent = this.reportVariant === "studio" ? "Regenerar redacción" : "Regenerar";
+    }
   }
 
   reportLang() {
@@ -3606,6 +3614,7 @@ class AppController {
     this.dom.seoPagesDrawer.hidden = !data?.pages?.length;
     this.dom.btnSeoBrief.hidden = !hasMetrics;
     this.dom.btnClientReport.hidden = !hasMetrics;
+    if (this.dom.btnStudioReport) this.dom.btnStudioReport.hidden = !hasMetrics;
     this.dom.seoPeriodToggle.hidden = !hasMetrics;
     const pending = notIndexed + Number(data?.inventory?.unchecked || 0);
     this.dom.btnSeoIndex.hidden = pending === 0;
@@ -3628,6 +3637,7 @@ class AppController {
       this.dom.seoSignalsEmpty.hidden = true;
       this.dom.btnSeoBrief.hidden = true;
       this.dom.btnClientReport.hidden = true;
+      if (this.dom.btnStudioReport) this.dom.btnStudioReport.hidden = true;
       this.dom.growthPanel.hidden = true;
       this.dom.cursorAuditPanel.hidden = true;
       this.dom.seoPeriodToggle.hidden = true;
@@ -4271,8 +4281,9 @@ class AppController {
     });
   }
 
-  async openClientReport({ fresh = false } = {}) {
+  async openClientReport({ fresh = false, variant = "client" } = {}) {
     if (!this.seoHost || this.reportBusy) return;
+    this.reportVariant = variant === "studio" ? "studio" : "client";
     const data = SeoStore.get(this.seoHost);
     if (!data?.totals && !GscModule.periodsOf(data).length) {
       this.showToast("Primero actualizá los datos de este sitio");
@@ -4286,10 +4297,12 @@ class AppController {
     if (this.dom.btnReportFresh) this.dom.btnReportFresh.disabled = true;
     this.dom.reportFrame.srcdoc = "<!DOCTYPE html><html><body style=\"font-family:sans-serif;padding:28px;color:#1c1915\"><p>Armando el informe…</p></body></html>";
     try {
-      const report = await ReportModule.build(this.seoHost, this.reportLang(), fresh);
+      const report = await ReportModule.build(this.seoHost, this.reportLang(), fresh, this.reportVariant);
       if (!report.html) throw new Error(report.error || "El informe vino vacío");
       this.dom.reportFrame.srcdoc = report.html;
-      if (report.contactsMeasured === false) {
+      if (this.reportVariant === "client") {
+        this.showToast("Informe cliente listo");
+      } else if (report.contactsMeasured === false) {
         this.showToast("Sin contactos medidos: el informe muestra las personas que llegaron desde Google", 5600);
       } else if (report.ga && !report.ga.ok && report.ga.message) this.showToast(report.ga.message, 5600);
       else if (report.narrative === "template" && report.narrativeError) this.showToast(report.narrativeError, 4200);
@@ -4310,7 +4323,7 @@ class AppController {
     this.dom.btnReportPdf.disabled = true;
     this.showToast("Generando el PDF…");
     try {
-      const data = await ReportModule.pdf(this.seoHost, this.reportLang());
+      const data = await ReportModule.pdf(this.seoHost, this.reportLang(), false, this.reportVariant || "client");
       if (!data.url) throw new Error(data.error || "api2pdf no devolvió el archivo");
       window.open(data.url, "_blank", "noopener");
       this.showToast("PDF listo. El enlace dura 24 horas.");

@@ -6,9 +6,9 @@
  *
  * GET  action=status
  * GET  action=properties
- * GET  action=build&host=&lang=
+ * GET  action=build&host=&lang=&variant=studio|client
  * POST action=prefs     { host, reportLang?, ga4Property? }
- * POST action=pdf       { host, lang }
+ * POST action=pdf       { host, lang, variant }
  */
 
 declare(strict_types=1);
@@ -19,6 +19,7 @@ require_once __DIR__ . '/lib.php';
 require_once __DIR__ . '/dossier.php';
 require_once __DIR__ . '/findings.php';
 require_once __DIR__ . '/report-view.php';
+require_once __DIR__ . '/report-client.php';
 
 const REPORT_GA_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly';
 const REPORT_GA_TTL = 21600;
@@ -55,7 +56,7 @@ function reportCopy(string $lang): array
     $all = [
         'es' => [
             'kicker' => 'Mono Studio',
-            'title' => 'Informe de crecimiento',
+            'title' => 'Informe Mono Studio',
             'clicks' => 'Clics en Google',
             'impressions' => 'Veces visible',
             'ctr' => 'Entraron',
@@ -99,7 +100,7 @@ function reportCopy(string $lang): array
         ],
         'en' => [
             'kicker' => 'Mono Studio',
-            'title' => 'Growth report',
+            'title' => 'Mono Studio report',
             'clicks' => 'Clicks from Google',
             'impressions' => 'Times shown',
             'ctr' => 'Click rate',
@@ -143,7 +144,7 @@ function reportCopy(string $lang): array
         ],
         'pt' => [
             'kicker' => 'Mono Studio',
-            'title' => 'Relatório de crescimento',
+            'title' => 'Relatório Mono Studio',
             'clicks' => 'Cliques no Google',
             'impressions' => 'Vezes visível',
             'ctr' => 'Entraram',
@@ -489,16 +490,18 @@ function reportFileName(string $name): string
     return 'informe-' . ($slug !== '' ? $slug : 'cliente') . '-' . gmdate('Y-m-d') . '.pdf';
 }
 
-function reportHtmlCacheFile(string $dataDir, string $host): string
+function reportHtmlCacheFile(string $dataDir, string $host, string $variant = 'studio'): string
 {
-    return $dataDir . '/report-html-' . md5($host) . '.json';
+    $suffix = $variant === 'client' ? '-client' : '';
+    return $dataDir . '/report-html-' . md5($host) . $suffix . '.json';
 }
 
-function reportCachedHtml(string $dataDir, string $host, string $lang): ?array
+function reportCachedHtml(string $dataDir, string $host, string $lang, string $variant = 'studio'): ?array
 {
-    $cached = gscReadJson(reportHtmlCacheFile($dataDir, $host), []);
+    $cached = gscReadJson(reportHtmlCacheFile($dataDir, $host, $variant), []);
+    $version = $variant === 'client' ? REPORT_CLIENT_VERSION : REPORT_HTML_VERSION;
     if (
-        ($cached['version'] ?? '') === REPORT_HTML_VERSION
+        ($cached['version'] ?? '') === $version
         && ($cached['lang'] ?? '') === $lang
         && is_string($cached['html'] ?? null)
         && $cached['html'] !== ''
@@ -597,9 +600,10 @@ if ($isEntry) {
             $prefs = reportHostConfig($dataDir, $host);
             $lang = gscReportLang((string) ($input['lang'] ?? $prefs['reportLang'] ?? 'es'));
             $fresh = in_array((string) ($input['fresh'] ?? ''), ['1', 'true'], true);
+            $variant = (string) ($input['variant'] ?? '') === 'client' ? 'client' : 'studio';
 
             if ($action === 'pdf' && !$fresh) {
-                $cachedHtml = reportCachedHtml($dataDir, $host, $lang);
+                $cachedHtml = reportCachedHtml($dataDir, $host, $lang, $variant);
                 if ($cachedHtml !== null) {
                     $apiKey = reportSecret($dataDir, 'api2pdf.json');
                     if ($apiKey === '') {
@@ -610,7 +614,9 @@ if ($isEntry) {
                 }
             }
 
-            $built = reportCompose($dataDir, $sa, $host, $lang, $fresh);
+            $built = $variant === 'client'
+                ? reportClientCompose($dataDir, $sa, $host, $lang, $fresh)
+                : reportCompose($dataDir, $sa, $host, $lang, $fresh);
             if ($action === 'build') {
                 gscJson(['ok' => true] + $built);
             }
