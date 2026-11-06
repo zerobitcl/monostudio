@@ -504,8 +504,13 @@ function dossierGaRows(array $report): array
             continue;
         }
         $item = [];
+        $values = is_array($row['dimensionValues'] ?? null) ? $row['dimensionValues'] : [];
         foreach ($dims as $i => $name) {
-            $item[$name] = (string) ($row['dimensionValues'][$i]['value'] ?? '');
+            $item[$name] = (string) ($values[$i]['value'] ?? '');
+        }
+        // Con dos rangos la API anexa el nombre del período sin pedirlo en dimensions.
+        if (!array_key_exists('dateRange', $item) && isset($values[count($dims)]['value'])) {
+            $item['dateRange'] = (string) $values[count($dims)]['value'];
         }
         foreach ($mets as $i => $name) {
             $item[$name] = (float) ($row['metricValues'][$i]['value'] ?? 0);
@@ -689,8 +694,8 @@ function dossierFetchGa(string $dataDir, array $sa, string $host, string $proper
         $metric = $useKey ? 'keyEvents' : 'conversions';
         $core = [
             [
+                // dateRange no va en dimensions: la Data API lo rechaza y lo anexa sola.
                 'dateRanges' => [$current, $previous],
-                'dimensions' => [['name' => 'dateRange']],
                 'metrics' => [
                     ['name' => 'sessions'],
                     ['name' => 'totalUsers'],
@@ -723,7 +728,6 @@ function dossierFetchGa(string $dataDir, array $sa, string $host, string $proper
             ],
             [
                 'dateRanges' => [$current, $previous],
-                'dimensions' => [['name' => 'dateRange']],
                 'dimensionFilter' => [
                     'filter' => [
                         'fieldName' => 'sessionDefaultChannelGroup',

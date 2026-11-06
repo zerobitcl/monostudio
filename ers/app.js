@@ -3392,6 +3392,9 @@ class AppController {
     if (Number(counts.index || 0) > 0) {
       this.dom.cursorAuditMeta.textContent += " La indexación de páginas públicas va primera. Login, gracias, admin y carrito no se tocan.";
     }
+    if (!coverage.ga4 && status?.gaMessage) {
+      this.dom.cursorAuditMeta.textContent += ` Analytics: ${status.gaMessage}`;
+    }
 
     const canGenerate = Boolean(status?.canGenerate) && !this.auditBusy;
     this.dom.btnAuditBatch.disabled = this.auditBusy || (status && !status.siteReady);

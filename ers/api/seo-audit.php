@@ -974,6 +974,7 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
         'coverage' => is_array($dossier['sources'] ?? null) ? $dossier['sources'] : [
             'gsc' => false, 'ga4' => false, 'keyEvents' => false, 'psi' => false, 'dom' => false, 'repo' => false, 'keywords' => false,
         ],
+        'gaMessage' => (string) ($dossier['gaMeta']['message'] ?? ''),
         'findingCounts' => findingsCounts($findings),
         'audit' => $hasCursor ? [
             'ready' => true,
