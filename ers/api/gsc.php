@@ -2078,6 +2078,178 @@ TXT;
     ];
 }
 
+/**
+ * Carga buckets de keywords ya cacheados (sin refetch). Usado por el plan integral.
+ */
+function gscKeywordsCached(string $dataDir, string $host): array
+{
+    $kw = gscReadJson(gscKeywordCacheFile($dataDir, $host), []);
+    $valid = isset($kw['fetchedAt'])
+        && ($kw['host'] ?? '') === $host
+        && ($kw['version'] ?? '') === GSC_VERSION
+        && ($kw['kwVersion'] ?? '') === GSC_KW_VERSION
+        && isset($kw['buckets']);
+    return $valid ? $kw : [];
+}
+
+/**
+ * Reusa o regenera Keywords IA. El plan de Cursor y el botón legacy comparten esto.
+ *
+ * @return array{kw: array, ai: ?array, generated: bool}
+ */
+function gscEnsureKeywordsAi(string $dataDir, string $host, bool $fresh = false): array
+{
+    $kw = gscKeywordsCached($dataDir, $host);
+    if ($kw === []) {
+        return ['kw' => [], 'ai' => null, 'generated' => false];
+    }
+    if ((int) ($kw['summary']['queries'] ?? 0) <= 0) {
+        return ['kw' => $kw, 'ai' => null, 'generated' => false];
+    }
+
+    $ai = gscKeywordAiFor($dataDir, $host, (int) $kw['fetchedAt']);
+    if (!$fresh && $ai !== null && empty($ai['stale'])) {
+        return ['kw' => $kw, 'ai' => $ai, 'generated' => false];
+    }
+
+    $ai = gscKeywordsAi($kw);
+    gscWriteJson(gscKeywordAiFile($dataDir, $host), $ai);
+    $ai['stale'] = false;
+    return ['kw' => $kw, 'ai' => $ai, 'generated' => true];
+}
+
+/** Resumen determinista de oportunidades (sin Gemini) para el prompt de crecimiento. */
+function gscKeywordsBucketsBrief(array $kw): string
+{
+    if ($kw === [] || empty($kw['buckets'])) {
+        return 'Sin buckets de keywords todavía.';
+    }
+    $s = is_array($kw['summary'] ?? null) ? $kw['summary'] : [];
+    $lines = [
+        'Queries visibles: ' . (int) ($s['queries'] ?? 0)
+            . ' · clics atribuidos: ' . (int) ($s['clicks'] ?? 0)
+            . ' · clics recuperables estimados: ' . (int) ($s['potentialClicks'] ?? 0)
+            . ' · % marca: ' . round(((float) ($s['brandShare'] ?? 0)) * 100) . '%',
+    ];
+    if (($s['siteClicks'] ?? null) !== null) {
+        $lines[] = 'Total sitio: ' . (int) $s['siteClicks'] . ' clics · ocultos: ' . (int) ($s['hiddenClicks'] ?? 0);
+    }
+    $sections = [
+        'striking' => 'Striking distance (pos 4-20)',
+        'lowCtr' => 'CTR bajo en top 6',
+        'rising' => 'En alza / nuevas',
+        'falling' => 'Cayendo',
+        'cannibal' => 'Canibalización',
+    ];
+    foreach ($sections as $key => $title) {
+        $rows = array_slice($kw['buckets'][$key] ?? [], 0, 8);
+        if ($rows === []) {
+            continue;
+        }
+        $lines[] = '';
+        $lines[] = '### ' . $title;
+        if ($key === 'cannibal') {
+            foreach ($rows as $c) {
+                if (!is_array($c)) {
+                    continue;
+                }
+                $pages = array_map(
+                    static function ($p) {
+                        $path = parse_url((string) ($p['url'] ?? ''), PHP_URL_PATH) ?: '/';
+                        return $path . ' ' . round(((float) ($p['share'] ?? 0)) * 100) . '% pos ' . ($p['position'] ?? '?');
+                    },
+                    is_array($c['pages'] ?? null) ? $c['pages'] : []
+                );
+                $lines[] = '- «' . ($c['q'] ?? '') . '» · ' . (int) ($c['impressions'] ?? 0) . ' imp · ' . implode(', ', $pages);
+            }
+            continue;
+        }
+        foreach ($rows as $r) {
+            if (!is_array($r)) {
+                continue;
+            }
+            $path = ($r['page'] ?? '') !== '' ? (parse_url((string) $r['page'], PHP_URL_PATH) ?: '/') : '-';
+            $lines[] = '- «' . ($r['q'] ?? '') . '» · ' . (int) ($r['clicks'] ?? 0) . ' clics · '
+                . (int) ($r['impressions'] ?? 0) . ' imp · CTR ' . round(((float) ($r['ctr'] ?? 0)) * 100, 1)
+                . '% · pos ' . ($r['position'] ?? '?') . ' · ' . $path
+                . (!empty($r['brand']) ? ' [marca]' : '');
+        }
+    }
+    return implode("\n", $lines);
+}
+
+/**
+ * Bloque cerrado de estrategia Keywords IA para pegar en el prompt de Cursor.
+ * Solo queries/URLs ya sanitizadas.
+ */
+function gscKeywordsGrowthBlock(?array $ai): string
+{
+    $insights = is_array($ai['insights'] ?? null) ? $ai['insights'] : null;
+    if ($insights === null) {
+        return 'Sin lectura IA de keywords (usar solo buckets + hallazgos de demanda).';
+    }
+    $lines = [];
+    if (($insights['resumen'] ?? '') !== '') {
+        $lines[] = 'Resumen: ' . trim((string) $insights['resumen']);
+    }
+    $acciones = is_array($insights['acciones'] ?? null) ? $insights['acciones'] : [];
+    if ($acciones !== []) {
+        $lines[] = '';
+        $lines[] = 'ACCIONES DE CRECIMIENTO POR QUERY (lista cerrada: no inventes otras queries)';
+        foreach ($acciones as $i => $a) {
+            if (!is_array($a)) {
+                continue;
+            }
+            $n = $i + 1;
+            $qs = array_values(array_filter(array_map('strval', is_array($a['queries'] ?? null) ? $a['queries'] : [])));
+            $lines[] = $n . '. [' . ($a['tipo'] ?? '') . '] impacto ' . ($a['impacto'] ?? 'medio')
+                . ' · esfuerzo ' . ($a['esfuerzo'] ?? 'medio')
+                . ' · ' . ($a['titulo'] ?? '');
+            if (($a['detalle'] ?? '') !== '') {
+                $lines[] = '   ' . trim((string) $a['detalle']);
+            }
+            if (($a['url'] ?? '') !== '') {
+                $lines[] = '   URL: ' . $a['url'];
+            }
+            if ($qs !== []) {
+                $lines[] = '   Queries: «' . implode('», «', $qs) . '»';
+            }
+        }
+    }
+    $clusters = is_array($insights['clusters'] ?? null) ? $insights['clusters'] : [];
+    if ($clusters !== []) {
+        $lines[] = '';
+        $lines[] = 'TEMAS / INTENCIÓN';
+        foreach ($clusters as $c) {
+            if (!is_array($c)) {
+                continue;
+            }
+            $qs = array_values(array_filter(array_map('strval', is_array($c['queries'] ?? null) ? $c['queries'] : [])));
+            $lines[] = '- ' . ($c['tema'] ?? '') . ' (' . ($c['intencion'] ?? '') . ')'
+                . ($qs !== [] ? ': «' . implode('», «', array_slice($qs, 0, 6)) . '»' : '');
+            if (($c['lectura'] ?? '') !== '') {
+                $lines[] = '  ' . trim((string) $c['lectura']);
+            }
+        }
+    }
+    $ideas = is_array($insights['ideas'] ?? null) ? $insights['ideas'] : [];
+    if ($ideas !== []) {
+        $lines[] = '';
+        $lines[] = 'CONTENIDO NUEVO (demanda sin página fuerte)';
+        foreach ($ideas as $idea) {
+            if (!is_array($idea)) {
+                continue;
+            }
+            $lines[] = '- ' . ($idea['titulo'] ?? '')
+                . (($idea['keyword'] ?? '') !== '' ? ' · keyword «' . $idea['keyword'] . '»' : '');
+            if (($idea['porque'] ?? '') !== '') {
+                $lines[] = '  ' . trim((string) $idea['porque']);
+            }
+        }
+    }
+    return $lines === [] ? 'Keywords IA sin acciones útiles.' : implode("\n", $lines);
+}
+
 if (defined('ERS_LIBRARY')) {
     return;
 }
@@ -2907,13 +3079,11 @@ if ($action === 'keywords' || $action === 'keywords-ai') {
             gscJson($kw);
         }
 
-        $ai = gscKeywordAiFor($dataDir, $kwHost, (int) $kw['fetchedAt']);
-        if ($fresh || $ai === null || $ai['stale']) {
-            $ai = gscKeywordsAi($kw);
-            gscWriteJson(gscKeywordAiFile($dataDir, $kwHost), $ai);
-            $ai['stale'] = false;
+        $pack = gscEnsureKeywordsAi($dataDir, $kwHost, $fresh);
+        if (($pack['ai'] ?? null) === null) {
+            throw new RuntimeException('No hay queries suficientes para analizar con IA.');
         }
-        gscJson(['ok' => true, 'host' => $kwHost, 'ai' => $ai]);
+        gscJson(['ok' => true, 'host' => $kwHost, 'ai' => $pack['ai']]);
     } catch (Throwable $e) {
         gscJson(['error' => $e->getMessage()], 500);
     }

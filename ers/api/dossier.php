@@ -1,7 +1,7 @@
 <?php
 /**
  * Dossier único por sitio. Search Console, Analytics, PageSpeed, HTML,
- * repo y tareas cerradas salen de aquí: el prompt de Cursor y el informe
+ * repo y tareas cerradas salen de aquí: el plan de crecimiento (Cursor) y el informe
  * cliente leen el mismo paquete, no cada uno su caché.
  */
 

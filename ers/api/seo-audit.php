@@ -5,7 +5,7 @@
  * GET  action=status&host=     → progreso DOM + repo + análisis cacheado
  * POST action=dom-batch        → scrape HTML de un lote de URLs del inventario
  * POST action=repo-scan        → lee tree + archivos SEO de un repo GitHub privado
- * POST action=cursor-audit     → Gemini cruza todo y arma resumen + prompt Cursor
+ * POST action=cursor-audit     → plan integral de crecimiento (hallazgos + keywords IA + prompt Cursor)
  *
  * Credenciales GitHub: data/github.json → { "token": "ghp_..." }
  */
@@ -24,7 +24,7 @@ const SEO_AUDIT_DOM_TTL = 604800; // 7 días: re-scrape si el HTML cambió de fi
 const SEO_AUDIT_REPO_TTL = 21600; // 6 h
 const SEO_AUDIT_REPO_BYTES = 110000;
 const SEO_AUDIT_AI_TIMEOUT = 75;
-const SEO_AUDIT_VERSION = '2026.11.05-index-now';
+const SEO_AUDIT_VERSION = '2026.11.08-growth-integral';
 
 header('X-Content-Type-Options: nosniff');
 
@@ -767,9 +767,17 @@ function seoAuditFallbackRaw(array $findings): array
     ];
 }
 
-function seoAuditFingerprint(array $dossier): string
+function seoAuditFingerprint(array $dossier, string $kwAiSig = ''): string
 {
-    return md5((string) ($dossier['fingerprint'] ?? '') . '|' . SEO_AUDIT_VERSION);
+    return md5((string) ($dossier['fingerprint'] ?? '') . '|' . SEO_AUDIT_VERSION . '|kwai:' . $kwAiSig);
+}
+
+function seoAuditKwAiSig(?array $ai): string
+{
+    if ($ai === null || !is_array($ai['insights'] ?? null)) {
+        return 'none';
+    }
+    return (int) ($ai['basedOn'] ?? 0) . ':' . (int) ($ai['generatedAt'] ?? 0);
 }
 
 function seoAuditMeasurementNote(): string
@@ -807,9 +815,16 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
         throw new RuntimeException('Todavía no hay HTML scrapeado. Pulsá “Continuar lote” al menos una vez.');
     }
 
+    // Keywords IA: se regenera solo si falta o está desfasada (no en cada "Rehacer" del plan).
+    // Así el plan integral no se come el timeout del proxy con dos Gemini innecesarios.
+    $kwPack = gscEnsureKeywordsAi($dataDir, $host, false);
+    $kw = $kwPack['kw'] !== [] ? $kwPack['kw'] : (is_array($dossier['keywords'] ?? null) ? $dossier['keywords'] : []);
+    $kwAi = $kwPack['ai'];
+    $kwAiSig = seoAuditKwAiSig($kwAi);
+
     $repo = $dossier['repo'] ?? [];
     $findings = findingsDetect($dossier);
-    $fingerprint = seoAuditFingerprint($dossier);
+    $fingerprint = seoAuditFingerprint($dossier, $kwAiSig);
 
     $cacheFile = seoAuditCursorFile($dataDir, $host);
     $cached = gscReadJson($cacheFile, []);
@@ -818,6 +833,7 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
         && ($cached['host'] ?? '') === $host
         && ($cached['fingerprint'] ?? '') === $fingerprint
         && is_array($cached['insights'] ?? null)
+        && ($cached['version'] ?? '') === SEO_AUDIT_VERSION
     ) {
         $cached['cached'] = true;
         $cached['stale'] = false;
@@ -826,8 +842,10 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
 
     $search = $dossier['search'] ?? [];
     $paths = array_slice($repo['paths'] ?? [], 0, 80);
+    $hasKwAi = is_array($kwAi['insights'] ?? null);
     $parts = [
         'Sitio: ' . $host,
+        'Objetivo: subir de nivel el sitio — más clics relevantes, páginas más fuertes, más contactos.',
         'Clics 28d: ' . (int) ($search['clicks'] ?? 0) . ' (delta ' . (int) ($search['clicksDelta'] ?? 0) . ')',
         'Impresiones: ' . (int) ($search['impressions'] ?? 0),
         'Contactos (key events): ' . (int) ($dossier['ga']['contacts'] ?? 0)
@@ -839,26 +857,36 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
         '## HALLAZGOS (lista cerrada: no agregues problemas que no estén aquí)',
         findingsCursorBlock($findings),
         '',
+        '## OPORTUNIDADES DE KEYWORDS (buckets GSC, datos reales)',
+        gscKeywordsBucketsBrief($kw),
+        '',
+        '## CRECIMIENTO POR QUERIES (estrategia Keywords IA — lista cerrada)',
+        gscKeywordsGrowthBlock($kwAi),
+        '',
         '## PATHS DEL REPO',
         $paths === [] ? 'Sin repo. El prompt debe decir que se aplique en el proyecto local abierto en Cursor.' : implode("\n", array_map(static fn ($p) => '- ' . $p, $paths)),
     ];
 
     $system = <<<TXT
-Sos un tech lead. Los problemas YA están detectados en HALLAZGOS. No descubras otros. No inventes métricas, URLs ni archivos.
+Sos un tech lead SEO. Tu trabajo es SUBIR DE NIVEL el sitio en cada pasada: más demanda capturada, mejor on-page y más contactos.
+Los problemas YA están en HALLAZGOS. La estrategia de queries YA está en CRECIMIENTO POR QUERIES y en los buckets.
+No descubras otros problemas. No inventes métricas, queries, URLs ni archivos.
 Respondés en español neutro-chileno, directo.
 
 Salida JSON:
-- resumenSimple: 3 a 6 frases, sin jerga (nada de CTR, LCP, indexación). Qué se va a mejorar y por qué le importa al negocio.
-- cambios: máx 12, agrupados por archivo cuando haya path. Uno o más hallazgos por cambio. url y archivo solo si aparecen en los datos; si no, "".
-- cursorPrompt: prompt para Cursor Agent, en este orden:
-  1) Contexto del sitio y objetivo
-  2) Si hay bloque CORREGIR AHORA, ese es el primer grupo de cambios: una URL pública por cambio, quitar noindex, corregir canonical o pedir indexación. No postergar. No indexes login, gracias, admin, carrito ni preview.
-  3) El resto, ordenado por archivo, citando el id/kind del hallazgo
-  4) Criterios de aceptación comprobables
-  5) Reglas: no inventar archivos ni rutas; no tocar secretos; preguntar si falta un path
-  6) Si no hay key events, una sección Medición (click_whatsapp, phone_click, generate_lead)
+- resumenSimple: 3 a 6 frases, sin jerga (nada de CTR, LCP, indexación). Qué nivel se gana (tráfico / autoridad de página / contactos) y por qué le importa al negocio.
+- cambios: máx 12, en orden de ejecución. Mezclá hallazgos técnicos con acciones de keywords cuando apunten a la misma URL. url y archivo solo si aparecen en los datos; si no, "".
+- cursorPrompt: prompt para Cursor Agent orientado a crecimiento, en este orden:
+  1) Contexto del sitio + objetivo de nivel (qué mejora esta pasada)
+  2) Si hay bloque CORREGIR AHORA: indexación pública primero (una URL por cambio). No postergar. No indexes login, gracias, admin, carrito ni preview.
+  3) Crecimiento por queries: implementar las ACCIONES DE CRECIMIENTO (title/meta, ampliar contenido, enlazado, canibalización, contenido nuevo). Citá queries textuales del bloque. Amarrá cada acción a un archivo del repo si hay path.
+  4) Resto de hallazgos (on-page, velocidad, conversión), ordenados por archivo, citando kind/id
+  5) Criterios de aceptación comprobables (qué debe verse en la URL o en Search Console después)
+  6) Reglas: no inventar archivos, rutas ni keywords; no tocar secretos; preguntar si falta un path
+  7) Si no hay key events, sección Medición (click_whatsapp, phone_click, generate_lead)
 
-Cubrí todos los hallazgos de severidad 3 y 2. Los de severidad 1 pueden ir al final o agrupados.
+Cubrí severidad 3 y 2 de hallazgos, y todas las acciones de keywords de impacto alto/medio.
+Cada pasada debe dejar el sitio en un nivel más alto que la anterior: priorizá quick wins de demanda + correcciones que desbloquean indexación.
 TXT;
 
     $payload = [
@@ -872,7 +900,9 @@ TXT;
         ],
     ];
 
-    @set_time_limit(SEO_AUDIT_AI_TIMEOUT + 25);
+    // Si acabamos de regenerar Keywords IA, sumamos su timeout al presupuesto.
+    $budget = SEO_AUDIT_AI_TIMEOUT + 25 + (!empty($kwPack['generated']) ? GSC_KW_AI_TIMEOUT + 10 : 0);
+    @set_time_limit($budget);
     $res = ersGeminiHttp(ersGeminiUrl($cfg), $payload, SEO_AUDIT_AI_TIMEOUT);
     $text = '';
     foreach ($res['candidates'][0]['content']['parts'] ?? [] as $part) {
@@ -888,10 +918,14 @@ TXT;
 
     $insights = seoAuditSanitizeCursor($raw, $host, $urls, $repo['paths'] ?? []);
     $closed = "\n\n## Hallazgos detectados (lista cerrada, no omitir)\n" . findingsCursorBlock($findings);
+    $closed .= "\n\n## Crecimiento por queries (lista cerrada, no omitir)\n" . gscKeywordsGrowthBlock($kwAi);
     if (empty($dossier['sources']['keyEvents'])) {
         $closed = seoAuditMeasurementNote() . $closed;
     }
-    $insights['cursorPrompt'] = ersClip(trim((string) ($insights['cursorPrompt'] ?? '') . $closed), 24000);
+    $insights['cursorPrompt'] = ersClip(trim((string) ($insights['cursorPrompt'] ?? '') . $closed), 28000);
+    if ($hasKwAi) {
+        $insights['keywords'] = $kwAi['insights'];
+    }
     $out = [
         'ok' => true,
         'cached' => false,
@@ -906,10 +940,21 @@ TXT;
             'domComplete' => (bool) ($domProgress['complete'] ?? false),
             'repo' => ($repo['slug'] ?? '') !== '',
             'repoSlug' => (string) ($repo['slug'] ?? ''),
-            'keywords' => !empty($dossier['sources']['keywords']),
-            'sources' => $dossier['sources'] ?? [],
+            'keywords' => $kw !== [],
+            'keywordsAi' => $hasKwAi,
+            'sources' => array_merge(
+                is_array($dossier['sources'] ?? null) ? $dossier['sources'] : [],
+                ['keywords' => $kw !== [], 'keywordsAi' => $hasKwAi]
+            ),
             'findingCounts' => findingsCounts($findings),
         ],
+        'keywordsAi' => $hasKwAi ? [
+            'model' => (string) ($kwAi['model'] ?? ''),
+            'generatedAt' => (int) ($kwAi['generatedAt'] ?? 0),
+            'basedOn' => (int) ($kwAi['basedOn'] ?? 0),
+            'stale' => false,
+            'insights' => $kwAi['insights'],
+        ] : null,
         'insights' => $insights,
         'version' => SEO_AUDIT_VERSION,
     ];
@@ -936,16 +981,27 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
     $cursor = gscReadJson(seoAuditCursorFile($dataDir, $host), []);
     $hasCursor = ($cursor['host'] ?? '') === $host && is_array($cursor['insights'] ?? null);
 
-    $kw = gscReadJson(gscKeywordCacheFile($dataDir, $host), []);
+    $kw = gscKeywordsCached($dataDir, $host);
+    $kwAi = $kw !== []
+        ? gscKeywordAiFor($dataDir, $host, (int) ($kw['fetchedAt'] ?? 0))
+        : null;
     $dossier = dossierRead($dataDir, $host);
     $findings = !empty($dossier['ok']) ? findingsDetect($dossier) : [];
-    $fingerprint = seoAuditFingerprint($dossier);
+    $fingerprint = seoAuditFingerprint($dossier, seoAuditKwAiSig($kwAi));
 
     if ($hasCursor) {
-        $cursor['stale'] = ($cursor['fingerprint'] ?? '') !== $fingerprint;
+        $cursor['stale'] = ($cursor['fingerprint'] ?? '') !== $fingerprint
+            || ($cursor['version'] ?? '') !== SEO_AUDIT_VERSION;
     }
 
     $gh = seoAuditLoadGithubConfig();
+    $coverage = is_array($dossier['sources'] ?? null) ? $dossier['sources'] : [
+        'gsc' => false, 'ga4' => false, 'keyEvents' => false, 'psi' => false, 'dom' => false, 'repo' => false, 'keywords' => false,
+    ];
+    $coverage['keywords'] = $kw !== [];
+    $coverage['keywordsAi'] = is_array($kwAi['insights'] ?? null)
+        || is_array($cursor['keywordsAi']['insights'] ?? null)
+        || is_array($cursor['insights']['keywords'] ?? null);
 
     return [
         'ok' => true,
@@ -970,10 +1026,8 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
             'pathCount' => (int) ($repo['pathCount'] ?? 0),
             'error' => '',
         ],
-        'keywordsReady' => isset($kw['fetchedAt']),
-        'coverage' => is_array($dossier['sources'] ?? null) ? $dossier['sources'] : [
-            'gsc' => false, 'ga4' => false, 'keyEvents' => false, 'psi' => false, 'dom' => false, 'repo' => false, 'keywords' => false,
-        ],
+        'keywordsReady' => $kw !== [],
+        'coverage' => $coverage,
         'gaMessage' => (string) ($dossier['gaMeta']['message'] ?? ''),
         'findingCounts' => findingsCounts($findings),
         'audit' => $hasCursor ? [
@@ -982,6 +1036,7 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
             'generatedAt' => (int) ($cursor['generatedAt'] ?? 0),
             'model' => (string) ($cursor['model'] ?? ''),
             'insights' => $cursor['insights'],
+            'keywordsAi' => $cursor['keywordsAi'] ?? null,
             'coverage' => $cursor['coverage'] ?? null,
         ] : [
             'ready' => false,
@@ -989,6 +1044,7 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
             'generatedAt' => 0,
             'model' => '',
             'insights' => null,
+            'keywordsAi' => null,
             'coverage' => null,
         ],
         'canGenerate' => $domProgress['done'] > 0 && $hasSite,

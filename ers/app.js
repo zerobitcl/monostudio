@@ -2947,7 +2947,8 @@ class AppController {
     const ageH = kw.fetchedAt ? (Date.now() / 1000 - kw.fetchedAt) / 3600 : null;
     const age = ageH == null ? "" : ageH < 1 ? " · recién consultado" : ` · caché ${Math.round(ageH)}h`;
     this.dom.kwMeta.textContent =
-      `${GscModule.fmt(summary.queries)} queries · ${kw.range?.start} → ${kw.range?.end}${loading ? " · actualizando…" : age}`;
+      `${GscModule.fmt(summary.queries)} queries · ${kw.range?.start} → ${kw.range?.end}${loading ? " · actualizando…" : age}`
+      + " · la estrategia entra en el Plan de crecimiento";
 
     const stats = [
       { value: `+${GscModule.fmt(summary.potentialClicks)}`, label: "clics/mes recuperables", tone: "accent" },
@@ -3141,10 +3142,10 @@ class AppController {
     btn.textContent = this.kwAnalyzing
       ? "Analizando…"
       : !insights
-        ? "Analizar con IA"
+        ? "Solo keywords IA"
         : ai.stale
-          ? "Actualizar análisis"
-          : "Rehacer análisis";
+          ? "Actualizar keywords IA"
+          : "Rehacer keywords IA";
 
     const box = this.dom.kwAi;
     box.innerHTML = "";
@@ -3335,13 +3336,15 @@ class AppController {
       }
     }
     this.dom.cursorAuditStatus.textContent = parts.join(" · ");
-    const coverage = status?.coverage || {};
+    const coverage = status?.coverage || audit.coverage?.sources || {};
     const sourceLabels = [
       ["gsc", "Search Console"],
       ["ga4", "Analytics"],
       ["psi", "PageSpeed"],
       ["dom", "HTML"],
       ["repo", "Repo"],
+      ["keywords", "Keywords"],
+      ["keywordsAi", "Keywords IA"],
     ];
     const coverageEl = this.dom.cursorAuditCoverage;
     if (coverageEl) {
@@ -3350,7 +3353,7 @@ class AppController {
     if (!coverageEl.hidden) {
       sourceLabels.forEach(([key, label]) => {
         const chip = document.createElement("span");
-        const on = Boolean(coverage[key]);
+        const on = Boolean(coverage[key] || (key === "keywordsAi" && (audit.keywordsAi?.insights || audit.insights?.keywords)));
         chip.className = on ? "is-on" : "is-off";
         chip.textContent = `${on ? "✓" : "○"} ${label}`;
         coverageEl.appendChild(chip);
@@ -3365,10 +3368,11 @@ class AppController {
     }
     const counts = status?.findingCounts || {};
     const countEl = this.dom.cursorAuditCounts;
+    const integralMeta = repo.configured
+      ? `Un plan integral para subir de nivel: Search Console, keywords, Analytics, velocidad, HTML y ${repo.slug || "el repo"}.`
+      : "Un plan integral para subir de nivel: Search Console, keywords, Analytics, velocidad y HTML. El repo se suma desde la ficha del cliente.";
     if (!countEl) {
-      this.dom.cursorAuditMeta.textContent = repo.configured
-        ? `Un solo análisis: Search Console, Analytics, velocidad, HTML y ${repo.slug || "el repo"}.`
-        : "Un solo análisis: Search Console, Analytics, velocidad y HTML. El repo se suma desde la ficha del cliente.";
+      this.dom.cursorAuditMeta.textContent = integralMeta;
     } else {
     const countLabels = [
       ["index", "Indexación"],
@@ -3385,9 +3389,7 @@ class AppController {
     countEl.textContent = countBits.length
       ? `${counts.total || countBits.length} hallazgos · ${countBits.join(" · ")}`
       : "";
-    this.dom.cursorAuditMeta.textContent = repo.configured
-      ? `Un solo análisis: Search Console, Analytics, velocidad, HTML y ${repo.slug || "el repo"}.`
-      : "Un solo análisis: Search Console, Analytics, velocidad y HTML. El repo se suma desde la ficha del cliente.";
+    this.dom.cursorAuditMeta.textContent = integralMeta;
     }
     if (Number(counts.index || 0) > 0) {
       this.dom.cursorAuditMeta.textContent += " La indexación de páginas públicas va primera. Login, gracias, admin y carrito no se tocan.";
@@ -3407,12 +3409,12 @@ class AppController {
           : "Empezar lotes";
     this.dom.btnAuditGenerate.disabled = !canGenerate && !(audit.ready && audit.stale);
     this.dom.btnAuditGenerate.textContent = this.auditBusy
-      ? "Generando…"
+      ? "Generando plan…"
       : audit.ready && !audit.stale
-        ? "Rehacer análisis"
+        ? "Rehacer plan"
         : audit.ready && audit.stale
-          ? "Actualizar análisis"
-          : "Generar análisis";
+          ? "Actualizar plan"
+          : "Generar plan";
 
     const insights = audit.insights;
     const result = this.dom.cursorAuditResult;
@@ -3552,16 +3554,38 @@ class AppController {
           generatedAt: data.generatedAt,
           model: data.model,
           insights: data.insights,
+          keywordsAi: data.keywordsAi || null,
           coverage: data.coverage,
         };
       }
       this.auditData.set(host, status);
-      this.showToast("Análisis integral listo");
+      // Sincroniza la lectura de keywords en el panel (ya no hace falta el botón aparte).
+      const kwAi = data.keywordsAi || (data.insights?.keywords
+        ? { insights: data.insights.keywords, generatedAt: data.generatedAt, model: data.model, basedOn: 0, stale: false }
+        : null);
+      if (kwAi?.insights) {
+        const current = this.kwData.get(host);
+        if (current) {
+          current.ai = {
+            model: kwAi.model || data.model || "",
+            generatedAt: kwAi.generatedAt || data.generatedAt || 0,
+            basedOn: kwAi.basedOn || current.fetchedAt || 0,
+            stale: false,
+            insights: kwAi.insights,
+          };
+        }
+      }
+      this.showToast(kwAi?.insights
+        ? "Plan de crecimiento listo · keywords incluidas"
+        : "Plan de crecimiento listo");
     } catch (err) {
-      this.showToast(err.message || "No se pudo generar el análisis", 4500);
+      this.showToast(err.message || "No se pudo generar el plan", 4500);
     } finally {
       this.auditBusy = false;
-      if (this.module === "seo" && host === this.seoHost) this.renderCursorAudit();
+      if (this.module === "seo" && host === this.seoHost) {
+        this.renderCursorAudit();
+        this.renderKeywords();
+      }
     }
   }
 
@@ -3577,7 +3601,7 @@ class AppController {
       this.dom.cursorAuditPrompt.select();
       document.execCommand("copy");
     }
-    this.showToast("Prompt copiado · pegalo en Cursor");
+    this.showToast("Prompt de crecimiento copiado · pegalo en Cursor Agent");
   }
 
   async taskFromKeywordAction(index) {
