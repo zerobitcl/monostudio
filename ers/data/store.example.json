@@ -1,5 +1,7 @@
 {
   "clients": [],
   "requests": [],
-  "tasks": []
+  "tasks": [],
+  "dismissed": [],
+  "ignoredHosts": []
 }

@@ -230,9 +230,31 @@ function ersSanitizeDismissed($items): array
     return $out;
 }
 
+/** Hosts de Search Console ocultados a propósito: [{host, at}]. */
+function ersSanitizeIgnoredHosts($items): array
+{
+    if (!is_array($items)) {
+        return [];
+    }
+    $out = [];
+    $seen = [];
+    foreach (array_slice($items, -500) as $item) {
+        $host = is_array($item)
+            ? strtolower(ersClip(trim((string) ($item['host'] ?? '')), 253))
+            : '';
+        $host = preg_replace('/^www\./i', '', $host) ?? $host;
+        if ($host === '' || isset($seen[$host]) || !preg_match('/^[a-z0-9.-]+\.[a-z]{2,}$/i', $host)) {
+            continue;
+        }
+        $seen[$host] = true;
+        $out[] = ['host' => $host, 'at' => (int) ($item['at'] ?? 0)];
+    }
+    return $out;
+}
+
 function ersEmptyStore(): array
 {
-    return ['clients' => [], 'requests' => [], 'tasks' => [], 'dismissed' => []];
+    return ['clients' => [], 'requests' => [], 'tasks' => [], 'dismissed' => [], 'ignoredHosts' => []];
 }
 
 function ersReadStore(?string $path = null): array
@@ -257,6 +279,7 @@ function ersReadStore(?string $path = null): array
         'requests' => is_array($data['requests'] ?? null) ? $data['requests'] : [],
         'tasks' => ersSanitizeTasks($data['tasks'] ?? null),
         'dismissed' => ersSanitizeDismissed($data['dismissed'] ?? null),
+        'ignoredHosts' => ersSanitizeIgnoredHosts($data['ignoredHosts'] ?? null),
     ];
 }
 
@@ -274,6 +297,7 @@ function ersWriteStore(array $data, ?string $path = null): bool
             'requests' => $data['requests'] ?? [],
             'tasks' => $data['tasks'] ?? [],
             'dismissed' => $data['dismissed'] ?? [],
+            'ignoredHosts' => $data['ignoredHosts'] ?? [],
             'updatedAt' => gmdate('c'),
         ],
         JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE

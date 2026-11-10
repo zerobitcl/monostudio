@@ -1,8 +1,8 @@
 <?php
 /**
  * Mono Studio OS — API de persistencia
- * GET  → devuelve { clients, requests, tasks }
- * POST → guarda { clients, requests, tasks } en data/store.json
+ * GET  → devuelve { clients, requests, tasks, dismissed, ignoredHosts }
+ * POST → guarda { clients, requests, tasks, dismissed, ignoredHosts } en data/store.json
  */
 
 declare(strict_types=1);
@@ -33,14 +33,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
+    $prev = ersReadStore($dataFile);
     $store = [
         'clients' => ersSanitizeClients($input['clients'] ?? null),
         'requests' => is_array($input['requests'] ?? null) ? $input['requests'] : [],
         'tasks' => ersSanitizeTasks($input['tasks'] ?? null),
-        // Un cliente con app.js viejo en caché no manda este campo: no debe borrar lo descartado.
+        // Un cliente con app.js viejo en caché no manda estos campos: no debe borrar lo guardado.
         'dismissed' => array_key_exists('dismissed', $input)
             ? ersSanitizeDismissed($input['dismissed'])
-            : ersReadStore($dataFile)['dismissed'],
+            : $prev['dismissed'],
+        'ignoredHosts' => array_key_exists('ignoredHosts', $input)
+            ? ersSanitizeIgnoredHosts($input['ignoredHosts'])
+            : $prev['ignoredHosts'],
     ];
 
     if (!ersWriteStore($store, $dataFile)) {

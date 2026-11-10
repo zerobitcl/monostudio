@@ -110,6 +110,21 @@
           <button class="btn btn--neon" id="btnOpenClientModal" type="button">+ Cliente</button>
         </div>
 
+        <div class="unlinked" id="unlinkedPanel" hidden>
+          <div class="unlinked__head">
+            <div>
+              <h3>Sin vincular</h3>
+              <p class="unlinked__meta">Sitios que Search Console ya ve y todavía no son cliente.</p>
+            </div>
+            <span class="panel-head__count" id="unlinkedCount">0</span>
+          </div>
+          <ul class="unlinked__list" id="unlinkedList"></ul>
+          <p class="unlinked__ignored" id="ignoredHostsBar" hidden>
+            <span id="ignoredHostsCount"></span>
+            <button class="chip-btn chip-btn--subtle" id="btnRestoreIgnored" type="button">Restaurar</button>
+          </p>
+        </div>
+
         <div class="cash-chart" id="cashChartWrap" hidden>
           <div class="cash-chart__head">
             <h3>Flujo de cobros</h3>
@@ -167,6 +182,10 @@
         <button class="btn btn--ghost" id="btnGscRefresh" type="button">Actualizar</button>
       </div>
 
+      <label class="seo-picker-search" id="seoPickerSearchWrap" hidden>
+        <span class="visually-hidden">Buscar sitio</span>
+        <input type="search" id="seoPickerSearch" placeholder="Buscar por nombre o dominio…" autocomplete="off" />
+      </label>
       <div class="site-picker" id="seoClients" role="tablist" aria-label="Sitios de clientes"></div>
 
       <div class="period-toggle" id="seoPeriodToggle" role="tablist" aria-label="Rango de métricas" hidden>
@@ -581,6 +600,65 @@
     <iframe class="report-frame" id="reportFrame" hidden title="Informe del cliente"></iframe>
     <div class="seo-brief__body" id="seoBriefBody"></div>
   </div>
+
+  <!-- ============ PERFIL CLIENTE ============ -->
+  <div class="drawer-backdrop" id="clientDrawerBackdrop" hidden></div>
+  <aside class="client-drawer" id="clientDrawer" hidden aria-hidden="true" aria-labelledby="clientDrawerTitle">
+    <header class="client-drawer__head">
+      <div>
+        <p class="client-drawer__kicker">Perfil</p>
+        <h2 id="clientDrawerTitle">Cliente</h2>
+        <p class="client-drawer__meta" id="clientDrawerMeta"></p>
+      </div>
+      <div class="client-drawer__actions">
+        <button type="button" class="btn btn--ghost btn--sm" id="btnClientDrawerEdit">Editar</button>
+        <button type="button" class="modal__close" id="btnClientDrawerClose" aria-label="Cerrar">✕</button>
+      </div>
+    </header>
+
+    <div class="client-drawer__contact" id="clientDrawerContact" hidden>
+      <a class="btn btn--ghost btn--sm" id="clientDrawerWa" target="_blank" rel="noopener">WhatsApp</a>
+      <a class="btn btn--ghost btn--sm" id="clientDrawerCall">Llamar</a>
+    </div>
+
+    <div class="client-drawer__body" id="clientDrawerBody">
+      <section class="client-drawer__section">
+        <div class="client-drawer__section-head">
+          <h3>Cobro</h3>
+          <button type="button" class="btn btn--neon btn--sm" id="btnClientDrawerPaid">Marcar cobrado</button>
+        </div>
+        <p class="client-drawer__billing" id="clientDrawerBilling"></p>
+      </section>
+
+      <section class="client-drawer__section">
+        <div class="client-drawer__section-head">
+          <h3>SEO</h3>
+          <button type="button" class="btn btn--ghost btn--sm" id="btnClientDrawerSeo">Ver en SEO</button>
+        </div>
+        <div class="client-drawer__seo" id="clientDrawerSeo"></div>
+        <div class="spark spark--drawer" id="clientDrawerSpark" role="img" aria-label="Clics por día"></div>
+      </section>
+
+      <section class="client-drawer__section">
+        <h3>Trabajo</h3>
+        <ul class="client-drawer__work" id="clientDrawerWork"></ul>
+      </section>
+
+      <section class="client-drawer__section">
+        <h3>Cuaderno</h3>
+        <ul class="notebook__watches" id="clientDrawerWatches" hidden></ul>
+        <ol class="notebook__list" id="clientDrawerNotes"></ol>
+        <p class="notebook__empty" id="clientDrawerEmpty">Sin notas aún.</p>
+        <form class="notebook__composer" id="clientDrawerNoteForm">
+          <label class="field">
+            <span>Nueva nota</span>
+            <textarea name="body" id="clientDrawerNoteBody" required maxlength="4000" rows="3" placeholder="Acuerdos, pendientes…"></textarea>
+          </label>
+          <button type="submit" class="btn btn--neon">Guardar</button>
+        </form>
+      </section>
+    </div>
+  </aside>
 
   <!-- ============ COPILOTO ============ -->
   <div class="chat-drawer" id="chatDrawer" hidden aria-hidden="true">
