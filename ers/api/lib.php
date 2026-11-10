@@ -1561,21 +1561,45 @@ function ersLoadDailySecret(): string
     return '';
 }
 
+const ERS_GEMINI_DEFAULT_MODEL = 'gemini-3.8-flash';
+const ERS_GEMINI_DEFAULT_THINKING = 'medium';
+
 function ersLoadGeminiConfig(): array
 {
     $path = ersDataDir() . '/gemini.json';
+    $fallback = [
+        'apiKey' => '',
+        'model' => ERS_GEMINI_DEFAULT_MODEL,
+        'thinkingLevel' => ERS_GEMINI_DEFAULT_THINKING,
+    ];
     if (!file_exists($path)) {
-        return ['apiKey' => '', 'model' => 'gemini-3.6-flash'];
+        return $fallback;
     }
     $raw = file_get_contents($path);
     $data = is_string($raw) ? json_decode($raw, true) : null;
     if (!is_array($data)) {
-        return ['apiKey' => '', 'model' => 'gemini-3.6-flash'];
+        return $fallback;
+    }
+    $level = strtolower(trim((string) ($data['thinkingLevel'] ?? $data['thinking_level'] ?? ERS_GEMINI_DEFAULT_THINKING)));
+    if (!in_array($level, ['low', 'medium', 'high'], true)) {
+        $level = ERS_GEMINI_DEFAULT_THINKING;
     }
     return [
         'apiKey' => trim((string) ($data['apiKey'] ?? $data['api_key'] ?? '')),
-        'model' => trim((string) ($data['model'] ?? 'gemini-3.6-flash')) ?: 'gemini-3.6-flash',
+        'model' => trim((string) ($data['model'] ?? ERS_GEMINI_DEFAULT_MODEL)) ?: ERS_GEMINI_DEFAULT_MODEL,
+        'thinkingLevel' => $level,
     ];
+}
+
+/** thinkingConfig REST para Gemini 3.x (low | medium | high). */
+function ersGeminiThinkingConfig(?array $cfg = null, ?string $level = null): array
+{
+    $cfg = $cfg ?? ersLoadGeminiConfig();
+    $value = strtolower(trim((string) ($level ?? $cfg['thinkingLevel'] ?? ERS_GEMINI_DEFAULT_THINKING)));
+    if (!in_array($value, ['low', 'medium', 'high'], true)) {
+        $value = ERS_GEMINI_DEFAULT_THINKING;
+    }
+    return ['thinkingConfig' => ['thinkingLevel' => $value]];
 }
 
 function ersGeminiUrl(array $cfg): string
@@ -1591,54 +1615,88 @@ function ersGeminiHttp(string $url, array $payload, int $timeout = 60): array
         throw new RuntimeException('No se pudo serializar el request a Gemini');
     }
 
-    if (function_exists('curl_init')) {
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_POST => true,
-            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
-            CURLOPT_POSTFIELDS => $body,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => $timeout,
+    $attempt = static function () use ($url, $body, $timeout): array {
+        if (function_exists('curl_init')) {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_POST => true,
+                CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+                CURLOPT_POSTFIELDS => $body,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => $timeout,
+            ]);
+            $raw = curl_exec($ch);
+            $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $err = curl_error($ch);
+            curl_close($ch);
+            if ($raw === false) {
+                return [
+                    'ok' => false,
+                    'retry' => true,
+                    'error' => 'Gemini: ' . ($err ?: 'sin respuesta'),
+                ];
+            }
+            $data = json_decode($raw, true);
+            if ($code >= 400) {
+                $msg = is_array($data) ? ($data['error']['message'] ?? $raw) : $raw;
+                $retry = in_array($code, [429, 500, 502, 503, 504], true);
+                return [
+                    'ok' => false,
+                    'retry' => $retry,
+                    'error' => 'Gemini HTTP ' . $code . ': ' . ersClip((string) $msg, 400),
+                ];
+            }
+            if (!is_array($data)) {
+                return ['ok' => false, 'retry' => false, 'error' => 'Respuesta Gemini inválida'];
+            }
+            return ['ok' => true, 'data' => $data];
+        }
+
+        $ctx = stream_context_create([
+            'http' => [
+                'method' => 'POST',
+                'header' => "Content-Type: application/json\r\n",
+                'content' => $body,
+                'timeout' => $timeout,
+                'ignore_errors' => true,
+            ],
         ]);
-        $raw = curl_exec($ch);
-        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $err = curl_error($ch);
-        curl_close($ch);
+        $raw = @file_get_contents($url, false, $ctx);
         if ($raw === false) {
-            throw new RuntimeException('Gemini: ' . ($err ?: 'sin respuesta'));
+            return ['ok' => false, 'retry' => true, 'error' => 'Gemini: sin respuesta'];
         }
         $data = json_decode($raw, true);
-        if ($code >= 400) {
-            $msg = is_array($data) ? ($data['error']['message'] ?? $raw) : $raw;
-            throw new RuntimeException('Gemini HTTP ' . $code . ': ' . ersClip((string) $msg, 400));
-        }
         if (!is_array($data)) {
-            throw new RuntimeException('Respuesta Gemini inválida');
+            return ['ok' => false, 'retry' => false, 'error' => 'Respuesta Gemini inválida'];
         }
-        return $data;
-    }
+        if (isset($data['error'])) {
+            $msg = (string) ($data['error']['message'] ?? 'error');
+            $code = (int) ($data['error']['code'] ?? 0);
+            $retry = in_array($code, [429, 500, 502, 503, 504], true)
+                || stripos($msg, 'overload') !== false
+                || stripos($msg, 'unavailable') !== false;
+            return [
+                'ok' => false,
+                'retry' => $retry,
+                'error' => 'Gemini: ' . ersClip($msg, 400),
+            ];
+        }
+        return ['ok' => true, 'data' => $data];
+    };
 
-    $ctx = stream_context_create([
-        'http' => [
-            'method' => 'POST',
-            'header' => "Content-Type: application/json\r\n",
-            'content' => $body,
-            'timeout' => $timeout,
-            'ignore_errors' => true,
-        ],
-    ]);
-    $raw = file_get_contents($url, false, $ctx);
-    if ($raw === false) {
-        throw new RuntimeException('Gemini: sin respuesta');
+    $first = $attempt();
+    if ($first['ok']) {
+        return $first['data'];
     }
-    $data = json_decode($raw, true);
-    if (!is_array($data)) {
-        throw new RuntimeException('Respuesta Gemini inválida');
+    if (!empty($first['retry'])) {
+        usleep(1500000);
+        $second = $attempt();
+        if ($second['ok']) {
+            return $second['data'];
+        }
+        throw new RuntimeException((string) ($second['error'] ?? $first['error']));
     }
-    if (isset($data['error'])) {
-        throw new RuntimeException('Gemini: ' . ersClip((string) ($data['error']['message'] ?? 'error'), 400));
-    }
-    return $data;
+    throw new RuntimeException((string) $first['error']);
 }
 
 /**

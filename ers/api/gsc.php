@@ -2049,12 +2049,12 @@ TXT;
     $payload = [
         'systemInstruction' => ['parts' => [['text' => $system]]],
         'contents' => [['role' => 'user', 'parts' => [['text' => gscKeywordsAiPrompt($kw)]]]],
-        'generationConfig' => [
+        'generationConfig' => array_merge([
             'temperature' => 0.35,
             'maxOutputTokens' => 8192,
             'responseMimeType' => 'application/json',
             'responseSchema' => gscKeywordsAiSchema(),
-        ],
+        ], ersGeminiThinkingConfig($cfg)),
     ];
 
     $res = ersGeminiHttp(ersGeminiUrl($cfg), $payload, GSC_KW_AI_TIMEOUT);

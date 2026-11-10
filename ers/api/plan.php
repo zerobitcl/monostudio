@@ -147,7 +147,7 @@ $payload = [
         'role' => 'user',
         'parts' => [['text' => ersClip($text, 12000)]],
     ]],
-    'generationConfig' => [
+    'generationConfig' => array_merge([
         'temperature' => 0.2,
         // Holgado: los modelos con razonamiento consumen tokens antes del JSON.
         'maxOutputTokens' => 8192,
@@ -162,7 +162,7 @@ $payload = [
             'required' => ['summary', 'tasks'],
             'propertyOrdering' => ['summary', 'question', 'tasks'],
         ],
-    ],
+    ], ersGeminiThinkingConfig($cfg)),
 ];
 
 try {

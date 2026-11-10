@@ -539,97 +539,6 @@ function seoAuditRunRepoScan(string $dataDir, string $host, string $repoRaw, boo
     return $payload;
 }
 
-function seoAuditDomLines(array $domCache, array $urls): string
-{
-    $lines = ['## HTML EN VIVO (title | h1 | meta | canonical | robots | status)'];
-    $pages = $domCache['pages'] ?? [];
-    foreach ($urls as $url) {
-        $row = $pages[$url] ?? null;
-        $path = parse_url($url, PHP_URL_PATH) ?: '/';
-        if (!is_array($row)) {
-            $lines[] = $path . ' | (sin scrapear)';
-            continue;
-        }
-        $status = (int) ($row['status'] ?? 0);
-        $flag = !empty($row['ok']) ? 'ok' : ('fail:' . ($row['error'] ?? $status));
-        $lines[] = implode(' | ', [
-            $path,
-            ersClip((string) ($row['title'] ?? ''), 90),
-            ersClip((string) ($row['h1'] ?? ''), 80),
-            ersClip((string) ($row['meta'] ?? ''), 100),
-            ersClip((string) ($row['canonical'] ?? ''), 80),
-            ersClip((string) ($row['robots'] ?? ''), 40),
-            $flag,
-        ]);
-    }
-    return implode("\n", $lines);
-}
-
-function seoAuditRepoLines(array $repo): string
-{
-    if (($repo['slug'] ?? '') === '') {
-        return "## REPO\nSin acceso al código. El prompt debe indicar cambios a aplicar en el proyecto local del operador.";
-    }
-    $lines = [
-        '## REPO GITHUB: ' . ($repo['slug'] ?? ''),
-        'Branch: ' . ($repo['branch'] ?? 'main') . ' · archivos SEO leídos: ' . (int) ($repo['fileCount'] ?? 0),
-        '',
-        '### Paths relevantes',
-    ];
-    foreach (array_slice($repo['paths'] ?? [], 0, 120) as $path) {
-        $lines[] = '- ' . $path;
-    }
-    $lines[] = '';
-    $lines[] = '### Contenido (recortes)';
-    foreach ($repo['files'] ?? [] as $file) {
-        $lines[] = '';
-        $lines[] = '#### ' . ($file['path'] ?? '');
-        $lines[] = '```';
-        $lines[] = (string) ($file['content'] ?? '');
-        $lines[] = '```';
-    }
-    return implode("\n", $lines);
-}
-
-function seoAuditSiteDigest(array $site): string
-{
-    $inv = $site['inventory'] ?? [];
-    $analysis = $site['analysis'] ?? [];
-    $lines = [
-        '## INVENTARIO / INDEXACIÓN',
-        'Páginas: ' . (int) ($inv['total'] ?? count($site['pages'] ?? [])),
-        'Indexadas: ' . (int) ($inv['indexed'] ?? 0),
-        'No indexadas: ' . (int) ($inv['notIndexed'] ?? 0),
-        'Bloqueadas: ' . (int) ($inv['blocked'] ?? 0),
-    ];
-    if (is_array($analysis) && $analysis !== []) {
-        $lines[] = 'Análisis: ' . ersClip(json_encode($analysis, JSON_UNESCAPED_UNICODE) ?: '', 1200);
-    }
-    $signals = array_slice($site['signals'] ?? [], 0, 12);
-    if ($signals !== []) {
-        $lines[] = '';
-        $lines[] = '## SEÑALES';
-        foreach ($signals as $s) {
-            $lines[] = '- [' . ($s['severity'] ?? '') . '] ' . ($s['title'] ?? $s['kind'] ?? '')
-                . ' · ' . ersClip((string) ($s['detail'] ?? ''), 160)
-                . (($s['url'] ?? '') !== '' ? ' · ' . (parse_url((string) $s['url'], PHP_URL_PATH) ?: $s['url']) : '');
-        }
-    }
-    $lines[] = '';
-    $lines[] = '## TOP PÁGINAS (clics / imp / ctr / pos)';
-    $pages = $site['pages'] ?? [];
-    usort($pages, static fn ($a, $b) => ((int) ($b['clicks'] ?? 0) <=> (int) ($a['clicks'] ?? 0)));
-    foreach (array_slice($pages, 0, 25) as $p) {
-        $path = parse_url((string) ($p['url'] ?? ''), PHP_URL_PATH) ?: '/';
-        $lines[] = $path . ' | ' . (int) ($p['clicks'] ?? 0) . ' clics | '
-            . (int) ($p['impressions'] ?? 0) . ' imp | ctr '
-            . round(((float) ($p['ctr'] ?? 0)) * 100, 1) . '% | pos '
-            . round((float) ($p['position'] ?? 0), 1)
-            . (!empty($p['indexStatus']['verdict']) ? ' | índice:' . $p['indexStatus']['verdict'] : '');
-    }
-    return implode("\n", $lines);
-}
-
 function seoAuditCursorSchema(): array
 {
     $str = ['type' => 'string'];
@@ -795,6 +704,7 @@ TXT;
 
 function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): array
 {
+    $started = microtime(true);
     $cfg = ersLoadGeminiConfig();
     if ($cfg['apiKey'] === '') {
         throw new RuntimeException('Falta configurar Gemini (ers/data/gemini.json).');
@@ -806,7 +716,8 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
     }
     $urls = seoAuditInventoryUrls($site, $host);
     $sa = gscLoadServiceAccount($dataDir, $dataDir . '/gsc-service-account.json');
-    $dossier = dossierBuild($dataDir, $sa, $host, $fresh, true);
+    // $fresh regenera solo la redacción Gemini. PSI/GA respetan su TTL (Actualizar SEO los fuerza).
+    $dossier = dossierBuild($dataDir, $sa, $host, false, true);
     if (empty($dossier['ok'])) {
         throw new RuntimeException('Primero actualizá el SEO del sitio.');
     }
@@ -815,9 +726,37 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
         throw new RuntimeException('Todavía no hay HTML scrapeado. Pulsá “Continuar lote” al menos una vez.');
     }
 
-    // Keywords IA: se regenera solo si falta o está desfasada (no en cada "Rehacer" del plan).
-    // Así el plan integral no se come el timeout del proxy con dos Gemini innecesarios.
-    $kwPack = gscEnsureKeywordsAi($dataDir, $host, false);
+    // Keywords IA: reusa caché; si el dossier ya consumió mucho tiempo, no regeneres.
+    $kwNote = '';
+    $kwPack = ['kw' => [], 'ai' => null, 'generated' => false];
+    $elapsedBeforeKw = microtime(true) - $started;
+    try {
+        if ($elapsedBeforeKw > 40) {
+            $kwCached = gscKeywordsCached($dataDir, $host);
+            $kwPack = [
+                'kw' => $kwCached,
+                'ai' => $kwCached !== []
+                    ? gscKeywordAiFor($dataDir, $host, (int) ($kwCached['fetchedAt'] ?? 0))
+                    : null,
+                'generated' => false,
+            ];
+            if ($kwPack['ai'] === null) {
+                $kwNote = 'Keywords IA omitidas: el dossier ya tardó; reintentá el plan cuando haya caché.';
+            }
+        } else {
+            $kwPack = gscEnsureKeywordsAi($dataDir, $host, false);
+        }
+    } catch (Throwable $e) {
+        $kwCached = gscKeywordsCached($dataDir, $host);
+        $kwPack = [
+            'kw' => $kwCached,
+            'ai' => $kwCached !== []
+                ? gscKeywordAiFor($dataDir, $host, (int) ($kwCached['fetchedAt'] ?? 0))
+                : null,
+            'generated' => false,
+        ];
+        $kwNote = 'Keywords IA no disponibles: ' . ersClip($e->getMessage(), 160);
+    }
     $kw = $kwPack['kw'] !== [] ? $kwPack['kw'] : (is_array($dossier['keywords'] ?? null) ? $dossier['keywords'] : []);
     $kwAi = $kwPack['ai'];
     $kwAiSig = seoAuditKwAiSig($kwAi);
@@ -866,6 +805,11 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
         '## PATHS DEL REPO',
         $paths === [] ? 'Sin repo. El prompt debe decir que se aplique en el proyecto local abierto en Cursor.' : implode("\n", array_map(static fn ($p) => '- ' . $p, $paths)),
     ];
+    if ($kwNote !== '') {
+        $parts[] = '';
+        $parts[] = '## NOTA OPERATIVA';
+        $parts[] = $kwNote;
+    }
 
     $system = <<<TXT
 Sos un tech lead SEO. Tu trabajo es SUBIR DE NIVEL el sitio en cada pasada: más demanda capturada, mejor on-page y más contactos.
@@ -892,12 +836,12 @@ TXT;
     $payload = [
         'systemInstruction' => ['parts' => [['text' => $system]]],
         'contents' => [['role' => 'user', 'parts' => [['text' => implode("\n", $parts)]]]],
-        'generationConfig' => [
+        'generationConfig' => array_merge([
             'temperature' => 0.3,
             'maxOutputTokens' => 12288,
             'responseMimeType' => 'application/json',
             'responseSchema' => seoAuditCursorSchema(),
-        ],
+        ], ersGeminiThinkingConfig($cfg)),
     ];
 
     // Si acabamos de regenerar Keywords IA, sumamos su timeout al presupuesto.
@@ -912,8 +856,10 @@ TXT;
     }
     $text = trim((string) preg_replace('#^```(?:json)?|```$#m', '', $text));
     $raw = json_decode($text, true);
+    $narrative = 'gemini';
     if (!is_array($raw)) {
         $raw = seoAuditFallbackRaw($findings);
+        $narrative = 'fallback';
     }
 
     $insights = seoAuditSanitizeCursor($raw, $host, $urls, $repo['paths'] ?? []);
@@ -932,6 +878,8 @@ TXT;
         'stale' => false,
         'host' => $host,
         'model' => $cfg['model'],
+        'thinkingLevel' => $cfg['thinkingLevel'] ?? ERS_GEMINI_DEFAULT_THINKING,
+        'narrative' => $narrative,
         'generatedAt' => time(),
         'fingerprint' => $fingerprint,
         'coverage' => [
@@ -942,6 +890,7 @@ TXT;
             'repoSlug' => (string) ($repo['slug'] ?? ''),
             'keywords' => $kw !== [],
             'keywordsAi' => $hasKwAi,
+            'keywordsAiNote' => $kwNote,
             'sources' => array_merge(
                 is_array($dossier['sources'] ?? null) ? $dossier['sources'] : [],
                 ['keywords' => $kw !== [], 'keywordsAi' => $hasKwAi]
@@ -1035,6 +984,8 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
             'stale' => (bool) ($cursor['stale'] ?? false),
             'generatedAt' => (int) ($cursor['generatedAt'] ?? 0),
             'model' => (string) ($cursor['model'] ?? ''),
+            'thinkingLevel' => (string) ($cursor['thinkingLevel'] ?? ''),
+            'narrative' => (string) ($cursor['narrative'] ?? 'gemini'),
             'insights' => $cursor['insights'],
             'keywordsAi' => $cursor['keywordsAi'] ?? null,
             'coverage' => $cursor['coverage'] ?? null,
@@ -1043,6 +994,8 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
             'stale' => false,
             'generatedAt' => 0,
             'model' => '',
+            'thinkingLevel' => '',
+            'narrative' => '',
             'insights' => null,
             'keywordsAi' => null,
             'coverage' => null,

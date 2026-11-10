@@ -426,16 +426,21 @@ class GscModule {
 class SeoAuditModule {
   static API = "./api/seo-audit.php";
 
-  static #gateway(status) {
+  static #gateway(status, context = "batch") {
     if ([502, 503, 504].includes(status)) {
+      if (context === "plan") {
+        return "Gemini o el servidor tardaron demasiado. Reintentá el plan: lo ya calculado (HTML, keywords, métricas) queda en caché.";
+      }
       return "El servidor cortó por tiempo. Volvé a pulsar Continuar lote: lo ya leído queda guardado.";
     }
-    return `La auditoría respondió ${status}`;
+    return context === "plan"
+      ? `El plan respondió ${status}`
+      : `La auditoría respondió ${status}`;
   }
 
-  static async #read(res) {
+  static async #read(res, context = "batch") {
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || SeoAuditModule.#gateway(res.status));
+    if (!res.ok) throw new Error(data.error || SeoAuditModule.#gateway(res.status, context));
     return data;
   }
 
@@ -453,7 +458,7 @@ class SeoAuditModule {
       cache: "no-store",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ host, fresh }),
-    }).then((res) => SeoAuditModule.#read(res));
+    }).then((res) => SeoAuditModule.#read(res, "batch"));
   }
 
   static repoScan(host, repo, fresh = false) {
@@ -462,7 +467,7 @@ class SeoAuditModule {
       cache: "no-store",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ host, repo, fresh }),
-    }).then((res) => SeoAuditModule.#read(res));
+    }).then((res) => SeoAuditModule.#read(res, "batch"));
   }
 
   static cursorAudit(host, fresh = false) {
@@ -471,7 +476,7 @@ class SeoAuditModule {
       cache: "no-store",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ host, fresh }),
-    }).then((res) => SeoAuditModule.#read(res));
+    }).then((res) => SeoAuditModule.#read(res, "plan"));
   }
 }
 
@@ -3427,7 +3432,23 @@ class AppController {
     }
 
     result.hidden = false;
-    this.dom.cursorAuditSummary.textContent = insights.resumenSimple || "";
+    const narrative = audit.narrative || "";
+    const modelBits = [audit.model, audit.thinkingLevel].filter(Boolean).join(" · ");
+    let summaryText = insights.resumenSimple || "";
+    if (narrative === "fallback") {
+      summaryText = `${summaryText}${summaryText ? "\n\n" : ""}(Redacción base: Gemini no devolvió JSON usable; los cambios salen de los hallazgos.)`;
+      this.dom.cursorAuditSummary.title = "Fallback sin redacción Gemini";
+    } else if (modelBits) {
+      this.dom.cursorAuditSummary.title = `Modelo: ${modelBits}`;
+      this.dom.cursorAuditSummary.dataset.model = modelBits;
+    } else {
+      this.dom.cursorAuditSummary.removeAttribute("title");
+      delete this.dom.cursorAuditSummary.dataset.model;
+    }
+    this.dom.cursorAuditSummary.textContent = summaryText;
+    if (coverage?.keywordsAiNote) {
+      this.dom.cursorAuditMeta.textContent += ` ${coverage.keywordsAiNote}`;
+    }
     this.dom.cursorAuditPrompt.value = insights.cursorPrompt || "";
     this.dom.btnAuditCopy.disabled = !insights.cursorPrompt;
 
@@ -3553,6 +3574,8 @@ class AppController {
           stale: false,
           generatedAt: data.generatedAt,
           model: data.model,
+          thinkingLevel: data.thinkingLevel || "",
+          narrative: data.narrative || "gemini",
           insights: data.insights,
           keywordsAi: data.keywordsAi || null,
           coverage: data.coverage,
@@ -3575,9 +3598,13 @@ class AppController {
           };
         }
       }
-      this.showToast(kwAi?.insights
-        ? "Plan de crecimiento listo · keywords incluidas"
-        : "Plan de crecimiento listo");
+      if (data.narrative === "fallback") {
+        this.showToast("Plan listo con redacción base (Gemini no devolvió JSON)", 5200);
+      } else if (kwAi?.insights) {
+        this.showToast("Plan de crecimiento listo · keywords incluidas");
+      } else {
+        this.showToast("Plan de crecimiento listo");
+      }
     } catch (err) {
       this.showToast(err.message || "No se pudo generar el plan", 4500);
     } finally {

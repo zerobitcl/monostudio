@@ -562,7 +562,8 @@ function reportNarrative(string $dataDir, string $host, string $lang, array $bri
                 'role' => 'user',
                 'parts' => [['text' => json_encode($brief, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}']],
             ]],
-            'generationConfig' => [
+            // Informe cliente: thinking low para caber en el timeout corto del proxy.
+            'generationConfig' => array_merge([
                 'temperature' => 0.3,
                 'maxOutputTokens' => 1800,
                 'responseMimeType' => 'application/json',
@@ -591,7 +592,7 @@ function reportNarrative(string $dataDir, string $host, string $lang, array $bri
                     ],
                     'required' => ['verdict', 'findings', 'moves'],
                 ],
-            ],
+            ], ersGeminiThinkingConfig($cfg, 'low')),
         ];
         $res = ersGeminiHttp(ersGeminiUrl($cfg), $payload, 28);
         $text = '';

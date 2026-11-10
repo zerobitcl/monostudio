@@ -20,7 +20,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $cfg = ersLoadGeminiConfig();
     echo json_encode([
         'configured' => ($cfg['apiKey'] ?? '') !== '',
-        'model' => $cfg['model'] ?? 'gemini-3.6-flash',
+        'model' => $cfg['model'] ?? ERS_GEMINI_DEFAULT_MODEL,
+        'thinkingLevel' => $cfg['thinkingLevel'] ?? ERS_GEMINI_DEFAULT_THINKING,
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -259,10 +260,10 @@ $payloadBase = [
     'toolConfig' => [
         'functionCallingConfig' => ['mode' => 'AUTO'],
     ],
-    'generationConfig' => [
+    'generationConfig' => array_merge([
         'temperature' => 0.3,
         'maxOutputTokens' => 2048,
-    ],
+    ], ersGeminiThinkingConfig($cfg)),
 ];
 
 $url = ersGeminiUrl($cfg);
