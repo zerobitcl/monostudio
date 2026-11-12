@@ -13,8 +13,9 @@ if (!defined('ERS_LIBRARY')) {
 
 require_once __DIR__ . '/gsc.php';
 require_once __DIR__ . '/lib.php';
+require_once __DIR__ . '/gbp.php';
 
-const DOSSIER_VERSION = '2026.11.05-integral';
+const DOSSIER_VERSION = '2026.11.12-gbp';
 const DOSSIER_GA_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly';
 const DOSSIER_GA_TTL = 21600;
 const DOSSIER_PSI_TTL = 604800;
@@ -224,11 +225,162 @@ function dossierCollectSchemaTypes(mixed $node, array &$out, int $depth = 0): vo
 }
 
 /**
+ * Extrae NAP / LocalBusiness del JSON-LD (teléfono, dirección, geo, sameAs, hasMap).
+ * Acumula en $nap por referencia; no inventa datos.
+ */
+function dossierCollectNapFromLd(mixed $node, array &$nap, int $depth = 0): void
+{
+    if ($depth > 10 || !is_array($node)) {
+        return;
+    }
+    // Array de nodos (@graph o lista).
+    $isList = function_exists('array_is_list')
+        ? array_is_list($node)
+        : ($node === [] || array_keys($node) === range(0, count($node) - 1));
+    if ($isList) {
+        foreach ($node as $child) {
+            dossierCollectNapFromLd($child, $nap, $depth + 1);
+        }
+        return;
+    }
+    if (isset($node['@graph']) && is_array($node['@graph'])) {
+        dossierCollectNapFromLd($node['@graph'], $nap, $depth + 1);
+    }
+
+    $types = [];
+    if (isset($node['@type'])) {
+        $raw = is_array($node['@type']) ? $node['@type'] : [$node['@type']];
+        foreach ($raw as $t) {
+            if (is_string($t) && $t !== '') {
+                $types[] = $t;
+            }
+        }
+    }
+    $localTypes = [
+        'LocalBusiness', 'Organization', 'ProfessionalService', 'Store', 'Restaurant',
+        'Dentist', 'Attorney', 'MedicalBusiness', 'HomeAndConstructionBusiness',
+        'LegalService', 'HealthAndBeautyBusiness', 'LodgingBusiness', 'FoodEstablishment',
+        'RealEstateAgent', 'TravelAgency', 'AutomotiveBusiness', 'SportsActivityLocation',
+    ];
+    $isLocal = $types === [] || count(array_intersect($types, $localTypes)) > 0;
+
+    if ($isLocal) {
+        foreach (['telephone', 'phone'] as $k) {
+            $tel = trim((string) ($node[$k] ?? ''));
+            if ($tel !== '') {
+                $nap['phones'][$tel] = true;
+            }
+        }
+        if (isset($node['address'])) {
+            $addr = $node['address'];
+            if (is_string($addr) && trim($addr) !== '') {
+                $nap['address'] = ersClip(trim($addr), 300);
+            } elseif (is_array($addr)) {
+                $parts = [];
+                foreach (['streetAddress', 'addressLocality', 'addressRegion', 'postalCode', 'addressCountry'] as $ak) {
+                    $v = trim((string) ($addr[$ak] ?? ''));
+                    if ($v !== '') {
+                        $parts[] = $v;
+                    }
+                }
+                if ($parts !== []) {
+                    $nap['address'] = ersClip(implode(', ', $parts), 300);
+                }
+                $locality = trim((string) ($addr['addressLocality'] ?? ''));
+                if ($locality !== '') {
+                    $nap['locality'] = ersClip($locality, 80);
+                }
+            }
+        }
+        if (isset($node['geo']) && is_array($node['geo'])) {
+            $lat = $node['geo']['latitude'] ?? null;
+            $lng = $node['geo']['longitude'] ?? null;
+            if (is_numeric($lat) && is_numeric($lng)) {
+                $nap['geo'] = ['lat' => (float) $lat, 'lng' => (float) $lng];
+            }
+        }
+        foreach (['hasMap', 'maps'] as $k) {
+            $map = trim((string) ($node[$k] ?? ''));
+            if ($map !== '' && (str_contains($map, 'google.com/maps') || str_contains($map, 'maps.app.goo.gl') || str_contains($map, 'goo.gl/maps'))) {
+                $nap['mapsUrls'][$map] = true;
+            }
+        }
+        if (isset($node['sameAs'])) {
+            $same = is_array($node['sameAs']) ? $node['sameAs'] : [$node['sameAs']];
+            foreach ($same as $url) {
+                $url = trim((string) $url);
+                if ($url === '') {
+                    continue;
+                }
+                $nap['sameAs'][$url] = true;
+                if (str_contains($url, 'google.com/maps') || str_contains($url, 'maps.app.goo.gl') || str_contains($url, 'goo.gl/maps')) {
+                    $nap['mapsUrls'][$url] = true;
+                }
+            }
+        }
+        $name = trim((string) ($node['name'] ?? ''));
+        if ($name !== '' && ($nap['name'] ?? '') === '') {
+            $nap['name'] = ersClip($name, 160);
+        }
+        foreach ($types as $t) {
+            if (in_array($t, $localTypes, true)) {
+                $nap['schemaTypes'][$t] = true;
+            }
+        }
+    }
+
+    foreach ($node as $key => $child) {
+        if ($key === '@context' || $key === '@type' || !is_array($child)) {
+            continue;
+        }
+        dossierCollectNapFromLd($child, $nap, $depth + 1);
+    }
+}
+
+function dossierEmptyNap(): array
+{
+    return [
+        'phones' => [],
+        'address' => '',
+        'locality' => '',
+        'geo' => null,
+        'mapsUrls' => [],
+        'sameAs' => [],
+        'name' => '',
+        'schemaTypes' => [],
+        'hasTelLink' => false,
+        'hasMapsLink' => false,
+    ];
+}
+
+function dossierFinalizeNap(array $nap): array
+{
+    $phones = array_keys(is_array($nap['phones'] ?? null) ? $nap['phones'] : []);
+    $maps = array_keys(is_array($nap['mapsUrls'] ?? null) ? $nap['mapsUrls'] : []);
+    $same = array_keys(is_array($nap['sameAs'] ?? null) ? $nap['sameAs'] : []);
+    $types = array_keys(is_array($nap['schemaTypes'] ?? null) ? $nap['schemaTypes'] : []);
+    return [
+        'phones' => array_values(array_slice($phones, 0, 8)),
+        'address' => (string) ($nap['address'] ?? ''),
+        'locality' => (string) ($nap['locality'] ?? ''),
+        'geo' => is_array($nap['geo'] ?? null) ? $nap['geo'] : null,
+        'mapsUrls' => array_values(array_slice($maps, 0, 5)),
+        'sameAs' => array_values(array_slice($same, 0, 12)),
+        'name' => (string) ($nap['name'] ?? ''),
+        'schemaTypes' => $types,
+        'hasTelLink' => !empty($nap['hasTelLink']),
+        'hasMapsLink' => !empty($nap['hasMapsLink']) || $maps !== [],
+        'hasLocalSchema' => $types !== [],
+    ];
+}
+
+/**
  * Scrape SEO. Los campos viejos (title, h1, meta, canonical) se mantienen
  * para no invalidar a ciegas el caché; h1Count marca la versión nueva.
  */
 function dossierFetchDom(string $url): array
 {
+    $emptyNap = dossierFinalizeNap(dossierEmptyNap());
     $empty = [
         'ok' => false,
         'status' => 0,
@@ -254,6 +406,7 @@ function dossierFetchDom(string $url): array
         'hasWhatsapp' => false,
         'hasForm' => false,
         'hasMailto' => false,
+        'nap' => $emptyNap,
         'error' => '',
         'fetchedAt' => time(),
     ];
@@ -354,11 +507,13 @@ function dossierFetchDom(string $url): array
     $h2Count = $h2Nodes ? $h2Nodes->length : 0;
 
     $schemas = [];
+    $napAcc = dossierEmptyNap();
     $ld = $xpath->query('//script[translate(@type,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="application/ld+json"]');
     if ($ld) {
         foreach ($ld as $script) {
             $json = json_decode((string) $script->textContent, true);
             dossierCollectSchemaTypes($json, $schemas);
+            dossierCollectNapFromLd($json, $napAcc);
         }
     }
 
@@ -387,11 +542,26 @@ function dossierFetchDom(string $url): array
         $low = strtolower($href);
         if (str_starts_with($low, 'tel:')) {
             $hasTel = true;
+            $napAcc['hasTelLink'] = true;
+            $tel = preg_replace('/^tel:/i', '', $href) ?? '';
+            $tel = trim(rawurldecode($tel));
+            if ($tel !== '') {
+                $napAcc['phones'][$tel] = true;
+            }
             continue;
         }
         if (str_starts_with($low, 'mailto:')) {
             $hasMailto = true;
             continue;
+        }
+        if (
+            str_contains($low, 'google.com/maps')
+            || str_contains($low, 'maps.app.goo.gl')
+            || str_contains($low, 'goo.gl/maps')
+            || str_contains($low, 'maps.google.')
+        ) {
+            $napAcc['hasMapsLink'] = true;
+            $napAcc['mapsUrls'][$href] = true;
         }
         if ($href === '' || str_starts_with($low, '#') || str_starts_with($low, 'javascript:')) {
             continue;
@@ -453,9 +623,79 @@ function dossierFetchDom(string $url): array
         'hasWhatsapp' => $hasWa,
         'hasForm' => $hasForm,
         'hasMailto' => $hasMailto,
+        'nap' => dossierFinalizeNap($napAcc),
         'error' => '',
         'fetchedAt' => time(),
     ];
+}
+
+/** Agrega NAP del sitio (home preferente) a partir del índice DOM. */
+function dossierSiteNap(array $domPages): array
+{
+    $merged = dossierEmptyNap();
+    $order = [];
+    if (isset($domPages['/']) && is_array($domPages['/'])) {
+        $order[] = '/';
+    }
+    foreach ($domPages as $path => $row) {
+        if ($path !== '/') {
+            $order[] = $path;
+        }
+    }
+    foreach ($order as $path) {
+        $row = $domPages[$path] ?? null;
+        if (!is_array($row) || empty($row['ok'])) {
+            continue;
+        }
+        $nap = is_array($row['nap'] ?? null) ? $row['nap'] : [];
+        foreach ($nap['phones'] ?? [] as $tel) {
+            $tel = trim((string) $tel);
+            if ($tel !== '') {
+                $merged['phones'][$tel] = true;
+            }
+        }
+        foreach ($nap['mapsUrls'] ?? [] as $url) {
+            $url = trim((string) $url);
+            if ($url !== '') {
+                $merged['mapsUrls'][$url] = true;
+            }
+        }
+        foreach ($nap['sameAs'] ?? [] as $url) {
+            $url = trim((string) $url);
+            if ($url !== '') {
+                $merged['sameAs'][$url] = true;
+            }
+        }
+        foreach ($nap['schemaTypes'] ?? [] as $type) {
+            $type = trim((string) $type);
+            if ($type !== '') {
+                $merged['schemaTypes'][$type] = true;
+            }
+        }
+        if (($merged['address'] ?? '') === '' && trim((string) ($nap['address'] ?? '')) !== '') {
+            $merged['address'] = (string) $nap['address'];
+        }
+        if (($merged['locality'] ?? '') === '' && trim((string) ($nap['locality'] ?? '')) !== '') {
+            $merged['locality'] = (string) $nap['locality'];
+        }
+        if (($merged['name'] ?? '') === '' && trim((string) ($nap['name'] ?? '')) !== '') {
+            $merged['name'] = (string) $nap['name'];
+        }
+        if (($merged['geo'] ?? null) === null && is_array($nap['geo'] ?? null)) {
+            $merged['geo'] = $nap['geo'];
+        }
+        if (!empty($nap['hasTelLink'])) {
+            $merged['hasTelLink'] = true;
+        }
+        if (!empty($nap['hasMapsLink'])) {
+            $merged['hasMapsLink'] = true;
+        }
+        // Solo scrapear NAP de home + contacto/servicios; basta con unas pocas páginas.
+        if (count($merged['phones']) >= 3 && ($merged['address'] ?? '') !== '') {
+            break;
+        }
+    }
+    return dossierFinalizeNap($merged);
 }
 
 function dossierDomIndex(string $dataDir, string $host): array
@@ -1145,6 +1385,12 @@ function dossierPack(string $dataDir, string $host): array
         }
     }
 
+    $siteNap = dossierSiteNap($dom['pages']);
+    // GBP solo desde caché en pack (sin red). dossierBuild refresca si allowFetch.
+    $gbp = function_exists('gbpPackForDossier')
+        ? gbpPackForDossier($dataDir, $host, false, false)
+        : ['ok' => false, 'linked' => false];
+
     return [
         'ok' => $hasGsc && $totals !== [],
         'host' => $host,
@@ -1185,6 +1431,8 @@ function dossierPack(string $dataDir, string $host): array
             'complete' => $dom['total'] > 0 && $dom['done'] >= $dom['total'],
             'updatedAt' => $dom['updatedAt'],
         ],
+        'siteNap' => $siteNap,
+        'gbp' => $gbp,
         'repo' => $repo,
         'tasks' => $tasks,
         'sources' => [
@@ -1195,6 +1443,7 @@ function dossierPack(string $dataDir, string $host): array
             'dom' => $dom['done'] > 0,
             'repo' => $repo['slug'] !== '',
             'keywords' => isset($kw['buckets']),
+            'gbp' => !empty($gbp['ok']),
         ],
     ];
 }
@@ -1207,6 +1456,7 @@ function dossierStamps(string $dataDir, string $host): array
     $psi = gscReadJson(dossierPsiFile($dataDir, $host), []);
     $dom = gscReadJson(dossierDomFile($dataDir, $host), []);
     $repo = gscReadJson(dossierRepoFile($dataDir, $host), []);
+    $gbp = function_exists('gbpReadCache') ? gbpReadCache($dataDir, $host) : [];
     $windows = dossierWindows($gsc);
     return [
         'v' => DOSSIER_VERSION,
@@ -1216,6 +1466,8 @@ function dossierStamps(string $dataDir, string $host): array
         'psi' => dossierPsiStamp(['pages' => $psi['pages'] ?? []]),
         'dom' => (int) ($dom['updatedAt'] ?? 0),
         'repo' => (int) ($repo['fetchedAt'] ?? 0),
+        'gbp' => (int) ($gbp['fetchedAt'] ?? 0),
+        'gbpId' => (string) ($gbp['placeId'] ?? $gbp['place']['placeId'] ?? ''),
         'tasks' => dossierTasksSig($host, $windows),
     ];
 }
@@ -1254,6 +1506,16 @@ function dossierBuild(string $dataDir, array $sa, string $host, bool $fresh = fa
             if ($psiKey !== '') {
                 try {
                     dossierPsi($dataDir, $host, $psiKey, $fresh, $gsc);
+                } catch (Throwable) {
+                }
+            }
+            // GBP: respeta TTL interno; fresh fuerza Place Details.
+            if (function_exists('gbpEnsure')) {
+                try {
+                    $prefs = dossierHostPrefs($dataDir, $host);
+                    if (gscPlaceId((string) ($prefs['placeId'] ?? '')) !== '') {
+                        gbpEnsure($dataDir, $host, $fresh);
+                    }
                 } catch (Throwable) {
                 }
             }

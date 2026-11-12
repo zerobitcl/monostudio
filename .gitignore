@@ -17,6 +17,7 @@ ers/data/github.json
 # Informe de cliente: PDF, PageSpeed y token de Analytics
 ers/data/api2pdf.json
 ers/data/psi.json
+ers/data/places.json
 ers/data/ga4-token.json
 ers/data/ga4-directory.json
 
@@ -33,3 +34,6 @@ ers/data/*-*.json
 !ers/data/gsc.example.json
 !ers/data/gemini.example.json
 !ers/data/github.example.json
+!ers/data/places.example.json
+!ers/data/psi.example.json
+!ers/data/api2pdf.example.json

@@ -11,7 +11,7 @@ if (!defined('ERS_LIBRARY')) {
     exit;
 }
 
-const REPORT_HTML_VERSION = '2026.11.05-client2';
+const REPORT_HTML_VERSION = '2026.11.12-studio-gbp';
 
 function reportExtra(string $lang): array
 {
@@ -64,6 +64,13 @@ function reportExtra(string $lang): array
             'catContent' => 'Contenido',
             'catContacts' => 'Contactos',
             'catGoogle' => 'Google',
+            'catMaps' => 'Local / Maps',
+            'maps' => 'Google Maps',
+            'mapsRating' => 'Calificación',
+            'mapsReviews' => 'Opiniones',
+            'mapsNew' => 'nuevas',
+            'napOk' => 'NAP alineado',
+            'napIssue' => 'NAP a unificar',
         ],
         'en' => [
             'pageHow' => 'How the month went',
@@ -113,6 +120,13 @@ function reportExtra(string $lang): array
             'catContent' => 'Content',
             'catContacts' => 'Contacts',
             'catGoogle' => 'Google',
+            'catMaps' => 'Local / Maps',
+            'maps' => 'Google Maps',
+            'mapsRating' => 'Rating',
+            'mapsReviews' => 'Reviews',
+            'mapsNew' => 'new',
+            'napOk' => 'NAP aligned',
+            'napIssue' => 'NAP to align',
         ],
         'pt' => [
             'pageHow' => 'Como foi o mês',
@@ -162,6 +176,13 @@ function reportExtra(string $lang): array
             'catContent' => 'Conteúdo',
             'catContacts' => 'Contatos',
             'catGoogle' => 'Google',
+            'catMaps' => 'Local / Maps',
+            'maps' => 'Google Maps',
+            'mapsRating' => 'Nota',
+            'mapsReviews' => 'Avaliações',
+            'mapsNew' => 'novas',
+            'napOk' => 'NAP alinhado',
+            'napIssue' => 'NAP a unificar',
         ],
     ];
     return $all[$lang] ?? $all['es'];
@@ -178,6 +199,7 @@ function reportMoveCategory(string $category): string
         'speed' => 'speed',
         'conversion' => 'contacts',
         'index', 'demand' => 'google',
+        'local' => 'maps',
         default => 'content',
     };
 }
@@ -188,6 +210,7 @@ function reportCatLabel(string $category, array $copy): string
         'speed' => $copy['catSpeed'],
         'contacts' => $copy['catContacts'],
         'google' => $copy['catGoogle'],
+        'maps' => $copy['catMaps'] ?? 'Local / Maps',
         default => $copy['catContent'],
     };
 }
@@ -357,6 +380,28 @@ function reportKpis(array $dossier, string $lang, array $copy): array
         'delta' => ['text' => $speed['note'], 'tone' => $speed['tone']],
         'note' => '',
     ];
+
+    $gbp = is_array($dossier['gbp'] ?? null) ? $dossier['gbp'] : [];
+    if (!empty($gbp['ok']) && isset($gbp['rating'])) {
+        $delta = (int) ($gbp['reviewsDelta'] ?? 0);
+        $siteNap = is_array($dossier['siteNap'] ?? null) ? $dossier['siteNap'] : [];
+        $napIssue = $siteNap !== [] && empty($siteNap['hasLocalSchema']);
+        $note = $napIssue
+            ? ($copy['napIssue'] ?? 'NAP')
+            : ($copy['napOk'] ?? '');
+        if ($delta > 0) {
+            $note = trim($note . ' · +' . reportNum((float) $delta, $lang) . ' ' . ($copy['mapsNew'] ?? ''));
+        }
+        $items[] = [
+            'label' => $copy['maps'] ?? 'Google Maps',
+            'value' => reportNum((float) $gbp['rating'], $lang, 1) . '★',
+            'delta' => [
+                'text' => reportNum((float) (int) ($gbp['userRatingCount'] ?? 0), $lang) . ' ' . ($copy['mapsReviews'] ?? ''),
+                'tone' => $delta > 0 ? 'up' : ($napIssue ? 'down' : 'flat'),
+            ],
+            'note' => $note,
+        ];
+    }
     return $items;
 }
 
@@ -762,7 +807,7 @@ function reportRender(array $model): string
     .light.is-bad i { background: #9d2c2c; }
     .light strong { display: block; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; }
     .light p { margin: 2px 0 0; font-size: 16px; line-height: 1.35; max-width: 62ch; }
-    .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
     .kpi { background: #fff; border-top: 3px solid #1d4ed8; padding: 12px 12px 10px; min-height: 92px; }
     .kpi span { display: block; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: #78716c; }
     .kpi strong { display: block; margin-top: 6px; font-size: 26px; letter-spacing: -.03em; font-weight: 620; line-height: 1; }

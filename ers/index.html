@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Mono Studio OS — base de operaciones diaria" />
   <title>Mono Studio OS</title>
-  <link rel="stylesheet" href="styles.css?v=20261026a" />
+  <link rel="stylesheet" href="styles.css?v=20261112a" />
 </head>
 <body>
 
@@ -222,6 +222,27 @@
       </div>
 
       <div class="inventory" id="seoInventory" hidden></div>
+
+      <section class="gbp-panel" id="gbpPanel" hidden aria-labelledby="gbpTitle">
+        <header class="kw__head">
+          <div>
+            <h3 id="gbpTitle">Google Business Profile</h3>
+            <p class="kw__meta" id="gbpMeta">Ficha de Google Maps vinculada al sitio</p>
+          </div>
+          <div class="gbp-panel__actions" id="gbpActions"></div>
+        </header>
+        <div class="gbp-panel__body" id="gbpBody"></div>
+        <div class="gbp-panel__search" id="gbpSearchWrap" hidden>
+          <label class="field">
+            <span>Buscar ficha en Google Maps</span>
+            <div class="gbp-search-row">
+              <input type="search" id="gbpSearchInput" placeholder="Nombre del negocio + ciudad…" autocomplete="off" />
+              <button class="btn btn--neon" id="btnGbpSearch" type="button">Buscar</button>
+            </div>
+          </label>
+          <ul class="gbp-results" id="gbpResults" hidden></ul>
+        </div>
+      </section>
 
       <section class="signals" aria-label="Acciones SEO">
         <ul class="signal-list" id="seoSignals"></ul>
@@ -687,7 +708,7 @@
   </div>
   <div class="chat-backdrop" id="chatBackdrop" hidden></div>
 
-  <script src="app.js?v=20261026a"></script>
+  <script src="app.js?v=20261112a"></script>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </body>

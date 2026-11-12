@@ -24,7 +24,7 @@ const SEO_AUDIT_DOM_TTL = 604800; // 7 días: re-scrape si el HTML cambió de fi
 const SEO_AUDIT_REPO_TTL = 21600; // 6 h
 const SEO_AUDIT_REPO_BYTES = 110000;
 const SEO_AUDIT_AI_TIMEOUT = 75;
-const SEO_AUDIT_VERSION = '2026.11.08-growth-integral';
+const SEO_AUDIT_VERSION = '2026.11.12-gbp-local';
 
 header('X-Content-Type-Options: nosniff');
 
@@ -702,6 +702,53 @@ No inventes el ID de medición. Si no está en el repo, dejá el snippet comenta
 TXT;
 }
 
+/** Bloque cerrado con NAP oficial de Google Business Profile. */
+function seoAuditGbpBlock(array $dossier): string
+{
+    $gbp = is_array($dossier['gbp'] ?? null) ? $dossier['gbp'] : [];
+    if (empty($gbp['ok'])) {
+        if (!empty($gbp['linked'])) {
+            return "Ficha vinculada pero sin datos frescos de Places. No inventes NAP.";
+        }
+        return 'Sin ficha de Google Business Profile vinculada. No inventes nombre, dirección ni teléfono local.';
+    }
+    $hours = is_array($gbp['regularOpeningHours'] ?? null) ? $gbp['regularOpeningHours'] : [];
+    $lines = [
+        'placeId: ' . (string) ($gbp['placeId'] ?? ''),
+        'Nombre oficial: ' . (string) ($gbp['displayName'] ?? ''),
+        'Categoría: ' . (string) ($gbp['primaryTypeDisplayName'] ?? ''),
+        'Dirección: ' . (string) ($gbp['formattedAddress'] ?? ''),
+        'Teléfono: ' . trim((string) (($gbp['internationalPhoneNumber'] ?? '') ?: ($gbp['nationalPhoneNumber'] ?? ''))),
+        'Sitio en la ficha: ' . (string) ($gbp['websiteUri'] ?? ''),
+        'Maps URL: ' . (string) ($gbp['googleMapsUri'] ?? ''),
+        'Estado: ' . (string) ($gbp['businessStatus'] ?? ''),
+        'Rating: ' . (isset($gbp['rating']) ? (string) $gbp['rating'] : '—')
+            . ' · Reseñas: ' . (int) ($gbp['userRatingCount'] ?? 0)
+            . ' · Delta reseñas: ' . (int) ($gbp['reviewsDelta'] ?? 0),
+        'Fotos: ' . (int) ($gbp['photosCount'] ?? 0),
+    ];
+    if ($hours !== []) {
+        $lines[] = 'Horarios:';
+        foreach (array_slice($hours, 0, 7) as $h) {
+            $lines[] = '  - ' . $h;
+        }
+    } else {
+        $lines[] = 'Horarios: (vacío en la ficha)';
+    }
+    $siteNap = is_array($dossier['siteNap'] ?? null) ? $dossier['siteNap'] : [];
+    if ($siteNap !== []) {
+        $lines[] = '';
+        $lines[] = 'NAP detectado en el HTML del sitio (para cruzar, no inventar):';
+        $lines[] = '  teléfonos web: ' . implode(', ', array_slice($siteNap['phones'] ?? [], 0, 4));
+        $lines[] = '  address web: ' . (string) ($siteNap['address'] ?? '');
+        $lines[] = '  schema local: ' . (!empty($siteNap['hasLocalSchema']) ? implode(', ', $siteNap['schemaTypes'] ?? []) : 'ausente');
+        $lines[] = '  maps link en web: ' . (!empty($siteNap['hasMapsLink']) ? 'sí' : 'no');
+    }
+    $lines[] = '';
+    $lines[] = 'REGLA: cualquier JSON-LD LocalBusiness, footer o bloque de contacto debe usar EXACTAMENTE este NAP de Maps. Cero datos inventados.';
+    return implode("\n", $lines);
+}
+
 function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): array
 {
     $started = microtime(true);
@@ -792,9 +839,15 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
         'HTML: ' . (int) ($domProgress['done'] ?? 0) . '/' . (int) ($domProgress['total'] ?? 0),
         'Repo: ' . (($repo['slug'] ?? '') !== '' ? $repo['slug'] : 'no conectado'),
         'PSI home: ' . (string) ($dossier['psi']['home']['score'] ?? '—'),
+        'Google Maps: ' . (!empty($dossier['sources']['gbp'])
+            ? ((string) ($dossier['gbp']['displayName'] ?? 'vinculado') . ' · ★' . (string) ($dossier['gbp']['rating'] ?? '—'))
+            : 'no vinculado'),
         '',
         '## HALLAZGOS (lista cerrada: no agregues problemas que no estén aquí)',
         findingsCursorBlock($findings),
+        '',
+        '## DATOS REALES GOOGLE BUSINESS PROFILE (NAP OFICIAL)',
+        seoAuditGbpBlock($dossier),
         '',
         '## OPORTUNIDADES DE KEYWORDS (buckets GSC, datos reales)',
         gscKeywordsBucketsBrief($kw),
@@ -812,25 +865,26 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
     }
 
     $system = <<<TXT
-Sos un tech lead SEO. Tu trabajo es SUBIR DE NIVEL el sitio en cada pasada: más demanda capturada, mejor on-page y más contactos.
-Los problemas YA están en HALLAZGOS. La estrategia de queries YA está en CRECIMIENTO POR QUERIES y en los buckets.
-No descubras otros problemas. No inventes métricas, queries, URLs ni archivos.
+Sos un tech lead SEO. Tu trabajo es SUBIR DE NIVEL el sitio en cada pasada: más demanda capturada, mejor on-page, más contactos y coherencia local (Maps ↔ web).
+Los problemas YA están en HALLAZGOS. La estrategia de queries YA está en CRECIMIENTO POR QUERIES y en los buckets. El NAP oficial YA está en DATOS REALES GOOGLE BUSINESS PROFILE.
+No descubras otros problemas. No inventes métricas, queries, URLs, teléfonos, direcciones ni archivos.
 Respondés en español neutro-chileno, directo.
 
 Salida JSON:
-- resumenSimple: 3 a 6 frases, sin jerga (nada de CTR, LCP, indexación). Qué nivel se gana (tráfico / autoridad de página / contactos) y por qué le importa al negocio.
+- resumenSimple: 3 a 6 frases, sin jerga (nada de CTR, LCP, indexación). Qué nivel se gana (tráfico / autoridad de página / contactos / presencia local) y por qué le importa al negocio.
 - cambios: máx 12, en orden de ejecución. Mezclá hallazgos técnicos con acciones de keywords cuando apunten a la misma URL. url y archivo solo si aparecen en los datos; si no, "".
 - cursorPrompt: prompt para Cursor Agent orientado a crecimiento, en este orden:
   1) Contexto del sitio + objetivo de nivel (qué mejora esta pasada)
   2) Si hay bloque CORREGIR AHORA: indexación pública primero (una URL por cambio). No postergar. No indexes login, gracias, admin, carrito ni preview.
-  3) Crecimiento por queries: implementar las ACCIONES DE CRECIMIENTO (title/meta, ampliar contenido, enlazado, canibalización, contenido nuevo). Citá queries textuales del bloque. Amarrá cada acción a un archivo del repo si hay path.
-  4) Resto de hallazgos (on-page, velocidad, conversión), ordenados por archivo, citando kind/id
-  5) Criterios de aceptación comprobables (qué debe verse en la URL o en Search Console después)
-  6) Reglas: no inventar archivos, rutas ni keywords; no tocar secretos; preguntar si falta un path
-  7) Si no hay key events, sección Medición (click_whatsapp, phone_click, generate_lead)
+  3) SEO local: si hay GBP, inyectar/corregir JSON-LD LocalBusiness (o subtipo) con el NAP EXACTO de Maps; alinear teléfonos/dirección en footer/contacto si hay napPhoneMismatch; potenciar landings locales con ubicación real + prueba social (rating/reseñas) solo con datos del bloque GBP
+  4) Crecimiento por queries: implementar las ACCIONES DE CRECIMIENTO (title/meta, ampliar contenido, enlazado, canibalización, contenido nuevo). Citá queries textuales del bloque. Amarrá cada acción a un archivo del repo si hay path.
+  5) Resto de hallazgos (on-page, velocidad, conversión, local), ordenados por archivo, citando kind/id
+  6) Criterios de aceptación comprobables (qué debe verse en la URL, en Search Console o en el JSON-LD después)
+  7) Reglas: no inventar archivos, rutas, keywords ni NAP; no tocar secretos; preguntar si falta un path
+  8) Si no hay key events, sección Medición (click_whatsapp, phone_click, generate_lead)
 
 Cubrí severidad 3 y 2 de hallazgos, y todas las acciones de keywords de impacto alto/medio.
-Cada pasada debe dejar el sitio en un nivel más alto que la anterior: priorizá quick wins de demanda + correcciones que desbloquean indexación.
+Cada pasada debe dejar el sitio en un nivel más alto que la anterior: priorizá quick wins de demanda + correcciones que desbloquean indexación + coherencia NAP.
 TXT;
 
     $payload = [
@@ -864,6 +918,7 @@ TXT;
 
     $insights = seoAuditSanitizeCursor($raw, $host, $urls, $repo['paths'] ?? []);
     $closed = "\n\n## Hallazgos detectados (lista cerrada, no omitir)\n" . findingsCursorBlock($findings);
+    $closed .= "\n\n## DATOS REALES GOOGLE BUSINESS PROFILE (NAP OFICIAL, no inventar)\n" . seoAuditGbpBlock($dossier);
     $closed .= "\n\n## Crecimiento por queries (lista cerrada, no omitir)\n" . gscKeywordsGrowthBlock($kwAi);
     if (empty($dossier['sources']['keyEvents'])) {
         $closed = seoAuditMeasurementNote() . $closed;
@@ -945,7 +1000,7 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
 
     $gh = seoAuditLoadGithubConfig();
     $coverage = is_array($dossier['sources'] ?? null) ? $dossier['sources'] : [
-        'gsc' => false, 'ga4' => false, 'keyEvents' => false, 'psi' => false, 'dom' => false, 'repo' => false, 'keywords' => false,
+        'gsc' => false, 'ga4' => false, 'keyEvents' => false, 'psi' => false, 'dom' => false, 'repo' => false, 'keywords' => false, 'gbp' => false,
     ];
     $coverage['keywords'] = $kw !== [];
     $coverage['keywordsAi'] = is_array($kwAi['insights'] ?? null)

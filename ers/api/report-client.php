@@ -12,7 +12,7 @@ if (!defined('ERS_LIBRARY')) {
     exit;
 }
 
-const REPORT_CLIENT_VERSION = '2026.11.05-client-friendly';
+const REPORT_CLIENT_VERSION = '2026.11.12-client-gbp';
 
 function reportClientCopy(string $lang): array
 {
@@ -27,6 +27,8 @@ function reportClientCopy(string $lang): array
             'contacts' => 'Contactos',
             'pages' => 'Páginas en Google',
             'speed' => 'Velocidad en celular',
+            'maps' => 'Google Maps',
+            'mapsReviews' => 'opiniones',
             'vsPrev' => 'vs. mes anterior',
             'first' => 'Primeros resultados',
             'none' => 'En preparación',
@@ -55,9 +57,12 @@ function reportClientCopy(string $lang): array
             'bestContacts' => '%s contactos llegaron desde el sitio',
             'bestBase' => 'El sitio ya está en Google con %s páginas',
             'bestBaseLine' => 'Es la base sobre la que vamos a crecer.',
+            'bestMaps' => 'Calificación %s en Google Maps',
+            'bestMapsLine' => '%s opiniones de clientes reales',
+            'bestMapsNew' => '+%s opiniones nuevas en Google Maps',
             'done' => 'Lo que hicimos',
             'doneIndex' => 'Estamos sumando a Google: %s',
-            'doneReview' => 'Revisamos el sitio completo: búsquedas, páginas, velocidad y contactos.',
+            'doneReview' => 'Revisamos el sitio completo: búsquedas, páginas, velocidad, Maps y contactos.',
             'next' => 'Oportunidades para el próximo mes',
             'nextEmpty' => 'Seguimos midiendo y afinando lo que ya funciona.',
             'oppGain' => 'Hasta %s visitas más al mes',
@@ -77,6 +82,12 @@ function reportClientCopy(string $lang): array
             'oppRisingLine' => 'Es una búsqueda que está creciendo. Vamos a ampliar esa página.',
             'oppMeasure' => 'Medir cada contacto',
             'oppMeasureLine' => 'Contar los WhatsApp, llamadas y formularios para ver el resultado en clientes.',
+            'oppNap' => 'Unificar datos entre Google Maps y el sitio',
+            'oppNapLine' => 'Que el teléfono y la dirección sean los mismos en Maps y en la web.',
+            'oppReviews' => 'Sumar opiniones de clientes en Google',
+            'oppReviewsLine' => 'Más reseñas reales fortalecen la ficha frente a la competencia local.',
+            'oppMapsSite' => 'Enlazar el sitio en Google Maps',
+            'oppMapsSiteLine' => 'Quien los encuentra en el mapa debe poder entrar al sitio de un toque.',
             'sign' => 'Cualquier duda sobre este informe, lo conversamos.',
             'other' => 'Otros',
             'home' => 'Inicio',
@@ -91,6 +102,8 @@ function reportClientCopy(string $lang): array
             'contacts' => 'Contacts',
             'pages' => 'Pages on Google',
             'speed' => 'Phone speed',
+            'maps' => 'Google Maps',
+            'mapsReviews' => 'reviews',
             'vsPrev' => 'vs. last month',
             'first' => 'First results',
             'none' => 'Getting ready',
@@ -119,9 +132,12 @@ function reportClientCopy(string $lang): array
             'bestContacts' => '%s contacts came through the site',
             'bestBase' => 'The site is on Google with %s pages',
             'bestBaseLine' => 'That is the base we will grow from.',
+            'bestMaps' => '%s rating on Google Maps',
+            'bestMapsLine' => '%s reviews from real customers',
+            'bestMapsNew' => '+%s new reviews on Google Maps',
             'done' => 'What we did',
             'doneIndex' => 'Adding to Google: %s',
-            'doneReview' => 'We reviewed the whole site: searches, pages, speed and contacts.',
+            'doneReview' => 'We reviewed the whole site: searches, pages, speed, Maps and contacts.',
             'next' => 'Opportunities for next month',
             'nextEmpty' => 'We keep measuring and refining what already works.',
             'oppGain' => 'Up to %s more visits a month',
@@ -141,6 +157,12 @@ function reportClientCopy(string $lang): array
             'oppRisingLine' => 'This search is growing. We will expand that page.',
             'oppMeasure' => 'Measure every contact',
             'oppMeasureLine' => 'Count WhatsApp messages, calls and forms to see results in customers.',
+            'oppNap' => 'Align Google Maps and the website',
+            'oppNapLine' => 'Phone and address should match on Maps and on the site.',
+            'oppReviews' => 'Add customer reviews on Google',
+            'oppReviewsLine' => 'More real reviews strengthen the listing against local competitors.',
+            'oppMapsSite' => 'Link the website on Google Maps',
+            'oppMapsSiteLine' => 'People who find you on the map should reach the site in one tap.',
             'sign' => 'Any questions about this report, let’s talk.',
             'other' => 'Other',
             'home' => 'Home',
@@ -155,6 +177,8 @@ function reportClientCopy(string $lang): array
             'contacts' => 'Contatos',
             'pages' => 'Páginas no Google',
             'speed' => 'Velocidade no celular',
+            'maps' => 'Google Maps',
+            'mapsReviews' => 'avaliações',
             'vsPrev' => 'vs. mês anterior',
             'first' => 'Primeiros resultados',
             'none' => 'Em preparação',
@@ -183,9 +207,12 @@ function reportClientCopy(string $lang): array
             'bestContacts' => '%s contatos chegaram pelo site',
             'bestBase' => 'O site já está no Google com %s páginas',
             'bestBaseLine' => 'É a base sobre a qual vamos crescer.',
+            'bestMaps' => 'Nota %s no Google Maps',
+            'bestMapsLine' => '%s avaliações de clientes reais',
+            'bestMapsNew' => '+%s avaliações novas no Google Maps',
             'done' => 'O que fizemos',
             'doneIndex' => 'Estamos incluindo no Google: %s',
-            'doneReview' => 'Revisamos o site inteiro: buscas, páginas, velocidade e contatos.',
+            'doneReview' => 'Revisamos o site inteiro: buscas, páginas, velocidade, Maps e contatos.',
             'next' => 'Oportunidades para o próximo mês',
             'nextEmpty' => 'Seguimos medindo e afinando o que já funciona.',
             'oppGain' => 'Até %s visitas a mais por mês',
@@ -205,6 +232,12 @@ function reportClientCopy(string $lang): array
             'oppRisingLine' => 'É uma busca em crescimento. Vamos ampliar essa página.',
             'oppMeasure' => 'Medir cada contato',
             'oppMeasureLine' => 'Contar WhatsApp, ligações e formulários para ver o resultado em clientes.',
+            'oppNap' => 'Unificar dados entre Google Maps e o site',
+            'oppNapLine' => 'Telefone e endereço iguais no Maps e no site.',
+            'oppReviews' => 'Somar avaliações de clientes no Google',
+            'oppReviewsLine' => 'Mais avaliações reais fortalecem a ficha frente à concorrência local.',
+            'oppMapsSite' => 'Ligar o site no Google Maps',
+            'oppMapsSiteLine' => 'Quem encontra no mapa deve entrar no site com um toque.',
             'sign' => 'Qualquer dúvida sobre este relatório, conversamos.',
             'other' => 'Outros',
             'home' => 'Início',
@@ -292,6 +325,22 @@ function reportClientKpis(array $dossier, string $lang, array $t, array $speed):
             'trend' => ['key' => 'flat', 'word' => '', 'tone' => $speed['tone'] === 'down' ? 'soft' : $speed['tone'], 'pct' => null],
         ];
     }
+
+    $gbp = is_array($dossier['gbp'] ?? null) ? $dossier['gbp'] : [];
+    if (!empty($gbp['ok']) && isset($gbp['rating'])) {
+        $delta = (int) ($gbp['reviewsDelta'] ?? 0);
+        $items[] = [
+            'label' => $t['maps'],
+            'value' => reportNum((float) $gbp['rating'], $lang, 1) . '★',
+            'trend' => [
+                'key' => $delta > 0 ? 'growing' : 'flat',
+                'word' => reportNum((float) (int) ($gbp['userRatingCount'] ?? 0), $lang) . ' ' . $t['mapsReviews']
+                    . ($delta > 0 ? ' · +' . reportNum((float) $delta, $lang) : ''),
+                'tone' => $delta > 0 ? 'up' : 'flat',
+                'pct' => null,
+            ],
+        ];
+    }
     return [$items, $trend, $seen];
 }
 
@@ -360,6 +409,23 @@ function reportClientWins(array $dossier, string $lang, array $t, array $speed):
         $wins[] = ['title' => $t['bestFast'], 'line' => ''];
     }
 
+    $gbp = is_array($dossier['gbp'] ?? null) ? $dossier['gbp'] : [];
+    if (!empty($gbp['ok'])) {
+        $delta = (int) ($gbp['reviewsDelta'] ?? 0);
+        $rating = isset($gbp['rating']) ? (float) $gbp['rating'] : null;
+        if ($delta > 0) {
+            $wins[] = [
+                'title' => sprintf($t['bestMapsNew'], reportNum((float) $delta, $lang)),
+                'line' => '',
+            ];
+        } elseif ($rating !== null && $rating >= 4.7 && (int) ($gbp['userRatingCount'] ?? 0) >= 10) {
+            $wins[] = [
+                'title' => sprintf($t['bestMaps'], reportNum($rating, $lang, 1)),
+                'line' => sprintf($t['bestMapsLine'], reportNum((float) (int) $gbp['userRatingCount'], $lang)),
+            ];
+        }
+    }
+
     if ($wins === []) {
         $indexed = (int) ($dossier['inventory']['indexed'] ?? 0);
         if ($indexed > 0) {
@@ -388,6 +454,9 @@ function reportClientOpportunity(array $f, array $dossier, string $lang, array $
         in_array($kind, ['leak', 'noContact', 'deviceGap'], true) => [sprintf($t['oppContact'], $page), $t['oppContactLine'], 'contacts'],
         in_array($kind, ['slow', 'cls'], true) => [$t['oppSpeed'], $t['oppSpeedLine'], 'speed'],
         $kind === 'measure' => [$t['oppMeasure'], $t['oppMeasureLine'], 'contacts'],
+        in_array($kind, ['napPhoneMismatch', 'localSchemaIncomplete'], true) => [$t['oppNap'], $t['oppNapLine'], 'maps'],
+        in_array($kind, ['gbpLowReviews', 'gbpLowRating', 'gbpNegativeReview'], true) => [$t['oppReviews'], $t['oppReviewsLine'], 'maps'],
+        in_array($kind, ['gbpNoWebsite', 'gbpWrongDomain'], true) => [$t['oppMapsSite'], $t['oppMapsSiteLine'], 'maps'],
         ($f['category'] ?? '') === 'onpage' || in_array($kind, ['cannibal', 'zombie', 'brand'], true)
             => [sprintf($t['oppContent'], $page), $t['oppContentLine'], 'content'],
         default => [null, null, null],

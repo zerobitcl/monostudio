@@ -407,6 +407,22 @@ function gscGa4Property(string $value): string
     return strlen($digits) >= 6 && strlen($digits) <= 15 ? $digits : '';
 }
 
+/** Place ID de Google Maps / Places (ChIJ… o places/ChIJ…). */
+function gscPlaceId(string $value): string
+{
+    $value = trim($value);
+    if ($value === '') {
+        return '';
+    }
+    if (preg_match('#^places/([A-Za-z0-9_-]+)$#', $value, $m)) {
+        return $m[1];
+    }
+    if (preg_match('#^[A-Za-z0-9_-]{10,}$#', $value)) {
+        return $value;
+    }
+    return '';
+}
+
 function gscHostEntry(array $entry): array
 {
     return [
@@ -414,6 +430,10 @@ function gscHostEntry(array $entry): array
         'pages' => gscSanitizePages(is_array($entry['pages'] ?? null) ? $entry['pages'] : []),
         'reportLang' => gscReportLang((string) ($entry['reportLang'] ?? 'es')),
         'ga4Property' => gscGa4Property((string) ($entry['ga4Property'] ?? '')),
+        'placeId' => gscPlaceId((string) ($entry['placeId'] ?? '')),
+        'placeQuery' => function_exists('ersClip')
+            ? ersClip(trim((string) ($entry['placeQuery'] ?? '')), 200)
+            : substr(trim((string) ($entry['placeQuery'] ?? '')), 0, 200),
     ];
 }
 
@@ -1438,6 +1458,73 @@ function gscBuildSignals(array $rows): array
     return findingsSignalsFromRows($rows);
 }
 
+/**
+ * Fusiona señales SEO locales (GBP) desde el caché de Places.
+ * No llama a la red: si no hay caché GBP, deja las señales GSC intactas.
+ */
+function gscMergeLocalSignals(string $dataDir, string $host, array $signals): array
+{
+    $host = gscSanitizeHost($host);
+    if ($host === '') {
+        return $signals;
+    }
+    if (!function_exists('gbpPackForDossier')) {
+        require_once __DIR__ . '/gbp.php';
+    }
+    if (!function_exists('findingsLocalSignals')) {
+        require_once __DIR__ . '/findings.php';
+    }
+    $gbp = gbpPackForDossier($dataDir, $host, false, false);
+    if (empty($gbp['ok']) && empty($gbp['linked'])) {
+        return $signals;
+    }
+    $siteNap = [];
+    $keywords = [];
+    if (function_exists('dossierSiteNap') && function_exists('dossierDomIndex')) {
+        $dom = dossierDomIndex($dataDir, $host);
+        $siteNap = dossierSiteNap($dom['pages'] ?? []);
+    } elseif (function_exists('dossierPack')) {
+        // dossierPack ya incluye siteNap si hay DOM cacheado.
+        try {
+            $pack = dossierPack($dataDir, $host);
+            $siteNap = is_array($pack['siteNap'] ?? null) ? $pack['siteNap'] : [];
+            $keywords = is_array($pack['keywords'] ?? null) ? $pack['keywords'] : [];
+        } catch (Throwable) {
+        }
+    }
+    $local = findingsLocalSignals([
+        'ok' => true,
+        'host' => $host,
+        'gbp' => $gbp,
+        'siteNap' => $siteNap,
+        'dom' => [],
+        'pages' => [],
+        'keywords' => $keywords,
+        'sources' => ['gbp' => !empty($gbp['ok'])],
+    ]);
+    if ($local === []) {
+        return $signals;
+    }
+    $seen = [];
+    foreach ($signals as $s) {
+        if (is_array($s) && isset($s['id'])) {
+            $seen[(string) $s['id']] = true;
+        }
+    }
+    foreach ($local as $s) {
+        $id = (string) ($s['id'] ?? '');
+        if ($id === '' || isset($seen[$id])) {
+            continue;
+        }
+        $seen[$id] = true;
+        $signals[] = $s;
+    }
+    usort($signals, static function ($a, $b) {
+        return ((int) ($b['severity'] ?? 0)) <=> ((int) ($a['severity'] ?? 0));
+    });
+    return array_slice($signals, 0, 28);
+}
+
 /** Inventario: cuántas páginas existen, cuántas rinden y cuántas están indexadas. */
 function gscBuildInventory(array $rows): array
 {
@@ -2329,6 +2416,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'config') {
         'ga4Property' => array_key_exists('ga4Property', $input)
             ? (string) $input['ga4Property']
             : (string) ($prev['ga4Property'] ?? ''),
+        'placeId' => array_key_exists('placeId', $input)
+            ? (string) $input['placeId']
+            : (string) ($prev['placeId'] ?? ''),
+        'placeQuery' => array_key_exists('placeQuery', $input)
+            ? (string) $input['placeQuery']
+            : (string) ($prev['placeQuery'] ?? ''),
     ]);
     $config['hosts'][$host] = $next;
 
@@ -2568,6 +2661,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             $cached['cached'] = true;
             $cached['reportLang'] = gscReportLang((string) ($override['reportLang'] ?? 'es'));
             $cached['ga4Property'] = gscGa4Property((string) ($override['ga4Property'] ?? ''));
+            $cached['placeId'] = gscPlaceId((string) ($override['placeId'] ?? ''));
+            $cached['placeQuery'] = (string) ($override['placeQuery'] ?? '');
+            // Señales locales desde caché GBP (sin red).
+            if (function_exists('gscMergeLocalSignals')) {
+                $cached['signals'] = gscMergeLocalSignals($dataDir, $host, is_array($cached['signals'] ?? null) ? $cached['signals'] : []);
+            }
             gscJson($cached);
         }
 
@@ -2939,6 +3038,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
         $dailyVisible = gscDailyInRange($dailyRows, $visibleStartIso, $endIso);
         $inventory = gscBuildInventory($pageRows);
         $signals = gscBuildSignals($pageRows);
+        // Refresco silencioso de GBP si hay placeId (respeta TTL).
+        if (gscPlaceId((string) ($override['placeId'] ?? '')) !== '') {
+            try {
+                if (!function_exists('gbpEnsure')) {
+                    require_once __DIR__ . '/gbp.php';
+                }
+                gbpEnsure($dataDir, $host, false);
+            } catch (Throwable) {
+            }
+        }
+        $signals = gscMergeLocalSignals($dataDir, $host, $signals);
         $trend = [
             'weekdays' => gscAggregateWeekdays($dailyVisible),
             'months' => gscAggregateMonths($dailyVisible),
@@ -3007,6 +3117,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             'pages' => $pageRows,
             'reportLang' => gscReportLang((string) ($override['reportLang'] ?? 'es')),
             'ga4Property' => gscGa4Property((string) ($override['ga4Property'] ?? '')),
+            'placeId' => gscPlaceId((string) ($override['placeId'] ?? '')),
+            'placeQuery' => (string) ($override['placeQuery'] ?? ''),
         ];
         gscWriteJson($hostCacheFile, $payload);
         gscJson($payload);

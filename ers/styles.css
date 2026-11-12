@@ -2456,6 +2456,162 @@ body {
   width: fit-content;
 }
 
+.gbp-panel {
+  display: grid;
+  gap: 14px;
+  margin: 18px 0 8px;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(200, 168, 107, 0.35);
+  background: linear-gradient(165deg, rgba(200, 168, 107, 0.1), rgba(7, 8, 15, 0.35) 55%, transparent);
+}
+
+.gbp-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.gbp-search-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.gbp-search-row input {
+  flex: 1;
+}
+
+.gbp-card {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(140px, 0.4fr) 1fr;
+}
+
+@media (max-width: 720px) {
+  .gbp-card {
+    grid-template-columns: 1fr;
+  }
+}
+
+.gbp-card__rating {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+}
+
+.gbp-card__rating strong {
+  font-size: 1.15rem;
+  letter-spacing: 0.04em;
+  color: #c8a86b;
+}
+
+.gbp-card__rating span,
+.gbp-card__nap span,
+.gbp-card__nap .gbp-card__web {
+  font-size: 0.78rem;
+  color: var(--txt-secondary);
+  line-height: 1.4;
+}
+
+.gbp-card__nap {
+  display: grid;
+  gap: 4px;
+}
+
+.gbp-card__nap strong {
+  font-size: 0.95rem;
+}
+
+.gbp-reviews {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.gbp-reviews li {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(7, 8, 15, 0.35);
+  display: grid;
+  gap: 4px;
+}
+
+.gbp-reviews li.is-bad {
+  border-color: rgba(255, 90, 90, 0.35);
+}
+
+.gbp-reviews li.is-ok {
+  border-color: rgba(57, 255, 182, 0.28);
+}
+
+.gbp-reviews li strong {
+  color: #c8a86b;
+  font-size: 0.85rem;
+}
+
+.gbp-reviews li span {
+  font-size: 0.72rem;
+  color: var(--txt-secondary);
+}
+
+.gbp-reviews li p {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--txt-primary);
+}
+
+.gbp-results {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.gbp-results li {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(7, 8, 15, 0.4);
+}
+
+.gbp-results li.is-match {
+  border-color: rgba(57, 255, 182, 0.4);
+}
+
+.gbp-results li div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.gbp-results li strong {
+  font-size: 0.88rem;
+}
+
+.gbp-results li span,
+.gbp-results li em {
+  font-size: 0.72rem;
+  color: var(--txt-secondary);
+  font-style: normal;
+}
+
+.gbp-results__empty {
+  padding: 10px 12px;
+  font-size: 0.8rem;
+  color: var(--txt-secondary);
+}
+
 .cursor-audit {
   display: grid;
   gap: 14px;

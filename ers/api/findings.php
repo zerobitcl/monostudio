@@ -1323,10 +1323,16 @@ function findingsAttachFiles(array $findings, array $dossier): array
         return $findings;
     }
     $layout = findingsLayoutFile($paths);
-    $sitewide = ['schema', 'og', 'brand', 'deviceGap', 'sitemap', 'measure', 'titleDup', 'metaDup'];
+    $sitewide = ['schema', 'og', 'brand', 'deviceGap', 'sitemap', 'measure', 'titleDup', 'metaDup', 'localSchemaIncomplete', 'napPhoneMismatch'];
     foreach ($findings as &$finding) {
-        if (in_array($finding['kind'], $sitewide, true)) {
+        $kind = (string) ($finding['kind'] ?? '');
+        if (in_array($kind, $sitewide, true)) {
             $finding['file'] = $layout;
+            continue;
+        }
+        // Reseñas / estado de ficha: no hay archivo de código.
+        if (($finding['category'] ?? '') === 'local') {
+            $finding['file'] = '';
             continue;
         }
         $finding['file'] = findingsGuessFile((string) ($finding['path'] ?? '/'), $paths);
@@ -1336,6 +1342,474 @@ function findingsAttachFiles(array $findings, array $dossier): array
     }
     unset($finding);
     return $findings;
+}
+
+/**
+ * ¿Hay demanda local en GSC? (cerca de, en <ciudad>, etc.)
+ */
+function findingsHasLocalDemand(array $dossier): bool
+{
+    foreach (['striking', 'top', 'rising', 'lowCtr'] as $bucket) {
+        foreach ($dossier['keywords']['buckets'][$bucket] ?? [] as $row) {
+            if (!is_array($row) || !empty($row['brand'])) {
+                continue;
+            }
+            $q = (string) ($row['q'] ?? '');
+            if (findingsIsTransactional($q) || preg_match('/\b(cerca|comuna|ciudad|barrio)\b/u', gscAscii($q))) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function findingsGbpPhone(array $gbp): string
+{
+    $intl = trim((string) ($gbp['internationalPhoneNumber'] ?? ''));
+    if ($intl !== '') {
+        return $intl;
+    }
+    return trim((string) ($gbp['nationalPhoneNumber'] ?? ''));
+}
+
+function findingsSitePhones(array $dossier): array
+{
+    $phones = [];
+    foreach ($dossier['siteNap']['phones'] ?? [] as $tel) {
+        $tel = trim((string) $tel);
+        if ($tel !== '') {
+            $phones[] = $tel;
+        }
+    }
+    // Fallback: NAP por página si siteNap aún no está.
+    if ($phones === []) {
+        foreach ($dossier['dom'] ?? [] as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            foreach ($row['nap']['phones'] ?? [] as $tel) {
+                $tel = trim((string) $tel);
+                if ($tel !== '') {
+                    $phones[] = $tel;
+                }
+            }
+        }
+    }
+    return array_values(array_unique($phones));
+}
+
+function findingsReviewIsRecent(array $review): bool
+{
+    $rel = gscAscii((string) ($review['relativeTime'] ?? ''));
+    if ($rel !== '') {
+        // "hace 2 días", "a week ago", "há 3 dias", "yesterday"
+        if (preg_match('/\b(hora|horas|hour|hours|minuto|minutos|minute|minutes|ayer|yesterday|hoje|hoy|today|dia|dias|day|days|semana|semanas|week)\b/u', $rel)) {
+            if (preg_match('/\b(\d+)\s*(mes|meses|month|months|ano|anos|year|years)\b/u', $rel)) {
+                return false;
+            }
+            if (preg_match('/\b(\d+)\s*(semana|semanas|week|weeks)\b/u', $rel, $m) && (int) $m[1] > 4) {
+                return false;
+            }
+            return true;
+        }
+    }
+    $pub = trim((string) ($review['publishTime'] ?? ''));
+    if ($pub !== '') {
+        $ts = strtotime($pub);
+        if ($ts !== false) {
+            return $ts >= time() - (28 * 86400);
+        }
+    }
+    // Sin fecha clara: no alarmar como "reciente".
+    return false;
+}
+
+/** @return list<array> */
+function findingsLocal(array $dossier): array
+{
+    $out = [];
+    $gbp = is_array($dossier['gbp'] ?? null) ? $dossier['gbp'] : [];
+    if (empty($gbp['ok']) && empty($gbp['linked'])) {
+        return $out;
+    }
+    // Vinculado pero sin datos aún: no inventar hallazgos.
+    if (empty($gbp['ok'])) {
+        return $out;
+    }
+
+    $mapsUri = (string) ($gbp['googleMapsUri'] ?? '');
+    $host = (string) ($dossier['host'] ?? '');
+    $website = trim((string) ($gbp['websiteUri'] ?? ''));
+    $status = strtoupper(trim((string) ($gbp['businessStatus'] ?? 'OPERATIONAL')));
+    $rating = isset($gbp['rating']) ? (float) $gbp['rating'] : null;
+    $reviews = (int) ($gbp['userRatingCount'] ?? 0);
+    $photos = (int) ($gbp['photosCount'] ?? 0);
+    $hours = is_array($gbp['regularOpeningHours'] ?? null) ? $gbp['regularOpeningHours'] : [];
+    $gbpPhone = findingsGbpPhone($gbp);
+    $sitePhones = findingsSitePhones($dossier);
+    $siteNap = is_array($dossier['siteNap'] ?? null) ? $dossier['siteNap'] : [];
+    $hasLocalSchema = !empty($siteNap['hasLocalSchema']);
+    $localDemand = findingsHasLocalDemand($dossier);
+
+    if ($status !== '' && $status !== 'OPERATIONAL') {
+        $closed = in_array($status, ['CLOSED_PERMANENTLY', 'CLOSED_TEMPORARILY'], true);
+        $out[] = findingsMake(
+            $closed ? 'gbpClosed' : 'gbpSuspended',
+            'local',
+            3,
+            40,
+            findingsFigure(1, 'pages', 'risk'),
+            '/',
+            $mapsUri,
+            '',
+            ['businessStatus' => $status],
+            findingsSay(
+                'La ficha de Google Maps no está operativa',
+                'Google marca el negocio como cerrado o suspendido. Mientras tanto, pierden llamadas y visitas locales.',
+                'The Google Maps listing is not operational',
+                'Google marks the business as closed or suspended. Local calls and visits are lost.',
+                'A ficha do Google Maps não está operacional',
+                'O Google marca o negócio como fechado ou suspenso. Perdem ligações e visitas locais.'
+            ),
+            'businessStatus=' . $status . ' en Google Business Profile. Revisar la ficha en Maps.',
+            'operator'
+        );
+    }
+
+    if ($website === '') {
+        $out[] = findingsMake(
+            'gbpNoWebsite',
+            'local',
+            3,
+            35,
+            findingsFigure(1, 'pages', 'risk'),
+            '/',
+            $mapsUri,
+            '',
+            ['websiteUri' => ''],
+            findingsSay(
+                'Google Maps no tiene el sitio web',
+                'Quien los encuentra en el mapa no tiene enlace al sitio. Se pierden visitas y contactos.',
+                'Google Maps has no website',
+                'People who find them on the map have no link to the site. Visits and contacts are lost.',
+                'O Google Maps não tem o site',
+                'Quem os encontra no mapa não tem link para o site. Perdem visitas e contatos.'
+            ),
+            'Ficha GBP sin websiteUri. Configurar https://' . $host . '/',
+            'both'
+        );
+    } elseif ($host !== '' && function_exists('gbpWebsiteMatchesHost') && !gbpWebsiteMatchesHost($website, $host)) {
+        $out[] = findingsMake(
+            'gbpWrongDomain',
+            'local',
+            3,
+            35,
+            findingsFigure(1, 'pages', 'risk'),
+            '/',
+            $mapsUri,
+            '',
+            ['websiteUri' => $website, 'host' => $host],
+            findingsSay(
+                'Google Maps apunta a otro sitio',
+                'La ficha enlaza un dominio distinto al que administramos. La gente llega al lugar equivocado.',
+                'Google Maps points to another site',
+                'The listing links a different domain than the one we manage. People land in the wrong place.',
+                'O Google Maps aponta para outro site',
+                'A ficha liga um domínio diferente do que administramos. As pessoas chegam ao lugar errado.'
+            ),
+            'websiteUri de GBP (' . $website . ') no coincide con ' . $host . '.',
+            'both'
+        );
+    } elseif ($website !== '' && !preg_match('#^https://#i', $website)) {
+        $out[] = findingsMake(
+            'gbpWrongDomain',
+            'local',
+            2,
+            15,
+            findingsFigure(1, 'pages', 'risk'),
+            '/',
+            $mapsUri,
+            '',
+            ['websiteUri' => $website],
+            findingsSay(
+                'El enlace de Maps no usa HTTPS',
+                'El sitio en la ficha no va por HTTPS. Google y los clientes confían menos.',
+                'The Maps link is not HTTPS',
+                'The listing website is not HTTPS. Trust drops for Google and for customers.',
+                'O link do Maps não usa HTTPS',
+                'O site na ficha não vai por HTTPS. A confiança cai.'
+            ),
+            'websiteUri sin HTTPS: ' . $website,
+            'operator'
+        );
+    }
+
+    if ($gbpPhone !== '' && $sitePhones !== []) {
+        $match = false;
+        foreach ($sitePhones as $sitePhone) {
+            if (function_exists('gbpPhonesMatch') ? gbpPhonesMatch($gbpPhone, $sitePhone) : false) {
+                $match = true;
+                break;
+            }
+        }
+        if (!$match) {
+            $out[] = findingsMake(
+                'napPhoneMismatch',
+                'local',
+                2,
+                25,
+                findingsFigure(1, 'contacts', 'risk'),
+                '/',
+                $mapsUri,
+                '',
+                ['gbpPhone' => $gbpPhone, 'sitePhones' => array_slice($sitePhones, 0, 4)],
+                findingsSay(
+                    'El teléfono de Maps no coincide con el del sitio',
+                    'En Google Maps figura un número y en la web otro. Eso confunde y hace perder llamadas.',
+                    'Maps phone does not match the site',
+                    'Google Maps shows one number and the website another. That confuses people and loses calls.',
+                    'O telefone do Maps não bate com o do site',
+                    'No Google Maps aparece um número e no site outro. Isso confunde e perde ligações.'
+                ),
+                'NAP teléfono: GBP=' . $gbpPhone . ' · web=' . implode(', ', array_slice($sitePhones, 0, 3)),
+                'both'
+            );
+        }
+    }
+
+    $schemaIncomplete = false;
+    if (!$hasLocalSchema) {
+        $schemaIncomplete = true;
+    } else {
+        $missing = [];
+        if (($siteNap['phones'] ?? []) === [] && $gbpPhone !== '') {
+            $missing[] = 'telephone';
+        }
+        if (trim((string) ($siteNap['address'] ?? '')) === '' && trim((string) ($gbp['formattedAddress'] ?? '')) !== '') {
+            $missing[] = 'address';
+        }
+        if (empty($siteNap['geo']) && empty($siteNap['mapsUrls']) && empty($siteNap['hasMapsLink'])) {
+            $missing[] = 'geo/sameAs';
+        }
+        if ($missing !== []) {
+            $schemaIncomplete = true;
+        }
+    }
+    if ($schemaIncomplete) {
+        $out[] = findingsMake(
+            'localSchemaIncomplete',
+            'local',
+            2,
+            $localDemand ? 20 : 12,
+            findingsFigure(1, 'pages', 'risk'),
+            '/',
+            'https://' . $host . '/',
+            '',
+            [
+                'hasLocalSchema' => $hasLocalSchema,
+                'gbpName' => (string) ($gbp['displayName'] ?? ''),
+                'gbpAddress' => (string) ($gbp['formattedAddress'] ?? ''),
+                'gbpPhone' => $gbpPhone,
+            ],
+            findingsSay(
+                'Falta el marcado local en el sitio',
+                'Tienen ficha en Google Maps, pero la web no declara bien el negocio local (dirección, teléfono, mapa).',
+                'Local markup is missing on the site',
+                'They have a Google Maps listing, but the site does not declare the local business clearly.',
+                'Falta a marcação local no site',
+                'Têm ficha no Google Maps, mas o site não declara bem o negócio local.'
+            ),
+            'Inyectar JSON-LD LocalBusiness con NAP exacto de GBP (nombre, address, telephone, geo/sameAs).',
+            'both'
+        );
+    }
+
+    $negative = null;
+    foreach ($gbp['reviews'] ?? [] as $rev) {
+        if (!is_array($rev)) {
+            continue;
+        }
+        $r = (int) ($rev['rating'] ?? 0);
+        if ($r >= 1 && $r <= 3 && findingsReviewIsRecent($rev)) {
+            $negative = $rev;
+            break;
+        }
+    }
+    if ($negative !== null) {
+        $out[] = findingsMake(
+            'gbpNegativeReview',
+            'local',
+            3,
+            18,
+            findingsFigure((int) $negative['rating'], 'score', 'risk'),
+            '/',
+            $mapsUri,
+            '',
+            [
+                'rating' => (int) $negative['rating'],
+                'author' => (string) ($negative['author'] ?? ''),
+                'relativeTime' => (string) ($negative['relativeTime'] ?? ''),
+                'text' => ersClip((string) ($negative['text'] ?? ''), 200),
+            ],
+            findingsSay(
+                'Hay una reseña negativa reciente en Maps',
+                'Alguien dejó ' . (int) $negative['rating'] . ' estrellas hace poco. Conviene responder con el cliente.',
+                'There is a recent negative review on Maps',
+                'Someone left ' . (int) $negative['rating'] . ' stars recently. Worth answering with the client.',
+                'Há uma avaliação negativa recente no Maps',
+                'Alguém deixou ' . (int) $negative['rating'] . ' estrelas há pouco. Convém responder com o cliente.'
+            ),
+            'Reseña ≤3★ reciente en GBP. Abrir ficha y coordinar respuesta.',
+            'operator'
+        );
+    }
+
+    if ($reviews > 0 && $reviews < 15 && ($localDemand || $rating !== null)) {
+        $out[] = findingsMake(
+            'gbpLowReviews',
+            'local',
+            2,
+            max(5, 15 - $reviews),
+            findingsFigure($reviews, 'count', 'risk'),
+            '/',
+            $mapsUri,
+            '',
+            ['userRatingCount' => $reviews, 'rating' => $rating],
+            findingsSay(
+                'Pocas opiniones en Google Maps',
+                'Con pocas reseñas cuesta más ganar confianza frente a la competencia local.',
+                'Few reviews on Google Maps',
+                'With few reviews it is harder to earn trust against local competitors.',
+                'Poucas avaliações no Google Maps',
+                'Com poucas avaliações fica mais difícil ganhar confiança frente à concorrência local.'
+            ),
+            'Solo ' . $reviews . ' reseñas en GBP. Pedir reseñas a clientes satisfechos.',
+            'both'
+        );
+    }
+
+    if ($rating !== null && $rating > 0 && $rating < 4.2 && $reviews >= 5) {
+        $out[] = findingsMake(
+            'gbpLowRating',
+            'local',
+            2,
+            max(8, (int) round((4.2 - $rating) * 20)),
+            findingsFigure((int) round($rating * 10), 'score', 'risk'),
+            '/',
+            $mapsUri,
+            '',
+            ['rating' => $rating, 'userRatingCount' => $reviews],
+            findingsSay(
+                'La calificación en Maps está baja',
+                'Con menos de 4,2 estrellas, parte de la gente elige a otro antes de llamar.',
+                'The Maps rating is low',
+                'Under 4.2 stars, some people pick someone else before calling.',
+                'A nota no Maps está baixa',
+                'Com menos de 4,2 estrelas, parte das pessoas escolhe outro antes de ligar.'
+            ),
+            'Rating GBP ' . $rating . ' / 5 (' . $reviews . ' reseñas). Mejorar experiencia y responder reseñas.',
+            'both'
+        );
+    }
+
+    if ($hours === []) {
+        $out[] = findingsMake(
+            'gbpMissingHours',
+            'local',
+            1,
+            4,
+            findingsFigure(0, 'count', 'risk'),
+            '/',
+            $mapsUri,
+            '',
+            ['hours' => []],
+            findingsSay(
+                'Faltan los horarios en Google Maps',
+                'Sin horario, Maps no sabe cuándo están abiertos y pierden visitas de última hora.',
+                'Opening hours are missing on Google Maps',
+                'Without hours, Maps does not know when they are open and late visits are lost.',
+                'Faltam os horários no Google Maps',
+                'Sem horário, o Maps não sabe quando estão abertos.'
+            ),
+            'regularOpeningHours vacío en GBP.',
+            'operator'
+        );
+    }
+
+    if ($photos < 5) {
+        $out[] = findingsMake(
+            'gbpFewPhotos',
+            'local',
+            1,
+            max(2, 5 - $photos),
+            findingsFigure($photos, 'images', 'risk'),
+            '/',
+            $mapsUri,
+            '',
+            ['photosCount' => $photos],
+            findingsSay(
+                'La ficha de Maps tiene pocas fotos',
+                'Con pocas fotos la ficha se ve incompleta frente a la competencia.',
+                'The Maps listing has few photos',
+                'With few photos the listing looks thin against competitors.',
+                'A ficha do Maps tem poucas fotos',
+                'Com poucas fotos a ficha parece incompleta.'
+            ),
+            'Solo ' . $photos . ' fotos en GBP (ideal ≥5).',
+            'operator'
+        );
+    }
+
+    return $out;
+}
+
+/**
+ * Proyecta hallazgos locales a señales de agenda / panel SEO.
+ *
+ * @return list<array>
+ */
+function findingsLocalSignals(array $dossier): array
+{
+    $findings = findingsLocal($dossier);
+    $want = [
+        'gbpNegativeReview' => true,
+        'gbpWrongDomain' => true,
+        'gbpNoWebsite' => true,
+        'napPhoneMismatch' => true,
+        'gbpClosed' => true,
+        'gbpSuspended' => true,
+        'localSchemaIncomplete' => true,
+        'gbpLowReviews' => true,
+        'gbpLowRating' => true,
+    ];
+    $signals = [];
+    foreach ($findings as $f) {
+        $kind = (string) ($f['kind'] ?? '');
+        if (!isset($want[$kind])) {
+            continue;
+        }
+        $metric = match ($kind) {
+            'gbpNegativeReview' => 'CRÍTICO · Reseña',
+            'gbpWrongDomain', 'gbpNoWebsite' => 'CRÍTICO · Maps',
+            'gbpClosed', 'gbpSuspended' => 'CRÍTICO · Ficha',
+            'napPhoneMismatch' => 'NAP · Teléfono',
+            'localSchemaIncomplete' => 'Schema local',
+            'gbpLowReviews' => 'Pocas reseñas',
+            'gbpLowRating' => 'Rating bajo',
+            default => 'Local',
+        };
+        $signals[] = [
+            'kind' => $kind,
+            'severity' => (int) ($f['severity'] ?? 1),
+            'title' => (string) ($f['lines']['es']['title'] ?? $kind),
+            'detail' => (string) ($f['techText'] ?? $f['lines']['es']['line'] ?? ''),
+            'metric' => $metric,
+            'url' => (string) ($f['url'] ?? ''),
+            'id' => $kind . '|' . ((string) ($f['url'] ?? '') !== '' ? $f['url'] : 'gbp'),
+        ];
+    }
+    usort($signals, static fn ($a, $b) => ($b['severity'] <=> $a['severity']));
+    return array_slice($signals, 0, 10);
 }
 
 function findingsDetect(array $dossier): array
@@ -1348,7 +1822,8 @@ function findingsDetect(array $dossier): array
         findingsDemand($dossier),
         findingsOnPage($dossier),
         findingsConversion($dossier),
-        findingsSpeed($dossier)
+        findingsSpeed($dossier),
+        findingsLocal($dossier)
     );
     $seen = [];
     $out = [];
@@ -1361,7 +1836,7 @@ function findingsDetect(array $dossier): array
         $out[] = $finding;
     }
     usort($out, static fn ($a, $b) => ($b['severity'] <=> $a['severity']) ?: ($b['impact'] <=> $a['impact']));
-    $out = array_slice($out, 0, 40);
+    $out = array_slice($out, 0, 48);
     return findingsAttachFiles($out, $dossier);
 }
 
@@ -1383,7 +1858,7 @@ function findingsTop(array $findings, int $limit = 3): array
 
 function findingsCounts(array $findings): array
 {
-    $out = ['total' => count($findings), 'index' => 0, 'demand' => 0, 'onpage' => 0, 'conversion' => 0, 'speed' => 0, 'code' => 0];
+    $out = ['total' => count($findings), 'index' => 0, 'demand' => 0, 'onpage' => 0, 'conversion' => 0, 'speed' => 0, 'local' => 0, 'code' => 0];
     foreach ($findings as $finding) {
         $category = (string) ($finding['category'] ?? '');
         if (isset($out[$category])) {
@@ -1418,10 +1893,13 @@ function findingsCursorBlock(array $findings): string
         return 'Sin hallazgos sobre los datos disponibles.';
     }
     $now = [];
+    $local = [];
     $later = [];
     foreach ($findings as $f) {
         if (($f['category'] ?? '') === 'index') {
             $now[] = $f;
+        } elseif (($f['category'] ?? '') === 'local') {
+            $local[] = $f;
         } else {
             $later[] = $f;
         }
@@ -1430,6 +1908,10 @@ function findingsCursorBlock(array $findings): string
     if ($now !== []) {
         $chunks[] = "CORREGIR AHORA — indexación de páginas públicas. Un cambio por URL, antes que cualquier otro trabajo. No quites noindex de páginas privadas (login, gracias, admin, carrito, preview).\n"
             . findingsCursorLines($now);
+    }
+    if ($local !== []) {
+        $chunks[] = "SEO LOCAL / GOOGLE MAPS — coherencia NAP y ficha. Usá el bloque DATOS REALES GOOGLE BUSINESS PROFILE; no inventes teléfono ni dirección.\n"
+            . findingsCursorLines($local);
     }
     if ($later !== []) {
         $chunks[] = "DESPUÉS — solo cuando la indexación pública ya esté corregida\n" . findingsCursorLines($later);

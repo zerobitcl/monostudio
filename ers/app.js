@@ -481,6 +481,68 @@ class SeoAuditModule {
   }
 }
 
+/** Google Business Profile vía Places API (New). */
+class GbpModule {
+  static API = "./api/gbp.php";
+
+  static async #read(res) {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Google Maps respondió ${res.status}`);
+    return data;
+  }
+
+  static status(host, fresh = false) {
+    const qs = `action=status&host=${encodeURIComponent(host)}${fresh ? "&fresh=1" : ""}&_=${Date.now()}`;
+    return fetch(`${GbpModule.API}?${qs}`, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    }).then((res) => GbpModule.#read(res));
+  }
+
+  static search(host, q = "") {
+    const qs = `action=search&host=${encodeURIComponent(host)}&q=${encodeURIComponent(q)}&_=${Date.now()}`;
+    return fetch(`${GbpModule.API}?${qs}`, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    }).then((res) => GbpModule.#read(res));
+  }
+
+  static link(host, placeId, placeQuery = "") {
+    return fetch(`${GbpModule.API}?action=link`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ host, placeId, placeQuery }),
+    }).then((res) => GbpModule.#read(res));
+  }
+
+  static unlink(host) {
+    return fetch(`${GbpModule.API}?action=unlink`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ host }),
+    }).then((res) => GbpModule.#read(res));
+  }
+
+  static refresh(host) {
+    return fetch(`${GbpModule.API}?action=refresh`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ host }),
+    }).then((res) => GbpModule.#read(res));
+  }
+
+  static stars(rating) {
+    if (rating == null || Number.isNaN(Number(rating))) return "—";
+    const n = Math.max(0, Math.min(5, Number(rating)));
+    const full = Math.floor(n);
+    const half = n - full >= 0.4 && n - full < 0.9;
+    return `${"★".repeat(full)}${half ? "½" : ""}${"☆".repeat(Math.max(0, 5 - full - (half ? 1 : 0)))} ${n.toFixed(1)}`;
+  }
+}
+
 class ReportModule {
   static API = "./api/report.php";
 
@@ -1057,6 +1119,9 @@ class AppController {
     this.growthItems = [];
     /** Estado auditoría Cursor por host (status API). */
     this.auditData = new Map();
+    /** GBP / Places por host. */
+    this.gbpData = new Map();
+    this.gbpBusy = false;
     this.auditBusy = false;
     this.auditAutoLoop = false;
     this.reportBusy = false;
@@ -1094,6 +1159,7 @@ class AppController {
       "unlinkedPanel", "unlinkedList", "unlinkedCount", "ignoredHostsBar", "ignoredHostsCount", "btnRestoreIgnored",
       "requestList", "requestsEmpty",
       "seoPickerSearchWrap", "seoPickerSearch", "seoClients", "seoNotice", "seoCritical", "seoKpis", "seoSpark", "seoInventory",
+      "gbpPanel", "gbpMeta", "gbpActions", "gbpBody", "gbpSearchWrap", "gbpSearchInput", "btnGbpSearch", "gbpResults",
       "seoSignals", "seoSignalsEmpty", "seoPagesDrawer", "seoPagesCount",
       "seoTableBody", "seoDiagDrawer", "seoDiag", "seoRange", "seoBrief", "seoBriefBody",
       "seoPeriodToggle",
@@ -1418,6 +1484,14 @@ class AppController {
     this.dom.btnAuditBatch.addEventListener("click", () => this.runAuditBatch({ autoContinue: true }));
     this.dom.btnAuditGenerate.addEventListener("click", () => this.generateCursorAudit());
     this.dom.btnAuditCopy.addEventListener("click", () => this.copyCursorPrompt());
+    this.dom.btnGbpSearch?.addEventListener("click", () => this.searchGbp());
+    this.dom.gbpSearchInput?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        this.searchGbp();
+      }
+    });
+    this.dom.gbpPanel?.addEventListener("click", (e) => this.handleGbpClick(e));
 
     this.dom.btnViewOrbit.addEventListener("click", () => this.setView("orbit"));
     this.dom.btnViewList.addEventListener("click", () => this.setView("list"));
@@ -2933,7 +3007,10 @@ class AppController {
     this.updateChatContextLabel();
     this.renderSeo();
     if (!SeoStore.get(host)) this.loadSeoHost(host);
-    else if (!this.auditData.has(host)) this.refreshAuditStatus();
+    else {
+      if (!this.auditData.has(host)) this.refreshAuditStatus();
+      if (!this.gbpData.has(host)) this.loadGbpHost(host);
+    }
   }
 
   async loadSeoHost(host, fresh = false) {
@@ -2959,6 +3036,18 @@ class AppController {
     }
     // Secuencial a propósito: en paralelo con el análisis de páginas compite por el límite de 60s del proxy.
     if (fresh) this.loadKeywords(host, true);
+    this.loadGbpHost(host, fresh);
+  }
+
+  async loadGbpHost(host, fresh = false) {
+    if (!host || !this.dom.gbpPanel) return;
+    try {
+      const data = await GbpModule.status(host, fresh);
+      this.gbpData.set(host, data);
+    } catch (err) {
+      this.gbpData.set(host, { error: err.message, apiKeyConfigured: false });
+    }
+    if (host === this.seoHost) this.renderGbpPanel();
   }
 
   static KW_TABS = {
@@ -3438,6 +3527,7 @@ class AppController {
       ["repo", "Repo"],
       ["keywords", "Keywords"],
       ["keywordsAi", "Keywords IA"],
+      ["gbp", "Google Maps"],
     ];
     const coverageEl = this.dom.cursorAuditCoverage;
     if (coverageEl) {
@@ -3446,7 +3536,12 @@ class AppController {
     if (!coverageEl.hidden) {
       sourceLabels.forEach(([key, label]) => {
         const chip = document.createElement("span");
-        const on = Boolean(coverage[key] || (key === "keywordsAi" && (audit.keywordsAi?.insights || audit.insights?.keywords)));
+        const gbpLive = key === "gbp" && Boolean(this.gbpData.get(this.seoHost)?.gbp?.ok);
+        const on = Boolean(
+          coverage[key]
+          || (key === "keywordsAi" && (audit.keywordsAi?.insights || audit.insights?.keywords))
+          || gbpLive
+        );
         chip.className = on ? "is-on" : "is-off";
         chip.textContent = `${on ? "✓" : "○"} ${label}`;
         coverageEl.appendChild(chip);
@@ -3462,8 +3557,8 @@ class AppController {
     const counts = status?.findingCounts || {};
     const countEl = this.dom.cursorAuditCounts;
     const integralMeta = repo.configured
-      ? `Un plan integral para subir de nivel: Search Console, keywords, Analytics, velocidad, HTML y ${repo.slug || "el repo"}.`
-      : "Un plan integral para subir de nivel: Search Console, keywords, Analytics, velocidad y HTML. El repo se suma desde la ficha del cliente.";
+      ? `Un plan integral para subir de nivel: Search Console, keywords, Analytics, Maps, velocidad, HTML y ${repo.slug || "el repo"}.`
+      : "Un plan integral para subir de nivel: Search Console, keywords, Analytics, Maps, velocidad y HTML. El repo se suma desde la ficha del cliente.";
     if (!countEl) {
       this.dom.cursorAuditMeta.textContent = integralMeta;
     } else {
@@ -3473,6 +3568,7 @@ class AppController {
       ["onpage", "Página"],
       ["conversion", "Contactos"],
       ["speed", "Velocidad"],
+      ["local", "Local"],
       ["code", "Código"],
     ];
     const countBits = countLabels
@@ -3782,6 +3878,7 @@ class AppController {
       if (this.dom.btnStudioReport) this.dom.btnStudioReport.hidden = true;
       this.dom.growthPanel.hidden = true;
       this.dom.cursorAuditPanel.hidden = true;
+      if (this.dom.gbpPanel) this.dom.gbpPanel.hidden = true;
       this.dom.seoPeriodToggle.hidden = true;
       this.dom.btnSeoIndex.hidden = true;
       this.dom.kwPanel.hidden = true;
@@ -3805,6 +3902,7 @@ class AppController {
 
     if (hasMetrics) this.renderSeoMetrics(data);
     this.renderSeoInventory(data);
+    this.renderGbpPanel();
     this.renderSeoSignals(data);
     this.renderSeoPages(data);
     this.renderKeywords();
@@ -3815,6 +3913,224 @@ class AppController {
     this.syncSeoForm(data);
     if (hasMetrics && this.seoHost && !this.auditData.has(this.seoHost) && !this.auditBusy) {
       this.refreshAuditStatus();
+    }
+    if (this.seoHost && !this.gbpData.has(this.seoHost)) {
+      this.loadGbpHost(this.seoHost);
+    }
+  }
+
+  renderGbpPanel() {
+    const panel = this.dom.gbpPanel;
+    if (!panel) return;
+    const host = this.seoHost;
+    if (!host) {
+      panel.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+    const pack = this.gbpData.get(host);
+    const gbp = pack?.gbp || pack?.raw || null;
+    const linked = Boolean(gbp?.linked || gbp?.ok || gbp?.placeId);
+    const place = gbp?.ok ? gbp : null;
+    const actions = this.dom.gbpActions;
+    const body = this.dom.gbpBody;
+    const searchWrap = this.dom.gbpSearchWrap;
+    actions.innerHTML = "";
+    body.innerHTML = "";
+
+    if (!pack) {
+      this.dom.gbpMeta.textContent = "Cargando ficha de Google Maps…";
+      searchWrap.hidden = true;
+      return;
+    }
+    if (pack.error && !linked) {
+      this.dom.gbpMeta.textContent = pack.error;
+    }
+
+    if (!linked || !place?.ok) {
+      this.dom.gbpMeta.textContent = pack.apiKeyConfigured === false
+        ? "Falta API Key de Places (ers/data/places.json o la misma de psi.json)."
+        : "Sin ficha vinculada. Buscá el negocio en Google Maps.";
+      searchWrap.hidden = false;
+      if (!this.dom.gbpSearchInput.value) {
+        const client = this.clients.find((c) => GscModule.hostOf(c.siteUrl) === host);
+        this.dom.gbpSearchInput.value = client?.name ? `${client.name}` : host.replace(/\.(cl|com|net|org)$/i, "").replace(/[-_.]/g, " ");
+      }
+      const suggestBtn = document.createElement("button");
+      suggestBtn.type = "button";
+      suggestBtn.className = "btn btn--ghost";
+      suggestBtn.dataset.gbpAct = "suggest";
+      suggestBtn.textContent = "Buscar sugerencias";
+      actions.appendChild(suggestBtn);
+      return;
+    }
+
+    searchWrap.hidden = true;
+    this.dom.gbpResults.hidden = true;
+    this.dom.gbpResults.innerHTML = "";
+    const status = String(place.businessStatus || "OPERATIONAL");
+    const statusLabel = status === "OPERATIONAL" ? "Operativa" : status.replace(/_/g, " ").toLowerCase();
+    const delta = Number(place.reviewsDelta || 0);
+    const deltaText = delta > 0 ? ` (+${delta} este período)` : delta < 0 ? ` (${delta})` : "";
+    this.dom.gbpMeta.textContent = [place.primaryTypeDisplayName, statusLabel].filter(Boolean).join(" · ");
+
+    const head = document.createElement("div");
+    head.className = "gbp-card";
+    head.innerHTML = `
+      <div class="gbp-card__rating">
+        <strong>${GbpModule.stars(place.rating)}</strong>
+        <span>${GscModule.fmt(place.userRatingCount || 0)} opiniones${deltaText}</span>
+      </div>
+      <div class="gbp-card__nap">
+        <strong>${this.#esc(place.displayName || "—")}</strong>
+        <span>${this.#esc(place.formattedAddress || "Sin dirección")}</span>
+        <span>${this.#esc(place.internationalPhoneNumber || place.nationalPhoneNumber || "Sin teléfono")}</span>
+        <span class="gbp-card__web">${this.#esc(place.websiteUri || "Sin sitio en la ficha")}</span>
+      </div>
+    `;
+    body.appendChild(head);
+
+    if (Array.isArray(place.reviews) && place.reviews.length) {
+      const list = document.createElement("ul");
+      list.className = "gbp-reviews";
+      place.reviews.slice(0, 3).forEach((rev) => {
+        const li = document.createElement("li");
+        const tone = Number(rev.rating) <= 3 ? "is-bad" : Number(rev.rating) >= 5 ? "is-ok" : "";
+        li.className = tone;
+        li.innerHTML = `<strong>${"★".repeat(Number(rev.rating) || 0)}</strong>
+          <span>${this.#esc(rev.author || "Cliente")} · ${this.#esc(rev.relativeTime || "")}</span>
+          <p>${this.#esc((rev.text || "").slice(0, 180))}</p>`;
+        list.appendChild(li);
+      });
+      body.appendChild(list);
+    }
+
+    const mk = (label, act, primary = false) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = primary ? "btn btn--neon" : "btn btn--ghost";
+      btn.dataset.gbpAct = act;
+      btn.textContent = label;
+      return btn;
+    };
+    if (place.googleMapsUri) {
+      const a = document.createElement("a");
+      a.className = "btn btn--ghost";
+      a.href = place.googleMapsUri;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = "Abrir en Maps";
+      actions.appendChild(a);
+    }
+    actions.appendChild(mk(this.gbpBusy ? "…" : "Actualizar", "refresh"));
+    actions.appendChild(mk("Cambiar ficha", "relink"));
+    actions.appendChild(mk("Desvincular", "unlink"));
+  }
+
+  #esc(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  async handleGbpClick(e) {
+    const btn = e.target.closest("[data-gbp-act], [data-place-id]");
+    if (!btn || !this.seoHost) return;
+    const act = btn.dataset.gbpAct;
+    const placeId = btn.dataset.placeId;
+    if (placeId) {
+      await this.linkGbp(placeId, this.dom.gbpSearchInput?.value || "");
+      return;
+    }
+    if (act === "suggest" || act === "relink") {
+      this.dom.gbpSearchWrap.hidden = false;
+      if (act === "suggest") this.searchGbp();
+      return;
+    }
+    if (act === "refresh") {
+      this.gbpBusy = true;
+      this.renderGbpPanel();
+      try {
+        const data = await GbpModule.refresh(this.seoHost);
+        this.gbpData.set(this.seoHost, data);
+        await this.loadSeoHost(this.seoHost, false);
+        this.showToast("Ficha de Maps actualizada");
+      } catch (err) {
+        this.showToast(err.message);
+      } finally {
+        this.gbpBusy = false;
+        this.renderGbpPanel();
+      }
+      return;
+    }
+    if (act === "unlink") {
+      try {
+        await GbpModule.unlink(this.seoHost);
+        this.gbpData.delete(this.seoHost);
+        await this.loadGbpHost(this.seoHost);
+        await this.loadSeoHost(this.seoHost, false);
+        this.showToast("Ficha desvinculada");
+      } catch (err) {
+        this.showToast(err.message);
+      }
+    }
+  }
+
+  async searchGbp() {
+    if (!this.seoHost || this.gbpBusy) return;
+    const q = this.dom.gbpSearchInput.value.trim();
+    this.gbpBusy = true;
+    this.dom.btnGbpSearch.disabled = true;
+    try {
+      const data = await GbpModule.search(this.seoHost, q);
+      const list = this.dom.gbpResults;
+      list.innerHTML = "";
+      const results = data.results || [];
+      if (!results.length) {
+        list.hidden = false;
+        list.innerHTML = "<li class=\"gbp-results__empty\">Sin coincidencias. Probá con nombre + ciudad.</li>";
+        return;
+      }
+      list.hidden = false;
+      results.forEach((row) => {
+        const li = document.createElement("li");
+        li.innerHTML = `
+          <div>
+            <strong>${this.#esc(row.displayName || row.placeId)}</strong>
+            <span>${this.#esc(row.formattedAddress || "")}</span>
+            <em>${row.websiteMatches ? "Coincide con el dominio" : this.#esc(row.websiteUri || "Sin sitio")}</em>
+          </div>
+          <button type="button" class="btn btn--neon" data-place-id="${this.#esc(row.placeId)}">Vincular</button>
+        `;
+        if (row.websiteMatches) li.classList.add("is-match");
+        list.appendChild(li);
+      });
+    } catch (err) {
+      this.showToast(err.message);
+    } finally {
+      this.gbpBusy = false;
+      this.dom.btnGbpSearch.disabled = false;
+    }
+  }
+
+  async linkGbp(placeId, placeQuery = "") {
+    if (!this.seoHost || !placeId) return;
+    this.gbpBusy = true;
+    try {
+      const data = await GbpModule.link(this.seoHost, placeId, placeQuery);
+      this.gbpData.set(this.seoHost, data);
+      this.dom.gbpSearchWrap.hidden = true;
+      this.dom.gbpResults.hidden = true;
+      await this.loadSeoHost(this.seoHost, false);
+      this.showToast("Google Maps vinculado");
+      this.refreshAuditStatus();
+    } catch (err) {
+      this.showToast(err.message);
+    } finally {
+      this.gbpBusy = false;
+      this.renderGbpPanel();
     }
   }
 

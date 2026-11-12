@@ -325,6 +325,12 @@ function reportSavePrefs(string $dataDir, string $host, array $input): array
     if (array_key_exists('ga4Property', $input)) {
         $prev['ga4Property'] = gscGa4Property((string) $input['ga4Property']);
     }
+    if (array_key_exists('placeId', $input)) {
+        $prev['placeId'] = gscPlaceId((string) $input['placeId']);
+    }
+    if (array_key_exists('placeQuery', $input)) {
+        $prev['placeQuery'] = trim((string) $input['placeQuery']);
+    }
     $config['hosts'][$host] = gscHostEntry($prev);
     if (!gscWriteJson($file, $config)) {
         throw new RuntimeException('No se pudo guardar el idioma del informe');
