@@ -537,6 +537,75 @@ function ersSeoSignalKey(string $host, array $signal): string
     return 'seo:' . $host . ':' . $signalId;
 }
 
+/**
+ * Recorte del dossier en caché (sin red): contactos, PSI, Maps y conteo de hallazgos.
+ * La cartera pregunta esto muchas veces en el mismo request.
+ */
+function ersDossierBrief(string $host): array
+{
+    static $memo = [];
+    $host = strtolower(preg_replace('/^www\./i', '', trim($host)) ?? $host);
+    if ($host === '') {
+        return [];
+    }
+    if (array_key_exists($host, $memo)) {
+        return $memo[$host];
+    }
+    if (!function_exists('dossierRead')) {
+        require_once __DIR__ . '/dossier.php';
+    }
+    if (!function_exists('findingsDetect')) {
+        require_once __DIR__ . '/findings.php';
+    }
+    try {
+        $dossier = dossierRead(ersDataDir(), $host);
+    } catch (Throwable) {
+        return $memo[$host] = [];
+    }
+    if (empty($dossier['ok'])) {
+        return $memo[$host] = [];
+    }
+
+    $findings = findingsDetect($dossier);
+    $counts = ['total' => count($findings), 'critical' => 0, 'local' => 0, 'leak' => 0];
+    $top = '';
+    foreach ($findings as $finding) {
+        $sev = (int) ($finding['severity'] ?? 0);
+        if ($sev >= 3) {
+            $counts['critical']++;
+        }
+        if (($finding['category'] ?? '') === 'local') {
+            $counts['local']++;
+        }
+        if (($finding['kind'] ?? '') === 'leak') {
+            $counts['leak']++;
+        }
+        if ($top === '' && $sev >= 2) {
+            $top = (string) ($finding['lines']['es']['title'] ?? $finding['kind'] ?? '');
+        }
+    }
+    $ga = is_array($dossier['ga'] ?? null) ? $dossier['ga'] : [];
+    $psi = is_array($dossier['psi']['home'] ?? null) ? $dossier['psi']['home'] : [];
+    $gbp = is_array($dossier['gbp'] ?? null) ? $dossier['gbp'] : [];
+
+    return $memo[$host] = [
+        'contacts' => (int) ($ga['contacts'] ?? 0),
+        'hasKeyEvents' => !empty($ga['hasKeyEvents']),
+        'sessions' => (int) ($ga['current']['sessions'] ?? 0),
+        'psiMobile' => isset($psi['score']) ? (int) $psi['score'] : null,
+        'maps' => empty($gbp['ok']) ? null : [
+            'name' => (string) ($gbp['displayName'] ?? ''),
+            'rating' => $gbp['rating'] ?? null,
+            'reviews' => (int) ($gbp['userRatingCount'] ?? 0),
+            'reviewsDelta' => (int) ($gbp['reviewsDelta'] ?? 0),
+            'status' => (string) ($gbp['businessStatus'] ?? ''),
+            'type' => (string) ($gbp['primaryTypeDisplayName'] ?? ''),
+        ],
+        'findings' => $counts,
+        'topFinding' => $top,
+    ];
+}
+
 function ersSeoSummary(string $host): array
 {
     $host = strtolower(trim($host));
@@ -632,6 +701,7 @@ function ersSeoSummary(string $host): array
         'signals' => $signals,
         'analysis' => $analysis,
         'topPages' => $pages,
+        'dossier' => ersDossierBrief($host),
     ];
 }
 
@@ -731,7 +801,7 @@ function ersBuildSeoReportMarkdown(string $host, array $summary, ?array $client)
     $ga = is_array($dossier['ga'] ?? null) ? $dossier['ga'] : null;
     $sources = $dossier['sources'] ?? [];
     $flags = [];
-    foreach (['gsc' => 'Search Console', 'ga4' => 'Analytics', 'keyEvents' => 'Contactos', 'psi' => 'PageSpeed', 'dom' => 'HTML', 'repo' => 'Repo', 'keywords' => 'Keywords'] as $key => $label) {
+    foreach (['gsc' => 'Search Console', 'ga4' => 'Analytics', 'keyEvents' => 'Contactos', 'psi' => 'PageSpeed', 'gbp' => 'Google Maps', 'dom' => 'HTML', 'repo' => 'Repo', 'keywords' => 'Keywords'] as $key => $label) {
         $flags[] = (!empty($sources[$key]) ? 'sí' : 'no') . ' ' . $label;
     }
 
@@ -759,6 +829,12 @@ function ersBuildSeoReportMarkdown(string $host, array $summary, ?array $client)
         $lines[] = '- Velocidad celular: ' . (int) $home['score']
             . (($home['field'] ?? '') !== '' ? ' · ' . $home['field'] : '');
     }
+    $gbp = is_array($dossier['gbp'] ?? null) ? $dossier['gbp'] : [];
+    if (!empty($gbp['ok'])) {
+        $lines[] = '- Google Maps: ' . ($gbp['displayName'] ?? $safeHost)
+            . (($gbp['rating'] ?? null) !== null ? ' · ' . $gbp['rating'] . '★ (' . (int) ($gbp['userRatingCount'] ?? 0) . ' reseñas)' : '')
+            . ((int) ($gbp['reviewsDelta'] ?? 0) !== 0 ? ' · ' . ersFmtSigned((float) $gbp['reviewsDelta']) . ' reseñas 28d' : '');
+    }
     $lines[] = '';
     $lines[] = '## Hallazgos';
     if ($findings === []) {
@@ -770,6 +846,7 @@ function ersBuildSeoReportMarkdown(string $host, array $summary, ?array $client)
         'onpage' => 'Página',
         'conversion' => 'Contactos',
         'speed' => 'Velocidad',
+        'local' => 'Local / Google Maps',
         'code' => 'Código',
     ];
     $grouped = [];
@@ -1011,6 +1088,16 @@ function ersActionGetPortfolioSeo(array $args = []): array
         } elseif ($clicksDelta < 0) {
             $priority += 1;
         }
+        $brief = is_array($summary['dossier'] ?? null) ? $summary['dossier'] : [];
+        if (($brief['findings']['leak'] ?? 0) > 0) {
+            $priority += 2;
+        }
+        if (($brief['maps']['reviewsDelta'] ?? 0) < 0) {
+            $priority += 2;
+        }
+        if (($brief['psiMobile'] ?? null) !== null && (int) $brief['psiMobile'] < 50) {
+            $priority += 1;
+        }
 
         $inv = $summary['inventory'] ?? [];
         $row += [
@@ -1022,6 +1109,13 @@ function ersActionGetPortfolioSeo(array $args = []): array
             'critical' => $critical,
             'topSignal' => $topSignal,
             'notIndexed' => (int) ($inv['notIndexed'] ?? 0),
+            'contacts' => (int) ($brief['contacts'] ?? 0),
+            'hasKeyEvents' => !empty($brief['hasKeyEvents']),
+            'psiMobile' => $brief['psiMobile'] ?? null,
+            'mapsRating' => $brief['maps']['rating'] ?? null,
+            'mapsReviewsDelta' => $brief['maps']['reviewsDelta'] ?? null,
+            'findingCount' => (int) ($brief['findings']['total'] ?? 0),
+            'topFinding' => (string) ($brief['topFinding'] ?? ''),
             'priority' => $priority,
         ];
         $sites[] = $row;
@@ -1588,6 +1682,21 @@ function ersLoadDailySecret(): string
 const ERS_GEMINI_DEFAULT_MODEL = 'gemini-3.8-flash';
 const ERS_GEMINI_DEFAULT_THINKING = 'medium';
 
+/** 2.5 ya no responde en la API. Un gemini.json viejo se sube solo a 3.8. */
+function ersGeminiInvalidModels(): array
+{
+    return ['gemini-2.5-flash', 'gemini-2.5-flash-preview'];
+}
+
+function ersNormalizeGeminiModel(string $model): string
+{
+    $model = trim($model);
+    if ($model === '' || in_array($model, ersGeminiInvalidModels(), true)) {
+        return ERS_GEMINI_DEFAULT_MODEL;
+    }
+    return $model;
+}
+
 function ersLoadGeminiConfig(): array
 {
     $path = ersDataDir() . '/gemini.json';
@@ -1610,12 +1719,16 @@ function ersLoadGeminiConfig(): array
     }
     return [
         'apiKey' => trim((string) ($data['apiKey'] ?? $data['api_key'] ?? '')),
-        'model' => trim((string) ($data['model'] ?? ERS_GEMINI_DEFAULT_MODEL)) ?: ERS_GEMINI_DEFAULT_MODEL,
+        'model' => ersNormalizeGeminiModel((string) ($data['model'] ?? '')),
         'thinkingLevel' => $level,
     ];
 }
 
-/** thinkingConfig REST para Gemini 3.x (low | medium | high). */
+/**
+ * thinkingConfig según la familia del modelo.
+ * Gemini 3 usa thinkingLevel. Gemini 2.5 usa thinkingBudget.
+ * El resto no lo manda: ersGeminiHttp reintenta sin thinking si la API responde 400.
+ */
 function ersGeminiThinkingConfig(?array $cfg = null, ?string $level = null): array
 {
     $cfg = $cfg ?? ersLoadGeminiConfig();
@@ -1623,7 +1736,25 @@ function ersGeminiThinkingConfig(?array $cfg = null, ?string $level = null): arr
     if (!in_array($value, ['low', 'medium', 'high'], true)) {
         $value = ERS_GEMINI_DEFAULT_THINKING;
     }
-    return ['thinkingConfig' => ['thinkingLevel' => $value]];
+    $model = strtolower((string) ($cfg['model'] ?? ''));
+    if (preg_match('/gemini-3(?:[.\-]|$)/', $model)) {
+        return ['thinkingConfig' => ['thinkingLevel' => $value]];
+    }
+    if (str_contains($model, '2.5') || str_contains($model, '2-5')) {
+        $budget = match ($value) {
+            'low' => 1024,
+            'high' => 8192,
+            default => 4096,
+        };
+        return ['thinkingConfig' => ['thinkingBudget' => $budget]];
+    }
+    return [];
+}
+
+function ersGeminiThinkingRejected(string $message): bool
+{
+    $message = strtolower($message);
+    return str_contains($message, 'thinking');
 }
 
 function ersGeminiUrl(array $cfg): string
@@ -1634,12 +1765,28 @@ function ersGeminiUrl(array $cfg): string
 
 function ersGeminiHttp(string $url, array $payload, int $timeout = 60): array
 {
-    $body = json_encode($payload, JSON_UNESCAPED_UNICODE);
-    if ($body === false) {
-        throw new RuntimeException('No se pudo serializar el request a Gemini');
-    }
+    $encode = static function (array $payload): string {
+        $body = json_encode($payload, JSON_UNESCAPED_UNICODE);
+        if ($body === false) {
+            throw new RuntimeException('No se pudo serializar el request a Gemini');
+        }
+        return $body;
+    };
 
-    $attempt = static function () use ($url, $body, $timeout): array {
+    $attempt = static function (string $body) use ($url, $timeout): array {
+        $fail = static function (int $code, string $msg, bool $transport = false): array {
+            $retry = $transport || in_array($code, [429, 500, 502, 503, 504], true)
+                || stripos($msg, 'overload') !== false
+                || stripos($msg, 'unavailable') !== false;
+            $thinking = $code === 400 && ersGeminiThinkingRejected($msg);
+            return [
+                'ok' => false,
+                'retry' => $retry,
+                'retryThinking' => $thinking,
+                'error' => 'Gemini' . ($code > 0 ? ' HTTP ' . $code : '') . ': ' . ersClip($msg, 400),
+            ];
+        };
+
         if (function_exists('curl_init')) {
             $ch = curl_init($url);
             curl_setopt_array($ch, [
@@ -1654,24 +1801,15 @@ function ersGeminiHttp(string $url, array $payload, int $timeout = 60): array
             $err = curl_error($ch);
             curl_close($ch);
             if ($raw === false) {
-                return [
-                    'ok' => false,
-                    'retry' => true,
-                    'error' => 'Gemini: ' . ($err ?: 'sin respuesta'),
-                ];
+                return $fail(0, $err ?: 'sin respuesta', true);
             }
             $data = json_decode($raw, true);
             if ($code >= 400) {
                 $msg = is_array($data) ? ($data['error']['message'] ?? $raw) : $raw;
-                $retry = in_array($code, [429, 500, 502, 503, 504], true);
-                return [
-                    'ok' => false,
-                    'retry' => $retry,
-                    'error' => 'Gemini HTTP ' . $code . ': ' . ersClip((string) $msg, 400),
-                ];
+                return $fail($code, (string) $msg);
             }
             if (!is_array($data)) {
-                return ['ok' => false, 'retry' => false, 'error' => 'Respuesta Gemini inválida'];
+                return ['ok' => false, 'retry' => false, 'retryThinking' => false, 'error' => 'Respuesta Gemini inválida'];
             }
             return ['ok' => true, 'data' => $data];
         }
@@ -1687,40 +1825,435 @@ function ersGeminiHttp(string $url, array $payload, int $timeout = 60): array
         ]);
         $raw = @file_get_contents($url, false, $ctx);
         if ($raw === false) {
-            return ['ok' => false, 'retry' => true, 'error' => 'Gemini: sin respuesta'];
+            return $fail(0, 'sin respuesta', true);
         }
         $data = json_decode($raw, true);
         if (!is_array($data)) {
-            return ['ok' => false, 'retry' => false, 'error' => 'Respuesta Gemini inválida'];
+            return ['ok' => false, 'retry' => false, 'retryThinking' => false, 'error' => 'Respuesta Gemini inválida'];
         }
         if (isset($data['error'])) {
             $msg = (string) ($data['error']['message'] ?? 'error');
             $code = (int) ($data['error']['code'] ?? 0);
-            $retry = in_array($code, [429, 500, 502, 503, 504], true)
-                || stripos($msg, 'overload') !== false
-                || stripos($msg, 'unavailable') !== false;
-            return [
-                'ok' => false,
-                'retry' => $retry,
-                'error' => 'Gemini: ' . ersClip($msg, 400),
-            ];
+            return $fail($code, $msg);
         }
         return ['ok' => true, 'data' => $data];
     };
 
-    $first = $attempt();
-    if ($first['ok']) {
+    $first = $attempt($encode($payload));
+    if (!empty($first['ok'])) {
         return $first['data'];
+    }
+    // Un 400 de thinkingConfig no es un fallo del prompt: se reintenta sin razonamiento.
+    if (!empty($first['retryThinking']) && isset($payload['generationConfig']['thinkingConfig'])) {
+        unset($payload['generationConfig']['thinkingConfig']);
+        $stripped = $attempt($encode($payload));
+        if (!empty($stripped['ok'])) {
+            return $stripped['data'];
+        }
+        if (empty($stripped['retry'])) {
+            throw new RuntimeException((string) ($stripped['error'] ?? $first['error']));
+        }
+        $first = $stripped;
     }
     if (!empty($first['retry'])) {
         usleep(1500000);
-        $second = $attempt();
-        if ($second['ok']) {
+        $second = $attempt($encode($payload));
+        if (!empty($second['ok'])) {
             return $second['data'];
         }
         throw new RuntimeException((string) ($second['error'] ?? $first['error']));
     }
     throw new RuntimeException((string) $first['error']);
+}
+
+/** Sitios activos de la cartera, sin los que siguen en desarrollo. */
+function ersSeoRadarHosts(array $store): array
+{
+    $hosts = [];
+    foreach ($store['clients'] ?? [] as $client) {
+        if (!is_array($client) || !empty($client['inDevelopment'])) {
+            continue;
+        }
+        $host = ersHostOf((string) ($client['siteUrl'] ?? ''));
+        if (function_exists('gscSanitizeHost')) {
+            $host = gscSanitizeHost($host);
+        }
+        if ($host === '' || isset($hosts[$host])) {
+            continue;
+        }
+        $hosts[$host] = [
+            'host' => $host,
+            'clientId' => (string) ($client['id'] ?? ''),
+            'name' => (string) ($client['name'] ?? $host),
+        ];
+    }
+    return array_values($hosts);
+}
+
+function ersRadarWorthTask(array $finding): bool
+{
+    $kind = (string) ($finding['kind'] ?? '');
+    $sev = (int) ($finding['severity'] ?? 0);
+    if (in_array($kind, ['noindex', 'blocked'], true)) {
+        return !findingsIsPrivatePath((string) ($finding['path'] ?? '/'));
+    }
+    if ($kind === 'falling') {
+        return $sev >= 3;
+    }
+    if ($kind === 'gbpNegativeReview' || $kind === 'leak') {
+        return true;
+    }
+    if ($kind === 'striking') {
+        $gain = (int) ($finding['evidence']['gain'] ?? $finding['impact'] ?? 0);
+        return $gain >= 8 && findingsIsTransactional((string) ($finding['query'] ?? ''));
+    }
+    return false;
+}
+
+function ersRadarTaskTitle(array $finding, string $name): string
+{
+    $kind = (string) ($finding['kind'] ?? '');
+    $path = (string) ($finding['path'] ?? '/');
+    $query = trim((string) ($finding['query'] ?? ''));
+    return match ($kind) {
+        'noindex' => 'Quitar noindex de ' . $path . ' en ' . $name,
+        'blocked' => 'Desbloquear ' . $path . ' en ' . $name,
+        'falling' => 'Recuperar los clics de ' . $path . ' en ' . $name,
+        'gbpNegativeReview' => 'Revisar la reseña negativa de ' . $name . ' en Maps',
+        'leak' => 'Cerrar la fuga de contactos en ' . $name,
+        'striking' => 'Empujar «' . ($query !== '' ? $query : $path) . '» en ' . $name,
+        default => 'Revisar ' . $path . ' en ' . $name,
+    };
+}
+
+function ersRadarSumRows(array $payload): array
+{
+    $clicks = 0;
+    $impr = 0;
+    $weight = 0.0;
+    foreach ($payload['rows'] ?? [] as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $metric = gscMetricRow($row);
+        $clicks += $metric['clicks'];
+        $impr += $metric['impressions'];
+        $weight += $metric['impressions'] * $metric['position'];
+    }
+    return [
+        'clicks' => $clicks,
+        'impressions' => $impr,
+        'ctr' => $impr > 0 ? $clicks / $impr : 0,
+        'position' => $impr > 0 ? $weight / $impr : 0,
+    ];
+}
+
+/** Dos consultas de páginas. No crea caché si el sitio nunca se abrió en SEO. */
+function ersRadarRefreshGsc(string $dataDir, string $host, array $cache): array
+{
+    $property = trim((string) ($cache['diagnostics']['property'] ?? ''));
+    if ($property === '') {
+        return $cache;
+    }
+    $sa = gscLoadServiceAccount($dataDir, $dataDir . '/gsc-service-account.json');
+    if ($sa === []) {
+        return $cache;
+    }
+    $token = gscAccessToken($sa, $dataDir . '/gsc-token.json');
+    $end = (new DateTimeImmutable('today', new DateTimeZone('UTC')))->modify('-3 days');
+    $start = $end->modify('-27 days');
+    $prevEnd = $start->modify('-1 day');
+    $prevStart = $prevEnd->modify('-27 days');
+    $nowPayload = gscQueryAnalytics($token, $property, $start->format('Y-m-d'), $end->format('Y-m-d'), [
+        'dimensions' => ['page'],
+        'rowLimit' => 1000,
+    ]);
+    $prevPayload = gscQueryAnalytics($token, $property, $prevStart->format('Y-m-d'), $prevEnd->format('Y-m-d'), [
+        'dimensions' => ['page'],
+        'rowLimit' => 1000,
+    ]);
+    $nowMap = gscIndexRows($nowPayload);
+    $prevMap = gscIndexRows($prevPayload);
+    $totals = ersRadarSumRows($nowPayload);
+    $previous = ersRadarSumRows($prevPayload);
+    $pages = is_array($cache['pages'] ?? null) ? $cache['pages'] : [];
+    foreach ($pages as $i => $page) {
+        if (!is_array($page)) {
+            continue;
+        }
+        $url = (string) ($page['url'] ?? '');
+        $key = rtrim($url, '/');
+        $now = gscMetricRow($nowMap[$url] ?? $nowMap[$key] ?? null);
+        $prev = gscMetricRow($prevMap[$url] ?? $prevMap[$key] ?? null);
+        $delta = gscDelta($now, $prev);
+        $pages[$i]['current'] = $now;
+        $pages[$i]['previous'] = $prev;
+        $pages[$i]['delta'] = $delta;
+        $pages[$i]['thermometer'] = gscThermometer($now, $delta, (float) $totals['ctr']);
+    }
+    $cache['pages'] = $pages;
+    $cache['totals'] = $totals;
+    $cache['totalsDelta'] = gscDelta($totals, $previous);
+    $cache['range'] = ['start' => $start->format('Y-m-d'), 'end' => $end->format('Y-m-d')];
+    if (is_array($cache['periods'] ?? null)) {
+        foreach ($cache['periods'] as $i => $period) {
+            if (($period['id'] ?? '') === '28d') {
+                $cache['periods'][$i]['totals'] = $totals;
+                $cache['periods'][$i]['previous'] = $previous;
+                $cache['periods'][$i]['delta'] = $cache['totalsDelta'];
+                $cache['periods'][$i]['start'] = $start->format('Y-m-d');
+                $cache['periods'][$i]['end'] = $end->format('Y-m-d');
+            }
+        }
+    }
+    $cache['signals'] = gscMergeLocalSignals($dataDir, $host, gscBuildSignals($pages));
+    $cache['fetchedAt'] = time();
+    $cache['radarRefresh'] = true;
+    gscWriteJson(gscHostCacheFile($dataDir, $host), $cache);
+    return $cache;
+}
+
+/** Unas pocas URLs del inventario. El lote completo se deja al botón del panel. */
+function ersRadarDomMicro(string $dataDir, string $host, array $site, float $deadline): void
+{
+    $urls = seoAuditInventoryUrls($site, $host);
+    if ($urls === []) {
+        return;
+    }
+    $cache = seoAuditDomCache($dataDir, $host);
+    $pending = array_slice(seoAuditDomProgress($cache, $urls)['pending'] ?? [], 0, 4);
+    if ($pending === []) {
+        return;
+    }
+    $scraped = 0;
+    foreach ($pending as $url) {
+        if (microtime(true) > $deadline || $scraped >= 4) {
+            break;
+        }
+        $cache['pages'][$url] = seoAuditFetchDom($url);
+        $scraped++;
+    }
+    if ($scraped === 0) {
+        return;
+    }
+    $cache['host'] = $host;
+    $cache['version'] = SEO_AUDIT_VERSION;
+    $cache['updatedAt'] = time();
+    gscWriteJson(seoAuditDomFile($dataDir, $host), $cache);
+}
+
+/**
+ * Barrido corto: 2 sitios, solo eventos nuevos de alto valor, tope de 3 tareas.
+ * La primera pasada de un sitio guarda la foto y no llena Hoy con lo que ya estaba.
+ *
+ * @param array<string, true> $existingRefs
+ * @return array{ok:bool, scanned:array, created:int, notes:array}
+ */
+function ersRunSeoRadar(array &$store, array &$existingRefs, string $today, int &$created): array
+{
+    if (!defined('ERS_LIBRARY')) {
+        define('ERS_LIBRARY', true);
+    }
+    require_once __DIR__ . '/gsc.php';
+    require_once __DIR__ . '/dossier.php';
+    require_once __DIR__ . '/findings.php';
+    require_once __DIR__ . '/gbp.php';
+    require_once __DIR__ . '/seo-audit.php';
+
+    $dataDir = ersDataDir();
+    $stateFile = $dataDir . '/seo-radar-state.json';
+    $state = gscReadJson($stateFile, []);
+    $known = is_array($state['hosts'] ?? null) ? $state['hosts'] : [];
+    $catalog = ersSeoRadarHosts($store);
+    usort($catalog, static function ($a, $b) use ($known) {
+        return ((int) ($known[$a['host']]['lastScannedAt'] ?? 0)) <=> ((int) ($known[$b['host']]['lastScannedAt'] ?? 0));
+    });
+
+    $deadline = microtime(true) + 35;
+    $made = 0;
+    $scanned = [];
+    $notes = [];
+
+    foreach (array_slice($catalog, 0, 2) as $i => $row) {
+        if (microtime(true) > $deadline) {
+            $notes[] = 'Tiempo agotado antes de cubrir la rotación.';
+            break;
+        }
+        $host = $row['host'];
+        try {
+            $cache = gscReadJson(gscHostCacheFile($dataDir, $host), []);
+            $hasCache = ($cache['host'] ?? '') === $host && is_array($cache['pages'] ?? null);
+            if (!$hasCache) {
+                $notes[] = $host . ' sin caché. No se inventa un análisis parcial.';
+                if (!is_array($known[$host] ?? null)) {
+                    $known[$host] = [];
+                }
+                $known[$host]['lastScannedAt'] = time();
+                $scanned[] = $host;
+                continue;
+            }
+            if ((time() - (int) ($cache['fetchedAt'] ?? 0)) > 20 * 3600 && (microtime(true) + 12) < $deadline) {
+                try {
+                    $cache = ersRadarRefreshGsc($dataDir, $host, $cache);
+                } catch (Throwable $e) {
+                    $notes[] = $host . ' Search Console: ' . ersClip($e->getMessage(), 80);
+                }
+            }
+            if ((microtime(true) + 6) < $deadline) {
+                try {
+                    gbpEnsure($dataDir, $host, false);
+                } catch (Throwable) {
+                }
+            }
+            if ($i === 0 && (microtime(true) + 8) < $deadline) {
+                ersRadarDomMicro($dataDir, $host, $cache, microtime(true) + 8);
+            }
+
+            $findings = findingsDetect(dossierRead($dataDir, $host));
+            $ids = [];
+            foreach ($findings as $finding) {
+                $id = (string) ($finding['id'] ?? '');
+                if ($id !== '') {
+                    $ids[] = $id;
+                }
+            }
+            $prev = $known[$host]['findingIds'] ?? null;
+            if (is_array($prev) && $made < 3) {
+                $prevSet = array_fill_keys($prev, true);
+                $dismissed = ersDismissedSeoIds($host);
+                foreach ($findings as $finding) {
+                    if ($made >= 3) {
+                        break;
+                    }
+                    $id = (string) ($finding['id'] ?? '');
+                    if ($id === '' || isset($prevSet[$id]) || !ersRadarWorthTask($finding)) {
+                        continue;
+                    }
+                    $signalId = (string) ($finding['kind'] ?? 'seo') . '|' . (((string) ($finding['url'] ?? '')) !== '' ? $finding['url'] : 'site');
+                    if (isset($dismissed['seo:' . $host . ':' . $id]) || isset($dismissed['seo:' . $host . ':' . $signalId])) {
+                        continue;
+                    }
+                    $ref = 'seo-radar:' . $host . ':' . (string) ($finding['kind'] ?? 'seo') . ':' . substr(md5($id), 0, 10);
+                    if (isset($existingRefs[$ref])) {
+                        continue;
+                    }
+                    $store['tasks'][] = [
+                        'id' => ersUuid(),
+                        'title' => ersClip(ersRadarTaskTitle($finding, $row['name']), 240),
+                        'clientId' => $row['clientId'],
+                        'parentId' => '',
+                        'area' => 'seo',
+                        'priority' => ((int) ($finding['severity'] ?? 0)) >= 3 ? 3 : 2,
+                        'status' => 'open',
+                        'notes' => ersClip((string) ($finding['techText'] ?? ''), 1000),
+                        'kind' => 'seo-radar',
+                        'ref' => ersClip($ref, 500),
+                        'dueDate' => $today,
+                        'createdAt' => (int) round(microtime(true) * 1000),
+                        'doneAt' => 0,
+                    ];
+                    $existingRefs[$ref] = true;
+                    $created++;
+                    $made++;
+                }
+            }
+            $known[$host] = ['lastScannedAt' => time(), 'findingIds' => $ids];
+            $scanned[] = $host;
+        } catch (Throwable $e) {
+            $notes[] = $host . ': ' . ersClip($e->getMessage(), 120);
+            if (!is_array($known[$host] ?? null)) {
+                $known[$host] = [];
+            }
+            $known[$host]['lastScannedAt'] = time();
+        }
+    }
+
+    gscWriteJson($stateFile, ['updatedAt' => time(), 'hosts' => $known]);
+    return ['ok' => true, 'scanned' => $scanned, 'created' => $made, 'notes' => $notes];
+}
+
+/** Ranking de solo lectura para el panel. No llama a Google. */
+function ersSeoOpportunityRank(): array
+{
+    $store = ersReadStore();
+    $dataDir = ersDataDir();
+    $rows = [];
+    foreach (ersSeoRadarHosts($store) as $row) {
+        $host = $row['host'];
+        $gsc = ersReadJsonCache($dataDir . '/gsc-cache-' . md5($host) . '.json');
+        if (($gsc['host'] ?? '') !== $host) {
+            $rows[] = [
+                'host' => $host,
+                'clientId' => $row['clientId'],
+                'name' => $row['name'],
+                'available' => false,
+                'score' => 0,
+                'reason' => 'Sin datos. Actualizá el sitio.',
+            ];
+            continue;
+        }
+        $kw = ersReadJsonCache($dataDir . '/gsc-kw-' . md5($host) . '.json');
+        $potential = (int) ($kw['summary']['potentialClicks'] ?? 0);
+        $critical = 0;
+        foreach ($gsc['signals'] ?? [] as $signal) {
+            if (is_array($signal) && (int) ($signal['severity'] ?? 0) >= 3) {
+                $critical++;
+            }
+        }
+        $loss = 0;
+        foreach ($gsc['pages'] ?? [] as $page) {
+            if (!is_array($page)) {
+                continue;
+            }
+            $delta = (int) ($page['delta']['clicks'] ?? 0);
+            if ($delta < 0) {
+                $loss += abs($delta);
+            }
+        }
+        $gbp = ersReadJsonCache($dataDir . '/gbp-cache-' . md5($host) . '.json');
+        $mapsNote = '';
+        $maps = 0;
+        $status = (string) ($gbp['place']['businessStatus'] ?? '');
+        if ($status !== '' && $status !== 'OPERATIONAL') {
+            $maps += 20;
+            $mapsNote = 'ficha de Maps no operativa';
+        } elseif ((int) ($gbp['reviewsDelta'] ?? 0) < 0) {
+            $maps += 12;
+            $mapsNote = 'reseñas a la baja';
+        }
+        $score = $potential + ($critical * 8) + min(40, $loss) + $maps;
+        $reason = [];
+        if ($potential > 0) {
+            $reason[] = $potential . ' clics en posición 4–20';
+        }
+        if ($critical > 0) {
+            $reason[] = $critical . ($critical === 1 ? ' alerta crítica' : ' alertas críticas');
+        }
+        if ($loss >= 5) {
+            $reason[] = $loss . ' clics perdidos';
+        }
+        if ($mapsNote !== '') {
+            $reason[] = $mapsNote;
+        }
+        if ($reason === []) {
+            $reason[] = 'Sin urgencia hoy';
+        }
+        $rows[] = [
+            'host' => $host,
+            'clientId' => $row['clientId'],
+            'name' => $row['name'],
+            'available' => true,
+            'score' => $score,
+            'potentialClicks' => $potential,
+            'critical' => $critical,
+            'clickLoss' => $loss,
+            'reason' => implode(' · ', $reason),
+        ];
+    }
+    usort($rows, static function ($a, $b) {
+        return ((int) $b['score'] <=> (int) $a['score']) ?: strcmp((string) $a['name'], (string) $b['name']);
+    });
+    return ['ok' => true, 'sites' => array_slice($rows, 0, 12)];
 }
 
 /**
@@ -1763,6 +2296,11 @@ function ersRunDailyBriefing(?string $tz = null): array
             'id' => ersUuid(),
             'title' => ersClip($title, 240),
             'clientId' => $clientId,
+            'parentId' => '',
+            'area' => '',
+            'priority' => ersTaskPriority($priority),
+            'status' => 'open',
+            'notes' => '',
             'kind' => ersClip($kind, 24),
             'ref' => ersClip($ref, 500),
             'dueDate' => $dueDate,
@@ -1851,6 +2389,13 @@ function ersRunDailyBriefing(?string $tz = null): array
         }
     }
 
+    $radar = ['ok' => true, 'scanned' => [], 'created' => 0];
+    try {
+        $radar = ersRunSeoRadar($store, $existingRefs, $today, $created);
+    } catch (Throwable $e) {
+        $radar = ['ok' => false, 'error' => ersClip($e->getMessage(), 200), 'scanned' => [], 'created' => 0];
+    }
+
     if (!ersWriteStore($store)) {
         throw new RuntimeException('No se pudo guardar el briefing diario');
     }
@@ -1874,11 +2419,12 @@ function ersRunDailyBriefing(?string $tz = null): array
         'tool' => 'dailyBriefing',
         'args' => ['date' => $today],
         'ok' => true,
-        'result' => ['createdTasks' => $created, 'alarms' => $alarms],
+        'result' => ['createdTasks' => $created, 'alarms' => $alarms, 'radar' => $radar['scanned'] ?? []],
     ]);
 
     return [
         'ok' => true,
+        'radar' => $radar,
         'date' => $today,
         'createdTasks' => $created,
         'alarms' => $alarms,
@@ -1926,7 +2472,7 @@ function ersGeminiToolDeclarations(): array
         ],
         [
             'name' => 'getSeoSummary',
-            'description' => 'Resumen SEO de UN sitio (host o cliente). Usá esto solo cuando nombran un cliente/sitio concreto.',
+            'description' => 'Resumen SEO de UN sitio (host o cliente): Search Console, y si hay caché también contactos GA4, PageSpeed móvil, ficha de Google Maps y hallazgos. Usá esto solo cuando nombran un cliente/sitio concreto.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
@@ -1938,7 +2484,7 @@ function ersGeminiToolDeclarations(): array
         ],
         [
             'name' => 'getPortfolioSeo',
-            'description' => 'Pantallazo SEO de TODA la cartera (todos los clientes con sitio). Usá esto para preguntas generales: cómo va el SEO, alertas, ranking de sitios, sin estar parado en un cliente.',
+            'description' => 'Pantallazo SEO de TODA la cartera. Cruza clics, hallazgos, fugas de contacto, PageSpeed móvil y Google Maps. Usá esto para cómo va el SEO, alertas o a qué sitio dedicarle tiempo hoy.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [

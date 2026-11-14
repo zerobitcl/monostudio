@@ -11,7 +11,7 @@ if (!defined('ERS_LIBRARY')) {
     exit;
 }
 
-const REPORT_HTML_VERSION = '2026.11.12-studio-gbp';
+const REPORT_HTML_VERSION = '2026.11.14-maps';
 
 function reportExtra(string $lang): array
 {
@@ -518,6 +518,7 @@ function reportIcon(string $category): string
         'speed' => '<path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/>',
         'contacts' => '<path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H9l-4 3v-3.2A2.5 2.5 0 0 1 4 13.5v-7z"/>',
         'google' => '<circle cx="11" cy="11" r="6"/><path d="m20 20-3.8-3.8"/>',
+        'maps' => '<path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/><circle cx="12" cy="10" r="2.2"/>',
         'content' => '<path d="M6 3.5h8l4 4V20a1.5 1.5 0 0 1-1.5 1.5h-10.5A1.5 1.5 0 0 1 4.5 20V5A1.5 1.5 0 0 1 6 3.5z"/><path d="M14 3.5V8h4"/>',
     ];
     $d = $paths[$category] ?? $paths['content'];
@@ -595,7 +596,8 @@ function reportNarrative(string $dataDir, string $host, string $lang, array $bri
         . 'verdict: una frase, acorde al tono que viene en el JSON (good, watch o bad). No cambies el tono. '
         . 'No hables de páginas fuera de Google ni de indexación: si hay páginas públicas sin mostrar, ya se están corrigiendo y no son un plan de 30 días. '
         . 'findings: una entrada por cada id del JSON, título corto y una frase de qué vamos a hacer. '
-        . 'moves: máximo 3 trabajos de los próximos 30 días, cada uno con category speed, content, contacts o google. '
+        . 'moves: máximo 3 trabajos de los próximos 30 días, cada uno con category speed, content, contacts, google o maps. '
+        . 'Usá maps cuando el trabajo sea la ficha de Google Maps, reseñas, teléfono o dirección del local. '
         . 'El título de un move no puede ser igual al título de un finding. Es el trabajo, en verbo. '
         . 'Texto plano, sin markdown.';
 
@@ -630,7 +632,7 @@ function reportNarrative(string $dataDir, string $host, string $lang, array $bri
                             'properties' => [
                                 'title' => ['type' => 'string'],
                                 'detail' => ['type' => 'string'],
-                                'category' => ['type' => 'string', 'enum' => ['speed', 'content', 'contacts', 'google']],
+                                'category' => ['type' => 'string', 'enum' => ['speed', 'content', 'contacts', 'google', 'maps']],
                             ],
                             'required' => ['title', 'detail', 'category'],
                         ]],
@@ -676,7 +678,7 @@ function reportNarrative(string $dataDir, string $host, string $lang, array $bri
             $title = reportPlain((string) ($row['title'] ?? ''), 90);
             $detail = reportPlain((string) ($row['detail'] ?? ''), 220);
             $category = (string) ($row['category'] ?? 'content');
-            if ($title === '' || $detail === '' || !in_array($category, ['speed', 'content', 'contacts', 'google'], true)) {
+            if ($title === '' || $detail === '' || !in_array($category, ['speed', 'content', 'contacts', 'google', 'maps'], true)) {
                 continue;
             }
             $moves[] = ['title' => $title, 'detail' => $detail, 'category' => $category];

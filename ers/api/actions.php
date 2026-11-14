@@ -25,6 +25,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         echo json_encode(['entries' => ersAuditRecent($limit, $clientId)], JSON_UNESCAPED_UNICODE);
         exit;
     }
+    if ($action === 'radar') {
+        echo json_encode(ersSeoOpportunityRank(), JSON_UNESCAPED_UNICODE);
+        exit;
+    }
     if ($action === 'status') {
         echo json_encode([
             'ok' => true,

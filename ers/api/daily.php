@@ -80,11 +80,19 @@ try {
                 }
             }
         }
+        $stateRaw = @file_get_contents(ersDataDir() . '/seo-radar-state.json');
+        $state = is_string($stateRaw) ? json_decode($stateRaw, true) : [];
+        $known = is_array($state['hosts'] ?? null) ? $state['hosts'] : [];
+        $queue = ersSeoRadarHosts($store);
+        usort($queue, static function ($a, $b) use ($known) {
+            return ((int) ($known[$a['host']]['lastScannedAt'] ?? 0)) <=> ((int) ($known[$b['host']]['lastScannedAt'] ?? 0));
+        });
         echo json_encode([
             'ok' => true,
             'dry' => true,
             'date' => $today,
             'candidates' => $candidates,
+            'radarNext' => array_column(array_slice($queue, 0, 2), 'host'),
         ], JSON_UNESCAPED_UNICODE);
         exit;
     }

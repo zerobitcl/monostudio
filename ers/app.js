@@ -1159,6 +1159,7 @@ class AppController {
       "unlinkedPanel", "unlinkedList", "unlinkedCount", "ignoredHostsBar", "ignoredHostsCount", "btnRestoreIgnored",
       "requestList", "requestsEmpty",
       "seoPickerSearchWrap", "seoPickerSearch", "seoClients", "seoNotice", "seoCritical", "seoKpis", "seoSpark", "seoInventory",
+      "seoRadar", "seoRadarList", "seoRadarMeta",
       "gbpPanel", "gbpMeta", "gbpActions", "gbpBody", "gbpSearchWrap", "gbpSearchInput", "btnGbpSearch", "gbpResults",
       "seoSignals", "seoSignalsEmpty", "seoPagesDrawer", "seoPagesCount",
       "seoTableBody", "seoDiagDrawer", "seoDiag", "seoRange", "seoBrief", "seoBriefBody",
@@ -1433,6 +1434,10 @@ class AppController {
     this.dom.seoPickerSearch?.addEventListener("input", () => {
       this.seoPickerQuery = this.dom.seoPickerSearch.value.trim().toLowerCase();
       this.renderSeoPicker(this.seoHosts());
+    });
+    this.dom.seoRadarList?.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-radar-host]");
+      if (btn) this.selectSeoHost(btn.dataset.radarHost);
     });
     this.dom.seoClients.addEventListener("click", (e) => {
       const createBtn = e.target.closest("[data-create-host]");
@@ -3835,12 +3840,51 @@ class AppController {
     });
   }
 
+  async loadSeoRadar() {
+    this.seoRadarLoading = true;
+    try {
+      const res = await fetch("./api/actions.php?action=radar", {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      const data = await res.json().catch(() => ({}));
+      this.seoRadar = Array.isArray(data.sites) ? data.sites : [];
+    } catch {
+      this.seoRadar = [];
+    } finally {
+      this.seoRadarLoading = false;
+      this.seoRadarLoaded = true;
+      if (this.module === "seo") this.renderSeoRadar();
+    }
+  }
+
+  renderSeoRadar() {
+    const root = this.dom.seoRadar;
+    const list = this.dom.seoRadarList;
+    if (!root || !list) return;
+    const available = (this.seoRadar || []).filter((site) => site.available);
+    const hot = available.filter((site) => Number(site.score) > 0);
+    const sites = (hot.length ? hot : available).slice(0, 5);
+    root.hidden = sites.length === 0;
+    const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[ch]));
+    list.innerHTML = sites.map((site, index) => (
+      `<li><button type="button" data-radar-host="${esc(site.host)}">`
+      + `<span class="seo-radar__rank">${index + 1}</span>`
+      + `<span><strong>${esc(site.name)}</strong><em>${esc(site.reason)}</em></span>`
+      + `</button></li>`
+    )).join("");
+  }
+
   renderSeo() {
     const hosts = this.seoHosts();
     if (!hosts.some((h) => h.host === this.seoHost)) {
       this.seoHost = hosts[0]?.host || "";
     }
     this.renderSeoPicker(hosts);
+    if (!this.seoRadarLoaded && !this.seoRadarLoading) this.loadSeoRadar();
+    this.renderSeoRadar();
 
     const data = this.seoHost ? SeoStore.get(this.seoHost) : null;
     const hasMetrics = Boolean(data?.totals);

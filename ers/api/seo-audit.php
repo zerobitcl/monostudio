@@ -12,7 +12,11 @@
 
 declare(strict_types=1);
 
-define('ERS_LIBRARY', true);
+if (!defined('ERS_LIBRARY')) {
+    define('ERS_LIBRARY', true);
+}
+
+$seoAuditStandalone = realpath((string) ($_SERVER['SCRIPT_FILENAME'] ?? '')) === realpath(__FILE__);
 require_once __DIR__ . '/gsc.php';
 require_once __DIR__ . '/lib.php';
 require_once __DIR__ . '/dossier.php';
@@ -24,13 +28,14 @@ const SEO_AUDIT_DOM_TTL = 604800; // 7 días: re-scrape si el HTML cambió de fi
 const SEO_AUDIT_REPO_TTL = 21600; // 6 h
 const SEO_AUDIT_REPO_BYTES = 110000;
 const SEO_AUDIT_AI_TIMEOUT = 75;
-const SEO_AUDIT_VERSION = '2026.11.12-gbp-local';
+const SEO_AUDIT_VERSION = '2026.11.14-context';
 
-header('X-Content-Type-Options: nosniff');
-
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(204);
-    exit;
+if ($seoAuditStandalone) {
+    header('X-Content-Type-Options: nosniff');
+    if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') {
+        http_response_code(204);
+        exit;
+    }
 }
 
 $dataDir = ersDataDir();
@@ -749,6 +754,238 @@ function seoAuditGbpBlock(array $dossier): string
     return implode("\n", $lines);
 }
 
+function seoAuditCycleFile(string $dataDir, string $host): string
+{
+    return $dataDir . '/seo-cycle-' . md5($host) . '.json';
+}
+
+function seoAuditReadCycle(string $dataDir, string $host): array
+{
+    $data = gscReadJson(seoAuditCycleFile($dataDir, $host), []);
+    $snaps = is_array($data['snapshots'] ?? null) ? $data['snapshots'] : [];
+    return ['host' => $host, 'snapshots' => $snaps];
+}
+
+/** Últimas pasadas + tareas SEO cerradas, para no repetir el mismo plan. */
+function seoAuditCycleBlock(string $dataDir, string $host, array $dossier): string
+{
+    $snaps = seoAuditReadCycle($dataDir, $host)['snapshots'];
+    $prev = null;
+    for ($i = count($snaps) - 1; $i >= 0; $i--) {
+        if (is_array($snaps[$i])) {
+            $prev = $snaps[$i];
+            break;
+        }
+    }
+
+    $done = [];
+    $clientId = (string) ($dossier['client']['id'] ?? '');
+    if ($clientId !== '') {
+        $cutoffMs = (int) ((time() - 45 * 86400) * 1000);
+        foreach (ersReadStore()['tasks'] ?? [] as $task) {
+            if (!is_array($task) || (string) ($task['clientId'] ?? '') !== $clientId) {
+                continue;
+            }
+            $doneAt = (int) ($task['doneAt'] ?? 0);
+            if ($doneAt < $cutoffMs) {
+                continue;
+            }
+            $kind = (string) ($task['kind'] ?? '');
+            if (!str_starts_with($kind, 'seo')) {
+                continue;
+            }
+            $title = trim((string) ($task['title'] ?? ''));
+            if ($title === '') {
+                continue;
+            }
+            $done[] = $title;
+            if (count($done) >= 8) {
+                break;
+            }
+        }
+    }
+
+    if ($prev === null && $done === []) {
+        return 'Sin ciclo anterior. Esta es la primera pasada: priorizá quick wins medibles.';
+    }
+
+    $lines = [];
+    if (is_array($prev)) {
+        $search = is_array($dossier['search'] ?? null) ? $dossier['search'] : [];
+        $lines[] = 'Pasada previa (' . gmdate('Y-m-d', (int) ($prev['at'] ?? 0)) . '): '
+            . (int) ($prev['clicks'] ?? 0) . ' clics 28d, posición ' . ($prev['position'] ?? '—')
+            . '. Ahora: ' . (int) ($search['clicks'] ?? 0) . ' clics, posición '
+            . round((float) ($search['position'] ?? 0), 1) . '.';
+        $cambios = [];
+        foreach ($prev['cambios'] ?? [] as $titulo) {
+            $titulo = trim((string) $titulo);
+            if ($titulo !== '') {
+                $cambios[] = $titulo;
+            }
+        }
+        if ($cambios !== []) {
+            $lines[] = 'Ya se pidió (no lo repitas igual; proponé el siguiente escalón):';
+            foreach ($cambios as $titulo) {
+                $lines[] = '- ' . $titulo;
+            }
+        }
+    }
+    if ($done !== []) {
+        $lines[] = 'Tareas SEO cerradas en los últimos 45 días:';
+        foreach ($done as $title) {
+            $lines[] = '- ' . $title;
+        }
+    }
+    $lines[] = 'Si una mejora anterior ya está hecha, no la vuelvas a pedir.';
+    return implode("\n", $lines);
+}
+
+function seoAuditRememberCycle(string $dataDir, string $host, array $dossier, array $findings, array $insights): void
+{
+    $cycle = seoAuditReadCycle($dataDir, $host);
+    $search = is_array($dossier['search'] ?? null) ? $dossier['search'] : [];
+    $cambios = [];
+    foreach (array_slice(is_array($insights['cambios'] ?? null) ? $insights['cambios'] : [], 0, 8) as $cambio) {
+        $titulo = trim((string) (is_array($cambio) ? ($cambio['titulo'] ?? '') : ''));
+        if ($titulo !== '') {
+            $cambios[] = $titulo;
+        }
+    }
+    $ids = [];
+    foreach (array_slice($findings, 0, 24) as $finding) {
+        $id = (string) ($finding['id'] ?? '');
+        if ($id !== '') {
+            $ids[] = $id;
+        }
+    }
+    $snaps = array_values(array_filter($cycle['snapshots'], 'is_array'));
+    $snaps[] = [
+        'at' => time(),
+        'clicks' => (int) ($search['clicks'] ?? 0),
+        'position' => round((float) ($search['position'] ?? 0), 1),
+        'findingIds' => $ids,
+        'cambios' => $cambios,
+    ];
+    if (count($snaps) > 3) {
+        $snaps = array_slice($snaps, -3);
+    }
+    gscWriteJson(seoAuditCycleFile($dataDir, $host), ['host' => $host, 'snapshots' => $snaps]);
+}
+
+/** Title, meta y H1 reales de las URLs que el plan va a tocar. */
+function seoAuditDomBrief(array $dossier, array $findings): string
+{
+    $paths = [];
+    foreach ($findings as $finding) {
+        if ((int) ($finding['severity'] ?? 0) < 2) {
+            continue;
+        }
+        $path = dossierNormPath((string) ($finding['path'] ?? ''));
+        if ($path !== '') {
+            $paths[$path] = true;
+        }
+        if (count($paths) >= 10) {
+            break;
+        }
+    }
+    foreach ($dossier['keywords']['buckets']['striking'] ?? [] as $row) {
+        if (count($paths) >= 12 || !is_array($row)) {
+            continue;
+        }
+        $path = dossierNormPath((string) ($row['page'] ?? ''));
+        if ($path !== '') {
+            $paths[$path] = true;
+        }
+    }
+    if ($paths === []) {
+        $paths['/'] = true;
+    }
+
+    $dom = is_array($dossier['dom'] ?? null) ? $dossier['dom'] : [];
+    $lines = [];
+    foreach (array_keys($paths) as $path) {
+        $row = $dom[$path] ?? null;
+        if (!is_array($row) || empty($row['ok'])) {
+            continue;
+        }
+        $schemas = is_array($row['schemas'] ?? null) ? implode(', ', array_slice($row['schemas'], 0, 6)) : '';
+        $lines[] = $path
+            . "\n  title: " . (string) ($row['title'] ?? '')
+            . "\n  meta: " . (string) ($row['meta'] ?? '')
+            . "\n  h1: " . (string) ($row['h1'] ?? '')
+            . "\n  palabras: " . (int) ($row['wordCount'] ?? 0)
+            . ($schemas !== '' ? "\n  schema: " . $schemas : '');
+    }
+    return $lines === []
+        ? 'Sin HTML scrapeado de las URLs con hallazgos. No inventes el title actual.'
+        : implode("\n", $lines);
+}
+
+/** Extractos del repo ya descargados. El scan los guardaba y el prompt no los usaba. */
+function seoAuditRepoExcerpt(array $repo, array $findings): string
+{
+    $files = is_array($repo['files'] ?? null) ? $repo['files'] : [];
+    if ($files === []) {
+        return '';
+    }
+    $needles = [];
+    foreach ($findings as $finding) {
+        $file = strtolower(str_replace('\\', '/', (string) ($finding['file'] ?? '')));
+        if ($file !== '') {
+            $needles[$file] = true;
+        }
+        $slug = strtolower(basename(trim((string) ($finding['path'] ?? ''), '/')));
+        if ($slug !== '' && $slug !== '/') {
+            $needles[$slug] = true;
+        }
+    }
+
+    $ranked = [];
+    foreach ($files as $file) {
+        if (!is_array($file)) {
+            continue;
+        }
+        $path = (string) ($file['path'] ?? '');
+        $content = (string) ($file['content'] ?? '');
+        if ($path === '' || $content === '') {
+            continue;
+        }
+        $lower = strtolower(str_replace('\\', '/', $path));
+        $score = 0;
+        if (preg_match('#(^|/)(layout|robots\.txt|sitemap)#', $lower)) {
+            $score += 50;
+        }
+        if (isset($needles[$lower])) {
+            $score += 80;
+        }
+        foreach ($needles as $needle => $_) {
+            if ($needle !== '' && str_contains($lower, $needle)) {
+                $score += 25;
+            }
+        }
+        if (preg_match('#seo|metadata|head#', $lower)) {
+            $score += 15;
+        }
+        $ranked[] = ['path' => $path, 'content' => $content, 'score' => $score];
+    }
+    usort($ranked, static fn ($a, $b) => ($b['score'] <=> $a['score']) ?: strcmp($a['path'], $b['path']));
+
+    $chunks = [];
+    $budget = 45000;
+    foreach ($ranked as $file) {
+        if ($file['score'] < 15 && $chunks !== []) {
+            continue;
+        }
+        if ($budget < 600 || count($chunks) >= 8) {
+            break;
+        }
+        $clip = ersClip($file['content'], min(9000, $budget));
+        $chunks[] = '### ' . $file['path'] . "\n" . $clip;
+        $budget -= strlen($clip);
+    }
+    return implode("\n\n", $chunks);
+}
+
 function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): array
 {
     $started = microtime(true);
@@ -857,7 +1094,19 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
         '',
         '## PATHS DEL REPO',
         $paths === [] ? 'Sin repo. El prompt debe decir que se aplique en el proyecto local abierto en Cursor.' : implode("\n", array_map(static fn ($p) => '- ' . $p, $paths)),
+        '',
+        '## HTML ACTUAL DE LAS URLS AFECTADAS (title/meta/h1 reales; no inventes otro title actual)',
+        seoAuditDomBrief($dossier, $findings),
+        '',
+        '## CICLO ANTERIOR',
+        seoAuditCycleBlock($dataDir, $host, $dossier),
     ];
+    $excerpt = seoAuditRepoExcerpt($repo, $findings);
+    if ($excerpt !== '') {
+        $parts[] = '';
+        $parts[] = '## CÓDIGO REAL DEL REPO (editá esto; no inventes archivos que no estén acá)';
+        $parts[] = $excerpt;
+    }
     if ($kwNote !== '') {
         $parts[] = '';
         $parts[] = '## NOTA OPERATIVA';
@@ -868,6 +1117,9 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
 Sos un tech lead SEO. Tu trabajo es SUBIR DE NIVEL el sitio en cada pasada: más demanda capturada, mejor on-page, más contactos y coherencia local (Maps ↔ web).
 Los problemas YA están en HALLAZGOS. La estrategia de queries YA está en CRECIMIENTO POR QUERIES y en los buckets. El NAP oficial YA está en DATOS REALES GOOGLE BUSINESS PROFILE.
 No descubras otros problemas. No inventes métricas, queries, URLs, teléfonos, direcciones ni archivos.
+Si hay HTML ACTUAL, el title/meta que proponés parte de ese texto, no de uno imaginado.
+Si hay CÓDIGO REAL DEL REPO, el cursorPrompt cita el archivo y el cambio concreto sobre ese código. No pidas reescribir un archivo cuyo contenido no viste.
+Si hay CICLO ANTERIOR, no repitas un cambio ya pedido ni una tarea ya cerrada: proponé el siguiente escalón y decí si los clics subieron o no.
 Respondés en español neutro-chileno, directo.
 
 Salida JSON:
@@ -917,6 +1169,7 @@ TXT;
     }
 
     $insights = seoAuditSanitizeCursor($raw, $host, $urls, $repo['paths'] ?? []);
+    seoAuditRememberCycle($dataDir, $host, $dossier, $findings, $insights);
     $closed = "\n\n## Hallazgos detectados (lista cerrada, no omitir)\n" . findingsCursorBlock($findings);
     $closed .= "\n\n## DATOS REALES GOOGLE BUSINESS PROFILE (NAP OFICIAL, no inventar)\n" . seoAuditGbpBlock($dossier);
     $closed .= "\n\n## Crecimiento por queries (lista cerrada, no omitir)\n" . gscKeywordsGrowthBlock($kwAi);
@@ -1059,8 +1312,9 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
     ];
 }
 
-// --- Router ---
+// --- Router (solo si este archivo es el script pedido; el cron lo incluye como librería) ---
 
+if ($seoAuditStandalone) {
 $action = (string) ($_GET['action'] ?? '');
 if ($action === '' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $peek = json_decode((string) file_get_contents('php://input'), true);
@@ -1137,4 +1391,5 @@ try {
     seoAuditJson(['error' => 'Acción no reconocida. Usá status, dom-batch, repo-scan o cursor-audit.'], 400);
 } catch (Throwable $e) {
     seoAuditJson(['error' => $e->getMessage()], 500);
+}
 }

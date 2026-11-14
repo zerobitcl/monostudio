@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Mono Studio OS — base de operaciones diaria" />
   <title>Mono Studio OS</title>
-  <link rel="stylesheet" href="styles.css?v=20261112a" />
+  <link rel="stylesheet" href="styles.css?v=20261114a" />
 </head>
 <body>
 
@@ -181,6 +181,14 @@
         <button class="btn btn--ghost" id="btnSeoIndex" type="button" hidden>Indexar pendientes</button>
         <button class="btn btn--ghost" id="btnGscRefresh" type="button">Actualizar</button>
       </div>
+
+      <section class="seo-radar" id="seoRadar" hidden aria-label="Dónde dedicar media hora">
+        <header class="seo-radar__head">
+          <h3>Media hora hoy</h3>
+          <p id="seoRadarMeta">Dónde se recuperan más clics en la cartera</p>
+        </header>
+        <ol class="seo-radar__list" id="seoRadarList"></ol>
+      </section>
 
       <label class="seo-picker-search" id="seoPickerSearchWrap" hidden>
         <span class="visually-hidden">Buscar sitio</span>
@@ -708,7 +716,7 @@
   </div>
   <div class="chat-backdrop" id="chatBackdrop" hidden></div>
 
-  <script src="app.js?v=20261112a"></script>
+  <script src="app.js?v=20261114a"></script>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </body>

@@ -52,6 +52,7 @@ const GSC_KW_MIN_IMPRESSIONS = 20;
 const GSC_KW_AI_TIMEOUT = 45;
 /** Invalida solo la caché de keywords cuando cambia su forma; GSC_VERSION invalidaría todo. */
 const GSC_KW_VERSION = '2026.10.12-hidden';
+const GSC_KW_AI_VERSION = '2026.11.14-inventory';
 
 /** Sube al cambiar la lógica de resolución de propiedad; sirve para saber qué versión está viva en el server. */
 const GSC_VERSION = '2026.10.31-pipeline';
@@ -1917,8 +1918,90 @@ function gscKeywordAiFor(string $dataDir, string $host, int $basedOn): ?array
     if (!is_array($ai['insights'] ?? null)) {
         return null;
     }
-    $ai['stale'] = (int) ($ai['basedOn'] ?? 0) !== $basedOn;
+    $ai['stale'] = (int) ($ai['basedOn'] ?? 0) !== $basedOn
+        || (string) ($ai['promptVersion'] ?? '') !== GSC_KW_AI_VERSION;
     return $ai;
+}
+
+/**
+ * Inventario real (title/h1 ya scrapeados) y rubro de Maps.
+ * Sin esto la IA propone páginas que el sitio ya tiene.
+ */
+function gscKeywordsContextBlock(array $kw): string
+{
+    $host = gscSanitizeHost((string) ($kw['host'] ?? ''));
+    if ($host === '') {
+        return '';
+    }
+    $dataDir = dirname(__DIR__) . '/data';
+    $lines = [];
+
+    if (!function_exists('gbpPackForDossier')) {
+        require_once __DIR__ . '/gbp.php';
+    }
+    $gbp = gbpPackForDossier($dataDir, $host, false, false);
+    if (!empty($gbp['ok'])) {
+        $bits = array_values(array_filter([
+            trim((string) ($gbp['displayName'] ?? '')),
+            trim((string) ($gbp['primaryTypeDisplayName'] ?? '')),
+            trim((string) ($gbp['formattedAddress'] ?? '')),
+        ], static fn ($bit) => $bit !== ''));
+        if ($bits !== []) {
+            $lines[] = '## NEGOCIO EN GOOGLE MAPS (rubro y localidad reales; no inventes ciudad)';
+            $lines[] = implode(' · ', $bits);
+        }
+    }
+
+    $dom = gscReadJson($dataDir . '/seo-dom-' . md5($host) . '.json', []);
+    $pages = is_array($dom['pages'] ?? null) && ($dom['host'] ?? '') === $host ? $dom['pages'] : [];
+    $wanted = [];
+    foreach ($kw['buckets'] ?? [] as $rows) {
+        if (!is_array($rows)) {
+            continue;
+        }
+        foreach ($rows as $row) {
+            $page = is_array($row) ? (string) ($row['page'] ?? '') : '';
+            if ($page !== '') {
+                $wanted[$page] = true;
+            }
+        }
+    }
+
+    $listed = [];
+    $push = static function (string $url, array $page) use (&$listed): void {
+        if (empty($page['ok'])) {
+            return;
+        }
+        $path = parse_url($url, PHP_URL_PATH);
+        $path = is_string($path) && $path !== '' ? $path : '/';
+        $title = trim((string) ($page['title'] ?? ''));
+        $h1 = trim((string) ($page['h1'] ?? ''));
+        if ($title === '' && $h1 === '') {
+            return;
+        }
+        $listed[$path] = $path . ' | title: ' . $title . ($h1 !== '' ? ' | h1: ' . $h1 : '');
+    };
+    foreach (array_keys($wanted) as $url) {
+        if (isset($pages[$url]) && is_array($pages[$url])) {
+            $push($url, $pages[$url]);
+        }
+    }
+    foreach ($pages as $url => $page) {
+        if (count($listed) >= 36 || !is_array($page)) {
+            continue;
+        }
+        $push((string) $url, $page);
+    }
+    if ($listed !== []) {
+        if ($lines !== []) {
+            $lines[] = '';
+        }
+        $lines[] = '## PÁGINAS QUE YA EXISTEN (path | title actual | h1). No propongas crear una de estas. En title/meta citá el title actual.';
+        foreach ($listed as $line) {
+            $lines[] = $line;
+        }
+    }
+    return implode("\n", $lines);
 }
 
 function gscKeywordLine(array $r): string
@@ -1984,6 +2067,11 @@ function gscKeywordsAiPrompt(array $kw): string
             );
             $lines[] = $c['q'] . ' | ' . $c['impressions'] . ' imp | ' . implode(', ', $pages);
         }
+    }
+    $context = gscKeywordsContextBlock($kw);
+    if ($context !== '') {
+        $lines[] = '';
+        $lines[] = $context;
     }
     return implode("\n", $lines);
 }
@@ -2128,7 +2216,9 @@ REGLAS
 - Google anonimiza las queries poco frecuentes: si "clics atribuidos" es menor al total real, la diferencia son clics reales de búsquedas ocultas. Nunca digas que el sitio no tiene clics si el total real es mayor a 0; explicá que el tráfico existe pero está repartido en búsquedas de cola larga.
 - Con pocas queries visibles, trabajá con las impresiones: qué temas ya muestran demanda y qué página debería capturarla.
 - Cada acción tiene que ser ejecutable esta semana por un dev/redactor: qué cambiar y en qué URL.
-- "ideas" = contenidos NUEVOS que cubran demanda que hoy ninguna página atiende bien (queries en posición > 10 o con la página equivocada). Si no hay evidencia, devolvé lista vacía.
+- "ideas" = contenidos NUEVOS que cubran demanda que hoy ninguna página atiende bien (queries en posición > 10 o con la página equivocada). Si esa URL ya está en PÁGINAS QUE YA EXISTEN, no es contenido nuevo: proponé ampliarla. Si no hay evidencia, devolvé lista vacía.
+- Si hay PÁGINAS QUE YA EXISTEN, una acción title_meta tiene que citar el title actual y decir el title nuevo. No inventes páginas que ya figuran ahí.
+- Si hay NEGOCIO EN GOOGLE MAPS, el rubro y la ciudad salen de ese bloque. No inventes localidad.
 - resumen: máximo 3 frases, con el hallazgo más importante primero.
 - Máximo 5 clusters, 6 acciones, 4 ideas.
 TXT;
@@ -2161,6 +2251,7 @@ TXT;
         'model' => $cfg['model'],
         'generatedAt' => time(),
         'basedOn' => (int) ($kw['fetchedAt'] ?? 0),
+        'promptVersion' => GSC_KW_AI_VERSION,
         'insights' => gscSanitizeKeywordAi($raw, $kw),
     ];
 }
