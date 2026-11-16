@@ -3,19 +3,26 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Mono Studio OS — base de operaciones diaria" />
-  <title>Mono Studio OS</title>
-  <link rel="stylesheet" href="styles.css?v=20261114a" />
+  <meta name="description" content="ERs — estrategia SEO de la cartera" />
+  <title>ERs</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,560;1,9..144,560&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css?v=20261116b" />
 </head>
 <body>
 
   <div class="boot-screen" id="bootScreen">
-    <div class="boot-screen__core" aria-hidden="true">◮</div>
-    <p>Cargando…</p>
+    <div class="boot-mark">
+      <span class="boot-mark__ring" aria-hidden="true"></span>
+      <p class="boot-mark__word">ER<em>s</em></p>
+    </div>
+    <p class="visually-hidden">Cargando</p>
   </div>
 
   <div class="boot-error" id="bootError" hidden>
-    <strong>No se pudo cargar Mono Studio OS</strong>
+    <strong>No se pudo cargar ERs</strong>
     <p>Revisa la conexión con el servidor.</p>
     <button type="button" class="btn btn--neon" onclick="location.reload()">Reintentar</button>
   </div>
@@ -24,8 +31,7 @@
 
     <header class="topbar">
       <div class="brand">
-        <div class="brand__logo" aria-hidden="true">◮</div>
-        <h1>Mono Studio <span>OS</span></h1>
+        <h1 class="brand__mark">ER<em>s</em></h1>
       </div>
 
       <nav class="module-nav" aria-label="Módulos">
@@ -176,7 +182,7 @@
         <h2>SEO</h2>
         <span class="panel-head__count" id="seoRange">Últimos 28 días</span>
         <button class="btn btn--ghost" id="btnSeoBrief" type="button" hidden>Exportar</button>
-        <button class="btn btn--ghost" id="btnStudioReport" type="button" hidden>Informe Mono Studio</button>
+        <button class="btn btn--ghost" id="btnStudioReport" type="button" hidden>Informe ERs</button>
         <button class="btn btn--neon" id="btnClientReport" type="button" hidden>Informe cliente</button>
         <button class="btn btn--ghost" id="btnSeoIndex" type="button" hidden>Indexar pendientes</button>
         <button class="btn btn--ghost" id="btnGscRefresh" type="button">Actualizar</button>
@@ -694,7 +700,7 @@
     <header class="chat-drawer__head">
       <div>
         <p class="chat-drawer__kicker">Copiloto</p>
-        <h2>Mono Studio AI</h2>
+        <h2>ER<em>s</em></h2>
       </div>
       <div class="chat-drawer__actions">
         <button type="button" class="btn btn--ghost btn--sm" id="btnChatAudit" title="Historial de acciones">Historial</button>
@@ -716,7 +722,7 @@
   </div>
   <div class="chat-backdrop" id="chatBackdrop" hidden></div>
 
-  <script src="app.js?v=20261114a"></script>
+  <script src="app.js?v=20261116b"></script>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </body>

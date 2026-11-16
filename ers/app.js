@@ -1980,7 +1980,7 @@ class AppController {
     this.dom.briefTitle.textContent = !client
       ? "Informe SEO"
       : this.reportVariant === "studio"
-        ? "Informe Mono Studio"
+        ? "Informe ERs"
         : "Informe cliente";
     if (this.dom.btnReportFresh) {
       this.dom.btnReportFresh.textContent = this.reportVariant === "studio" ? "Regenerar redacción" : "Regenerar";

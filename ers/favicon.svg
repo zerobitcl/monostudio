@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="8" fill="#100e16"/>
+  <text x="3.5" y="22.5" font-family="Georgia, 'Times New Roman', serif" font-size="15" fill="#f4efe6">ER</text>
+  <text x="19.5" y="22.5" font-family="Georgia, 'Times New Roman', serif" font-size="15" font-style="italic" fill="#ff8a3d">s</text>
+</svg>
