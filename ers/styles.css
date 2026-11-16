@@ -1611,6 +1611,15 @@ body {
   color: var(--txt-primary);
 }
 
+.btn:disabled,
+.btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+  pointer-events: none;
+}
+
 .btn--block {
   width: 100%;
   padding: 13px;

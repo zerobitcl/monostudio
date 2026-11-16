@@ -3661,6 +3661,7 @@ class AppController {
       this.dom.cursorAuditSummary.textContent = "";
       this.dom.cursorAuditChanges.innerHTML = "";
       this.dom.cursorAuditPrompt.value = "";
+      if (this.dom.btnAuditVerify) this.dom.btnAuditVerify.hidden = true;
       return;
     }
 
@@ -3684,12 +3685,29 @@ class AppController {
     }
     this.dom.cursorAuditPrompt.value = insights.cursorPrompt || "";
     this.dom.btnAuditCopy.disabled = !insights.cursorPrompt;
-    const appliedCount = (status?.applied || audit.applied || []).filter(
+    // Cuenta desde store y desde los checks visibles: el botón no puede quedar “muerto”.
+    const appliedFromStore = (status?.applied || audit.applied || []).filter(
       (x) => x.status === "applied" || x.status === "verified"
     ).length;
+    const appliedFromCambios = (insights.cambios || []).filter(
+      (c) => c.status === "applied" || c.status === "verified"
+    ).length;
+    const appliedPending = (status?.applied || audit.applied || []).filter((x) => x.status === "applied").length
+      + (insights.cambios || []).filter((c) => c.status === "applied").length;
+    const appliedCount = Math.max(appliedFromStore, appliedFromCambios);
     if (this.dom.btnAuditVerify) {
-      this.dom.btnAuditVerify.disabled = this.auditBusy || appliedCount === 0;
       this.dom.btnAuditVerify.hidden = !audit.ready;
+      this.dom.btnAuditVerify.disabled = this.auditBusy;
+      this.dom.btnAuditVerify.textContent = this.auditBusy
+        ? "Verificando…"
+        : appliedPending > 0
+          ? "Verificar mejoras"
+          : appliedCount > 0
+            ? "Verificar de nuevo"
+            : "Verificar mejoras";
+      this.dom.btnAuditVerify.title = appliedCount > 0
+        ? "Relee el HTML de las mejoras marcadas Hecho y comprueba si el hallazgo desapareció"
+        : "Marcá Hecho en al menos una mejora y después verificá";
     }
 
     const list = this.dom.cursorAuditChanges;
@@ -3812,19 +3830,68 @@ class AppController {
   async verifyAppliedImprovements() {
     const host = this.seoHost;
     if (!host || this.auditBusy) return;
+    const current = this.auditData.get(host);
+    const cambios = current?.audit?.insights?.cambios || [];
+    const pendingLocal = [
+      ...(current?.applied || []),
+      ...cambios.filter((c) => c.status === "applied"),
+    ];
+    const hasPending = pendingLocal.some((x) => x.status === "applied")
+      || cambios.some((c) => c.status === "applied");
+    if (!hasPending && !(current?.applied || []).some((x) => x.status === "applied" || x.status === "verified")) {
+      this.showToast("Marcá Hecho en una mejora antes de verificar", 4200);
+      return;
+    }
+    // Si hay checks locales Hecho sin haber llegado al store, los empuja antes de verificar.
     this.auditBusy = true;
     this.renderCursorAudit();
     try {
+      for (const c of cambios) {
+        if (c.status !== "applied") continue;
+        const already = (current?.applied || []).some(
+          (x) => x.id === (c.key || c.findingId) || (c.findingId && x.findingId === c.findingId)
+        );
+        if (already) continue;
+        try {
+          const saved = await SeoAuditModule.markApplied(host, c, current?.audit?.commitSha || "");
+          current.applied = saved.items || current.applied;
+          if (saved.item?.id) c.key = saved.item.id;
+          if (saved.item?.findingId) c.findingId = saved.item.findingId;
+        } catch {
+          /* sigue con lo que haya en store */
+        }
+      }
+      this.auditData.set(host, current);
+
       const data = await SeoAuditModule.verifyApplied(host);
       const status = await SeoAuditModule.status(host, this.githubRepoForHost(host));
       status.applied = data.items || status.applied;
+      if (status.audit?.insights?.cambios) {
+        status.audit.insights.cambios = status.audit.insights.cambios.map((c) => {
+          const hit = (status.applied || []).find(
+            (x) => x.id === (c.key || "") || (c.findingId && x.findingId === c.findingId)
+              || (c.titulo && x.titulo === c.titulo)
+          );
+          if (!hit) return c;
+          return {
+            ...c,
+            status: hit.status,
+            key: hit.id || c.key,
+            findingId: hit.findingId || c.findingId,
+            appliedAt: hit.appliedAt || 0,
+            verifiedAt: hit.verifiedAt || 0,
+          };
+        });
+      }
       this.auditData.set(host, status);
       const verified = Number(data.autoVerified || 0);
       const pending = Number(data.pending || 0);
-      if (verified > 0 && pending === 0) {
+      if (data.note) {
+        this.showToast(data.note, 5200);
+      } else if (verified > 0 && pending === 0) {
         this.showToast(`Listo: ${verified} mejora${verified === 1 ? "" : "s"} comprobada${verified === 1 ? "" : "s"} en el HTML`);
       } else if (verified > 0) {
-        this.showToast(`${verified} verificada${verified === 1 ? "" : "s"} · ${pending} aún pendiente${pending === 1 ? "" : "s"} (deploy o GSC)`);
+        this.showToast(`${verified} verificada${verified === 1 ? "" : "s"} · ${pending} aún pendiente${pending === 1 ? "" : "s"} (deploy o GSC)`, 6200);
       } else if (pending > 0) {
         this.showToast(`Todavía se ve el problema en ${pending} mejora${pending === 1 ? "" : "s"}. Revisá deploy o push.`, 6200);
       } else {

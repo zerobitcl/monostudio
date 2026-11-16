@@ -234,24 +234,46 @@ function seoAuditAutoVerify(string $dataDir, string $host, array $currentFinding
         }
     }
     $pack = seoAuditReadApplied($dataDir, $host);
-    $changed = 0;
+    $verified = 0;
+    $dirty = false;
     foreach ($pack['items'] as &$item) {
         if (($item['status'] ?? '') !== 'applied') {
             continue;
         }
-        $fid = (string) ($item['findingId'] ?? '');
-        if ($fid === '' || isset($present[$fid])) {
+        $fid = trim((string) ($item['findingId'] ?? ''));
+        if ($fid === '') {
+            // Reatacha id si el hallazgo sigue abierto; si no matchea ninguno, se dio por resuelto.
+            $matched = seoAuditMatchFindingId($item, $currentFindings);
+            if ($matched !== '') {
+                $item['findingId'] = $matched;
+                if ($item['id'] === '' || strlen($item['id']) === 32) {
+                    $item['id'] = seoAuditCambioKey($item);
+                }
+                $dirty = true;
+                continue;
+            }
+            if (trim((string) ($item['titulo'] ?? '')) === '' && trim((string) ($item['url'] ?? '')) === '') {
+                continue;
+            }
+            $item['status'] = 'verified';
+            $item['verifiedAt'] = time();
+            $verified += 1;
+            $dirty = true;
+            continue;
+        }
+        if (isset($present[$fid])) {
             continue;
         }
         $item['status'] = 'verified';
         $item['verifiedAt'] = time();
-        $changed += 1;
+        $verified += 1;
+        $dirty = true;
     }
     unset($item);
-    if ($changed > 0) {
+    if ($dirty) {
         seoAuditWriteApplied($dataDir, $host, $pack['items']);
     }
-    return $changed;
+    return $verified;
 }
 
 function seoAuditMatchFindingId(array $c, array $findings): string
@@ -329,6 +351,12 @@ function seoAuditMarkApplied(string $dataDir, string $host, array $raw, string $
         'verifiedAt' => 0,
         'commitSha' => ersClip($commitSha !== '' ? $commitSha : trim((string) ($raw['commitSha'] ?? '')), 64),
     ];
+    if ($item['findingId'] === '') {
+        $dossier = dossierRead($dataDir, $host);
+        if (!empty($dossier['ok'])) {
+            $item['findingId'] = seoAuditMatchFindingId($item, findingsDetect($dossier));
+        }
+    }
     if (trim((string) ($raw['key'] ?? '')) !== '') {
         $item['id'] = ersClip(trim((string) $raw['key']), 200);
     } else {
@@ -370,24 +398,40 @@ function seoAuditUnmarkApplied(string $dataDir, string $host, string $key): arra
 
 function seoAuditVerifyApplied(string $dataDir, string $host): array
 {
+    @set_time_limit(55);
     $pack = seoAuditReadApplied($dataDir, $host);
+    $pendingBefore = 0;
     $urls = [];
     foreach ($pack['items'] as $item) {
         if (($item['status'] ?? '') !== 'applied') {
             continue;
         }
+        $pendingBefore += 1;
         $url = trim((string) ($item['url'] ?? ''));
         if ($url !== '' && gscUrlBelongsToHost($url, $host)) {
             $urls[] = $url;
         }
+    }
+    if ($pendingBefore === 0) {
+        return [
+            'ok' => true,
+            'host' => $host,
+            'touched' => 0,
+            'autoVerified' => 0,
+            'verified' => 0,
+            'pending' => 0,
+            'items' => $pack['items'],
+            'findingCounts' => [],
+            'note' => 'No hay mejoras en estado “Hecho” para verificar. Marcá el check primero.',
+        ];
     }
     $touched = 0;
     if ($urls !== []) {
         $touch = seoAuditTouchDom($dataDir, $host, array_values(array_unique($urls)));
         $touched = (int) ($touch['touched'] ?? count($urls));
     }
-    $sa = gscLoadServiceAccount($dataDir, $dataDir . '/gsc-service-account.json');
-    $dossier = dossierBuild($dataDir, $sa, $host, false, true);
+    // Solo relee cachés (HTML tocado arriba). Evita el dossierBuild completo que corta por timeout.
+    $dossier = dossierRead($dataDir, $host);
     $findings = !empty($dossier['ok']) ? findingsDetect($dossier) : [];
     $auto = seoAuditAutoVerify($dataDir, $host, $findings);
     $items = seoAuditReadApplied($dataDir, $host)['items'];
