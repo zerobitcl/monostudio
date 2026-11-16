@@ -1167,7 +1167,7 @@ class AppController {
       "kwPanel", "kwMeta", "kwStats", "kwAi", "kwTabs", "kwHint", "kwHead", "kwBody", "kwEmpty", "btnKwAi",
       "seoClicks", "seoImpressions", "seoCtr", "seoPosition",
       "seoClicksDelta", "seoImpressionsDelta", "seoCtrDelta", "seoPositionDelta",
-      "btnGscRefresh", "btnSeoIndex", "btnSeoBrief", "btnClientReport", "btnStudioReport", "btnSeoPrint", "btnReportPdf", "btnReportFresh", "btnSeoBriefClose",
+      "btnGscRefresh", "btnSeoIndex", "btnClientReport", "btnStudioReport", "btnSeoPrint", "btnReportPdf", "btnReportFresh", "btnSeoBriefClose",
       "gscConfigForm", "gscSitemapUrl", "gscPages", "gscGa4Property", "ga4Properties", "ga4Hint",
       "growthPanel", "growthMeta", "growthList",
       "cursorAuditPanel", "cursorAuditMeta", "cursorAuditProgress", "cursorAuditBar",
@@ -1456,7 +1456,6 @@ class AppController {
     });
     this.dom.btnGscRefresh.addEventListener("click", () => this.loadSeoHost(this.seoHost, true));
     this.dom.btnSeoIndex.addEventListener("click", () => this.requestIndex(this.seoHost));
-    this.dom.btnSeoBrief.addEventListener("click", () => this.openSeoReport());
     this.dom.btnClientReport.addEventListener("click", () => this.openClientReport({ variant: "client" }));
     this.dom.btnStudioReport?.addEventListener("click", () => this.openClientReport({ variant: "studio" }));
     this.dom.btnReportFresh?.addEventListener("click", () => this.openClientReport({ fresh: true, variant: this.reportVariant }));
@@ -3894,7 +3893,6 @@ class AppController {
     this.dom.seoKpis.hidden = !hasMetrics;
     this.dom.seoInventory.hidden = !data?.inventory?.total;
     this.dom.seoPagesDrawer.hidden = !data?.pages?.length;
-    this.dom.btnSeoBrief.hidden = !hasMetrics;
     this.dom.btnClientReport.hidden = !hasMetrics;
     if (this.dom.btnStudioReport) this.dom.btnStudioReport.hidden = !hasMetrics;
     this.dom.seoPeriodToggle.hidden = !hasMetrics;
@@ -3917,7 +3915,6 @@ class AppController {
       this.#seoCritical(null);
       this.dom.seoSignals.innerHTML = "";
       this.dom.seoSignalsEmpty.hidden = true;
-      this.dom.btnSeoBrief.hidden = true;
       this.dom.btnClientReport.hidden = true;
       if (this.dom.btnStudioReport) this.dom.btnStudioReport.hidden = true;
       this.dom.growthPanel.hidden = true;
@@ -4911,7 +4908,6 @@ class AppController {
   }
 
   printSeoReport() {
-    if (this.dom.seoBrief.hidden) this.openSeoReport();
     if (this.dom.seoBrief.hidden) return;
     document.body.classList.add("is-printing-brief");
     const cleanup = () => {
@@ -4921,235 +4917,6 @@ class AppController {
     window.addEventListener("afterprint", cleanup);
     window.print();
     setTimeout(cleanup, 1500);
-  }
-
-  openSeoReport() {
-    this.setBriefMode("ops");
-    const data = this.seoHost ? SeoStore.get(this.seoHost) : null;
-    if (!data?.totals && !GscModule.periodsOf(data).length) {
-      this.showToast("Aún no hay números para exportar");
-      return;
-    }
-
-    const client = this.clients.find((c) => GscModule.hostOf(c.siteUrl) === this.seoHost);
-    const inv = data.inventory || {};
-    const periods = GscModule.periodsOf(data);
-    const analysis = Array.isArray(data.analysis) && data.analysis.length
-      ? data.analysis
-      : [];
-    const criticals = (data.signals || []).filter((s) => Number(s.severity) >= 3);
-    const generated = new Date().toLocaleString("es-CL", {
-      dateStyle: "medium",
-      timeStyle: "short",
-    });
-
-    const esc = (s) =>
-      String(s ?? "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
-
-    const deltaLabel = (n, { invert = false, percent = false, position = false } = {}) => {
-      if (n == null || Number(n) === 0) return "sin cambio";
-      const v = Number(n);
-      const up = invert ? v < 0 : v > 0;
-      const sign = v > 0 ? "+" : "";
-      if (percent) return `${up ? "▲" : "▼"} ${sign}${Math.abs(v).toFixed(1)} pp`;
-      if (position) return `${v > 0 ? "↑" : "↓"} ${Math.abs(v).toFixed(1)}`;
-      return `${up ? "▲" : "▼"} ${sign}${Math.abs(v) >= 10 ? GscModule.fmt(v) : v.toFixed?.(1) ?? v}`;
-    };
-
-    const periodCards = periods
-      .map((period) => {
-        const t = period.totals || {};
-        const d = period.delta || {};
-        const range = period.range
-          ? `${period.range.start} → ${period.range.end}`
-          : period.label;
-        return `
-        <article class="brief-period">
-          <h3>${esc(period.label)}</h3>
-          <p class="brief-period__range">${esc(range)}</p>
-          <dl>
-            <div><dt>Clics</dt><dd>${esc(GscModule.fmt(t.clicks))}<small>${esc(deltaLabel(d.clicks))}</small></dd></div>
-            <div><dt>Impresiones</dt><dd>${esc(GscModule.fmt(t.impressions))}<small>${esc(deltaLabel(d.impressions))}</small></dd></div>
-            <div><dt>CTR</dt><dd>${esc(GscModule.pct(t.ctr))}<small>${esc(deltaLabel(d.ctr != null ? d.ctr * 100 : null, { percent: true }))}</small></dd></div>
-            <div><dt>Posición</dt><dd>${esc(GscModule.pos(t.position))}<small>${esc(deltaLabel(d.position, { position: true }))}</small></dd></div>
-          </dl>
-        </article>`;
-      })
-      .join("");
-
-    const analysisHtml = analysis
-      .map(
-        (item) => `
-      <li class="brief-insight is-${esc(item.tone || "ok")}">
-        <strong>${esc(item.title)}</strong>
-        <span>${esc(item.body)}</span>
-      </li>`
-      )
-      .join("");
-
-    const pageRows = (data.pages || [])
-      .slice(0, 8)
-      .map((row) => {
-        const path = GscModule.pagePath(row.url);
-        const index = row.indexStatus?.label || "—";
-        const tone = row.indexStatus?.tone || "neutral";
-        return `
-        <tr>
-          <td><strong>${esc(path)}</strong></td>
-          <td>${esc(GscModule.fmt(row.current?.clicks))}</td>
-          <td>${esc(deltaLabel(row.delta?.clicks))}</td>
-          <td>${esc(GscModule.pos(row.current?.position))}</td>
-          <td><span class="brief-index is-${esc(tone)}">${esc(index)}</span></td>
-        </tr>`;
-      })
-      .join("");
-
-    const queries = [];
-    const seenQ = new Set();
-    (data.pages || []).forEach((row) => {
-      (row.queries || []).forEach((item) => {
-        const q = String(item.query || "").trim();
-        if (!q || seenQ.has(q)) return;
-        seenQ.add(q);
-        queries.push(item);
-      });
-    });
-    queries.sort((a, b) => (Number(b.clicks) || 0) - (Number(a.clicks) || 0));
-    // Las queries de keywords son de todo el sitio; las de páginas solo cubren las URLs inspeccionadas.
-    const kw = this.kwData.get(this.seoHost);
-    const kwTop = (kw?.buckets?.top || []).map((r) => ({ query: r.q, clicks: r.clicks, impressions: r.impressions }));
-    const queryRows = (kwTop.length ? kwTop : queries)
-      .slice(0, 8)
-      .map(
-        (item) => `
-        <tr>
-          <td>${esc(item.query)}</td>
-          <td>${esc(GscModule.fmt(item.clicks))}</td>
-          <td>${esc(GscModule.fmt(item.impressions))}</td>
-        </tr>`
-      )
-      .join("");
-
-    const opportunityRows = (kw?.buckets?.striking || [])
-      .slice(0, 8)
-      .map(
-        (r) => `
-        <tr>
-          <td>${esc(r.q)}</td>
-          <td>${esc(GscModule.pos(r.position))}</td>
-          <td>${esc(GscModule.fmt(r.impressions))}</td>
-          <td>+${esc(GscModule.fmt(r.gain))}</td>
-        </tr>`
-      )
-      .join("");
-
-    const kwPlan = (kw?.ai?.insights?.acciones || [])
-      .map((a) => `<li><strong>${esc(a.titulo)}</strong> — ${esc(a.detalle)}</li>`)
-      .join("");
-
-    const monthRows = (data.trend?.months || [])
-      .map(
-        (m) => `
-        <tr>
-          <td>${esc(m.label)}</td>
-          <td>${esc(GscModule.fmt(m.clicks))}</td>
-          <td>${esc(GscModule.fmt(m.impressions))}</td>
-        </tr>`
-      )
-      .join("");
-
-    const criticalRows = criticals
-      .map(
-        (s) => `
-      <tr>
-        <td><span class="brief-sev">S${esc(s.severity)}</span></td>
-        <td>
-          <strong>${esc(s.title)}</strong>
-          <small>${esc(s.detail)}</small>
-        </td>
-        <td>${esc(s.metric || "—")}</td>
-      </tr>`
-      )
-      .join("");
-
-    const nextSteps = (criticals.length ? criticals : analysis)
-      .filter((s) => s.kind !== "site-noindex")
-      .slice(0, 5)
-      .map((s, i) => {
-        const title = s.title || "";
-        const detail = s.detail || s.body || "";
-        return `<li><strong>${i + 1}. ${esc(title)}</strong> — ${esc(detail)}</li>`;
-      })
-      .join("");
-
-    this.dom.seoBriefBody.innerHTML = `
-      <header class="brief__head">
-        <div>
-          <p class="brief__brand">Mono Studio · Informe SEO</p>
-          <h1 id="seoReportTitle">${esc(client?.name || this.seoHost)}</h1>
-          <p class="brief__meta">${esc(this.seoHost)} · 28 días / 3 meses / 6 meses · Generado ${esc(generated)}</p>
-        </div>
-        <div class="brief__score ${criticals.length ? "" : "is-ok"}">
-          <strong>${criticals.length || "0"}</strong>
-          <span>${criticals.length ? "críticos" : "sin críticos"}</span>
-        </div>
-      </header>
-
-      <section class="brief-periods">${periodCards}</section>
-
-      <section class="brief__inv">
-        <div><strong>${esc(inv.indexed ?? 0)}/${esc(inv.checked || 0)}</strong><span>Indexadas</span></div>
-        <div class="${inv.notIndexed ? "is-bad" : ""}"><strong>${esc(inv.notIndexed ?? 0)}</strong><span>Fuera del índice</span></div>
-        <div><strong>${esc(inv.blocked ?? 0)}</strong><span>Bloqueadas</span></div>
-        <div><strong>${esc(inv.withData ?? 0)}</strong><span>Con tráfico</span></div>
-      </section>
-
-      ${analysisHtml ? `<section class="brief__section"><h2>Lectura</h2><ul class="brief-insights">${analysisHtml}</ul></section>` : ""}
-
-      ${pageRows ? `<section class="brief__section"><h2>Páginas que mueven el tráfico</h2>
-        <table>
-          <thead><tr><th>URL</th><th>Clics 28d</th><th>Δ</th><th>Pos.</th><th>Índice</th></tr></thead>
-          <tbody>${pageRows}</tbody>
-        </table></section>` : ""}
-
-      ${queryRows ? `<section class="brief__section"><h2>Queries que ya convierten</h2>
-        <table>
-          <thead><tr><th>Query</th><th>Clics</th><th>Imp.</th></tr></thead>
-          <tbody>${queryRows}</tbody>
-        </table></section>` : ""}
-
-      ${opportunityRows ? `<section class="brief__section"><h2>Oportunidades de crecimiento</h2>
-        <table>
-          <thead><tr><th>Query</th><th>Pos.</th><th>Imp.</th><th>Clics/mes posibles</th></tr></thead>
-          <tbody>${opportunityRows}</tbody>
-        </table></section>` : ""}
-
-      ${kwPlan ? `<section class="brief__section"><h2>Plan de keywords</h2><ol>${kwPlan}</ol></section>` : ""}
-
-      ${monthRows ? `<section class="brief__section"><h2>Mes a mes</h2>
-        <table>
-          <thead><tr><th>Mes</th><th>Clics</th><th>Impresiones</th></tr></thead>
-          <tbody>${monthRows}</tbody>
-        </table></section>` : ""}
-
-      ${criticalRows ? `<section class="brief__section"><h2>Puntos críticos</h2>
-        <table>
-          <thead><tr><th>Sev.</th><th>Hallazgo</th><th>Métrica</th></tr></thead>
-          <tbody>${criticalRows}</tbody>
-        </table></section>` : ""}
-
-      ${nextSteps ? `<section class="brief__section"><h2>Próximos pasos</h2><ol>${nextSteps}</ol></section>` : ""}
-
-      <footer class="brief__foot">Mono Studio OS · Los deltas comparan cada rango contra el tramo anterior igual de largo. Uso interno / entrega a cliente.</footer>
-    `;
-
-    this.dom.seoBrief.hidden = false;
-    this.dom.seoBrief.setAttribute("aria-hidden", "false");
-    this.dom.seoBrief.scrollTop = 0;
   }
 
   async handleGscConfig(e) {

@@ -55,8 +55,8 @@ function reportCopy(string $lang): array
 {
     $all = [
         'es' => [
-            'kicker' => 'Mono Studio',
-            'title' => 'Informe Mono Studio',
+            'kicker' => 'ERs',
+            'title' => 'Informe ERs',
             'clicks' => 'Clics en Google',
             'impressions' => 'Veces visible',
             'ctr' => 'Entraron',
@@ -99,8 +99,8 @@ function reportCopy(string $lang): array
             'devices' => ['mobile' => 'celular', 'desktop' => 'computador', 'tablet' => 'tablet'],
         ],
         'en' => [
-            'kicker' => 'Mono Studio',
-            'title' => 'Mono Studio report',
+            'kicker' => 'ERs',
+            'title' => 'ERs report',
             'clicks' => 'Clicks from Google',
             'impressions' => 'Times shown',
             'ctr' => 'Click rate',
@@ -143,8 +143,8 @@ function reportCopy(string $lang): array
             'devices' => ['mobile' => 'mobile', 'desktop' => 'desktop', 'tablet' => 'tablet'],
         ],
         'pt' => [
-            'kicker' => 'Mono Studio',
-            'title' => 'Relatório Mono Studio',
+            'kicker' => 'ERs',
+            'title' => 'Relatório ERs',
             'clicks' => 'Cliques no Google',
             'impressions' => 'Vezes visível',
             'ctr' => 'Entraram',
@@ -523,11 +523,11 @@ function reportCachedHtml(string $dataDir, string $host, string $lang, string $v
     return null;
 }
 
-function reportPdf(string $apiKey, string $html, string $fileName, string $lang = 'es'): string
+function reportPdf(string $apiKey, string $html, string $fileName, string $lang = 'es', string $sign = 'Eduardo Rojas · Mono Studio'): string
 {
     $copy = reportCopy($lang);
     $footer = '<div style="font-size:9px;width:100%;padding:0 18px;color:#7a746a;font-family:Arial,sans-serif;">'
-        . '<span style="float:left">Eduardo Rojas · Mono Studio</span>'
+        . '<span style="float:left">' . htmlspecialchars($sign, ENT_QUOTES | ENT_HTML5, 'UTF-8') . '</span>'
         . '<span style="float:right">' . htmlspecialchars($copy['pageOf'], ENT_QUOTES | ENT_HTML5, 'UTF-8')
         . ' <span class="pageNumber"></span> ' . htmlspecialchars($copy['of'], ENT_QUOTES | ENT_HTML5, 'UTF-8')
         . ' <span class="totalPages"></span></span></div>';
@@ -615,7 +615,8 @@ if ($isEntry) {
                     if ($apiKey === '') {
                         gscJson(['error' => 'Falta la clave de api2pdf. Copiá ers/data/api2pdf.example.json a api2pdf.json.'], 400);
                     }
-                    $url = reportPdf($apiKey, $cachedHtml['html'], $cachedHtml['fileName'], $lang);
+                    $sign = $variant === 'client' ? 'Eduardo Rojas · Mono Studio' : 'ERs';
+                    $url = reportPdf($apiKey, $cachedHtml['html'], $cachedHtml['fileName'], $lang, $sign);
                     gscJson(['ok' => true, 'url' => $url, 'fileName' => $cachedHtml['fileName'], 'fromCache' => true]);
                 }
             }
@@ -630,7 +631,8 @@ if ($isEntry) {
             if ($apiKey === '') {
                 gscJson(['error' => 'Falta la clave de api2pdf. Copiá ers/data/api2pdf.example.json a api2pdf.json.'], 400);
             }
-            $url = reportPdf($apiKey, $built['html'], $built['fileName'], $lang);
+            $sign = $variant === 'client' ? 'Eduardo Rojas · Mono Studio' : 'ERs';
+            $url = reportPdf($apiKey, $built['html'], $built['fileName'], $lang, $sign);
             gscJson(['ok' => true, 'url' => $url, 'fileName' => $built['fileName']]);
         }
 

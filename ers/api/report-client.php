@@ -12,7 +12,7 @@ if (!defined('ERS_LIBRARY')) {
     exit;
 }
 
-const REPORT_CLIENT_VERSION = '2026.11.12-client-gbp';
+const REPORT_CLIENT_VERSION = '2026.11.16-exec';
 
 function reportClientCopy(string $lang): array
 {
@@ -89,6 +89,39 @@ function reportClientCopy(string $lang): array
             'oppMapsSite' => 'Enlazar el sitio en Google Maps',
             'oppMapsSiteLine' => 'Quien los encuentra en el mapa debe poder entrar al sitio de un toque.',
             'sign' => 'Cualquier duda sobre este informe, lo conversamos.',
+            'wa' => 'WhatsApp',
+            'calls' => 'llamadas',
+            'forms' => 'formularios',
+            'mail' => 'correo',
+            'sixMonths' => 'Así evolucionó en seis meses',
+            'sixDelta' => '%s frente al primer tramo con visitas',
+            'brandTitle' => 'Quién ya los conoce y quién llega nuevo',
+            'brandKnown' => 'Buscaron el nombre',
+            'brandNew' => 'Buscaron el servicio',
+            'brandHigh' => 'La mayoría llega porque ya conoce el nombre. El crecimiento está en las búsquedas del servicio.',
+            'brandBalanced' => 'Llegan tanto por el nombre como buscando el servicio. Hay demanda nueva.',
+            'brandLow' => 'La mayor parte llega buscando el servicio, sin conocer el nombre. Eso es demanda nueva.',
+            'brandNone' => 'Todavía no hay suficientes búsquedas para separar el nombre del servicio.',
+            'qTitle' => 'Principales búsquedas',
+            'qColQuery' => 'Búsqueda',
+            'qColVisits' => 'Visitas',
+            'qColChange' => 'Variación',
+            'qColSeen' => 'Veces visto',
+            'qColPlace' => 'En Google',
+            'qBrand' => 'Marca',
+            'qNew' => 'Nueva',
+            'qStable' => 'Estable',
+            'placeTop' => 'Top 3',
+            'placeP1' => '1ª pág. #%s',
+            'placeP2' => '2ª pág. #%s',
+            'placeN' => '#%s',
+            'upPlaces' => '↑ %s',
+            'downPlaces' => '↓ %s',
+            'pagesTitle' => 'Páginas que más atraen',
+            'pColPage' => 'Página',
+            'pColVisits' => 'Visitas desde Google',
+            'pColSeen' => 'Veces visto',
+            'pColContacts' => 'Contactos',
             'other' => 'Otros',
             'home' => 'Inicio',
         ],
@@ -164,6 +197,39 @@ function reportClientCopy(string $lang): array
             'oppMapsSite' => 'Link the website on Google Maps',
             'oppMapsSiteLine' => 'People who find you on the map should reach the site in one tap.',
             'sign' => 'Any questions about this report, let’s talk.',
+            'wa' => 'WhatsApp',
+            'calls' => 'calls',
+            'forms' => 'forms',
+            'mail' => 'email',
+            'sixMonths' => 'How it moved over six months',
+            'sixDelta' => '%s versus the first stretch with visits',
+            'brandTitle' => 'Who already knows you, and who is new',
+            'brandKnown' => 'Searched the name',
+            'brandNew' => 'Searched the service',
+            'brandHigh' => 'Most people arrive because they already know the name. Growth sits in searches for the service.',
+            'brandBalanced' => 'People arrive both by name and by searching the service. There is new demand.',
+            'brandLow' => 'Most people arrive searching the service, without knowing the name. That is new demand.',
+            'brandNone' => 'There are not enough searches yet to separate the name from the service.',
+            'qTitle' => 'Main searches',
+            'qColQuery' => 'Search',
+            'qColVisits' => 'Visits',
+            'qColChange' => 'Change',
+            'qColSeen' => 'Times shown',
+            'qColPlace' => 'On Google',
+            'qBrand' => 'Brand',
+            'qNew' => 'New',
+            'qStable' => 'Steady',
+            'placeTop' => 'Top 3',
+            'placeP1' => 'page 1 #%s',
+            'placeP2' => 'page 2 #%s',
+            'placeN' => '#%s',
+            'upPlaces' => '↑ %s',
+            'downPlaces' => '↓ %s',
+            'pagesTitle' => 'Pages that attract the most',
+            'pColPage' => 'Page',
+            'pColVisits' => 'Visits from Google',
+            'pColSeen' => 'Times shown',
+            'pColContacts' => 'Contacts',
             'other' => 'Other',
             'home' => 'Home',
         ],
@@ -239,6 +305,39 @@ function reportClientCopy(string $lang): array
             'oppMapsSite' => 'Ligar o site no Google Maps',
             'oppMapsSiteLine' => 'Quem encontra no mapa deve entrar no site com um toque.',
             'sign' => 'Qualquer dúvida sobre este relatório, conversamos.',
+            'wa' => 'WhatsApp',
+            'calls' => 'ligações',
+            'forms' => 'formulários',
+            'mail' => 'e-mail',
+            'sixMonths' => 'Como evoluiu em seis meses',
+            'sixDelta' => '%s frente ao primeiro trecho com visitas',
+            'brandTitle' => 'Quem já conhece e quem chega novo',
+            'brandKnown' => 'Buscaram o nome',
+            'brandNew' => 'Buscaram o serviço',
+            'brandHigh' => 'A maioria chega porque já conhece o nome. O crescimento está nas buscas pelo serviço.',
+            'brandBalanced' => 'Chegam tanto pelo nome quanto buscando o serviço. Há demanda nova.',
+            'brandLow' => 'A maior parte chega buscando o serviço, sem conhecer o nome. Isso é demanda nova.',
+            'brandNone' => 'Ainda não há buscas suficientes para separar o nome do serviço.',
+            'qTitle' => 'Principais buscas',
+            'qColQuery' => 'Busca',
+            'qColVisits' => 'Visitas',
+            'qColChange' => 'Variação',
+            'qColSeen' => 'Vezes visto',
+            'qColPlace' => 'No Google',
+            'qBrand' => 'Marca',
+            'qNew' => 'Nova',
+            'qStable' => 'Estável',
+            'placeTop' => 'Top 3',
+            'placeP1' => '1ª pág. #%s',
+            'placeP2' => '2ª pág. #%s',
+            'placeN' => '#%s',
+            'upPlaces' => '↑ %s',
+            'downPlaces' => '↓ %s',
+            'pagesTitle' => 'Páginas que mais atraem',
+            'pColPage' => 'Página',
+            'pColVisits' => 'Visitas pelo Google',
+            'pColSeen' => 'Vezes visto',
+            'pColContacts' => 'Contatos',
             'other' => 'Outros',
             'home' => 'Início',
         ],
@@ -308,6 +407,7 @@ function reportClientKpis(array $dossier, string $lang, array $t, array $speed):
             'label' => $t['contacts'],
             'value' => reportNum((float) (int) ($ga['contacts'] ?? $now), $lang),
             'trend' => reportClientTrend($now, (int) ($ga['keyEventsPrev'] ?? 0), $t),
+            'note' => reportClientContactNote($ga, $lang, $t),
         ];
     } else {
         $indexed = (int) ($dossier['inventory']['indexed'] ?? 0);
@@ -381,7 +481,10 @@ function reportClientWins(array $dossier, string $lang, array $t, array $speed):
 
     $ga = is_array($dossier['ga'] ?? null) ? $dossier['ga'] : null;
     if ($ga && !empty($ga['hasKeyEvents']) && (int) ($ga['contacts'] ?? 0) > 0) {
-        $wins[] = ['title' => sprintf($t['bestContacts'], reportNum((float) $ga['contacts'], $lang)), 'line' => ''];
+        $wins[] = [
+            'title' => sprintf($t['bestContacts'], reportNum((float) $ga['contacts'], $lang)),
+            'line' => reportClientContactNote($ga, $lang, $t),
+        ];
     }
 
     foreach ($dossier['keywords']['buckets']['rising'] ?? [] as $row) {
@@ -517,6 +620,202 @@ function reportClientDone(array $dossier, array $findings, string $lang, array $
     return array_slice($done, 0, 5);
 }
 
+function reportClientContactNote(array $ga, string $lang, array $t): string
+{
+    $bits = [];
+    foreach ([
+        'whatsapp' => $t['wa'],
+        'llamada' => $t['calls'],
+        'formulario' => $t['forms'],
+        'email' => $t['mail'],
+    ] as $key => $label) {
+        $n = (int) ($ga['contactBreakdown'][$key] ?? 0);
+        if ($n > 0) {
+            $bits[] = reportNum((float) $n, $lang) . ' ' . $label;
+        }
+    }
+    return implode(' · ', $bits);
+}
+
+/** Seis tramos iguales de 28 días, cerrando en el fin del informe. El mes calendario a medias miente. */
+function reportClientTranches(array $daily, string $end): array
+{
+    $endDt = DateTimeImmutable::createFromFormat('!Y-m-d', $end);
+    if (!$endDt) {
+        return [];
+    }
+    $out = [];
+    for ($i = 5; $i >= 0; $i--) {
+        $sliceEnd = $endDt->modify('-' . ($i * 28) . ' days');
+        $sliceStart = $sliceEnd->modify('-27 days');
+        $series = reportClickSeries($daily, $sliceStart->format('Y-m-d'), $sliceEnd->format('Y-m-d'));
+        $out[] = [
+            'end' => $sliceEnd->format('Y-m-d'),
+            'clicks' => array_sum($series),
+        ];
+    }
+    return $out;
+}
+
+function reportClientMonthsSvg(array $tranches, string $lang): string
+{
+    if (count($tranches) < 2) {
+        return '';
+    }
+    $max = 1;
+    $sum = 0;
+    foreach ($tranches as $tranche) {
+        $max = max($max, (int) $tranche['clicks']);
+        $sum += (int) $tranche['clicks'];
+    }
+    if ($sum < 1) {
+        return '';
+    }
+    $w = 640;
+    $h = 138;
+    $n = count($tranches);
+    $bw = ($w - 12) / $n;
+    $bars = '';
+    foreach ($tranches as $i => $tranche) {
+        $clicks = (int) $tranche['clicks'];
+        $barH = ($clicks / $max) * 72;
+        $x = 6 + ($i * $bw);
+        $pw = max(8, $bw - 14);
+        $bx = $x + (($bw - $pw) / 2);
+        $y = 96 - $barH;
+        $label = preg_replace('/,?\s*\d{4}$/', '', reportDateLabel((string) $tranche['end'], $lang)) ?? '';
+        $bars .= '<rect x="' . round($bx, 1) . '" y="' . round($y, 1) . '" width="' . round($pw, 1)
+            . '" height="' . round(max($barH, $clicks > 0 ? 2 : 0), 1) . '" rx="3" fill="#1f5f4a"/>';
+        $bars .= '<text x="' . round($bx + ($pw / 2), 1) . '" y="' . round(max(12, $y - 6), 1)
+            . '" text-anchor="middle" font-size="11" fill="#1f1c17">' . reportE(reportNum((float) $clicks, $lang)) . '</text>';
+        $bars .= '<text x="' . round($bx + ($pw / 2), 1) . '" y="122" text-anchor="middle" font-size="10" fill="#6b6458">'
+            . reportE($label) . '</text>';
+    }
+    return '<svg viewBox="0 0 ' . $w . ' ' . $h . '" width="100%" height="138" role="img" aria-hidden="true">' . $bars . '</svg>';
+}
+
+function reportClientSixDelta(array $tranches, string $lang, array $t): string
+{
+    $first = null;
+    foreach ($tranches as $tranche) {
+        if ((int) $tranche['clicks'] > 0) {
+            $first = $tranche;
+            break;
+        }
+    }
+    $last = $tranches[array_key_last($tranches)] ?? null;
+    if ($first === null || $last === null || $first === $last || (int) $first['clicks'] < 1) {
+        return '';
+    }
+    $pct = ((int) $last['clicks'] - (int) $first['clicks']) / (int) $first['clicks'];
+    $label = reportClientPct($pct, $lang);
+    if ($label === '') {
+        $label = $t['qStable'];
+    }
+    return sprintf($t['sixDelta'], $label);
+}
+
+function reportClientCountDelta(int $delta, bool $isNew, string $lang, array $t): array
+{
+    if ($isNew) {
+        return ['text' => $t['qNew'], 'tone' => 'up'];
+    }
+    if ($delta > 0) {
+        return ['text' => '+' . reportNum((float) $delta, $lang), 'tone' => 'up'];
+    }
+    if ($delta < 0) {
+        return ['text' => '−' . reportNum((float) abs($delta), $lang), 'tone' => 'soft'];
+    }
+    return ['text' => $t['qStable'], 'tone' => 'flat'];
+}
+
+function reportClientPlace(float $pos, array $t): string
+{
+    if ($pos <= 0) {
+        return '—';
+    }
+    $n = (string) (int) round($pos);
+    if ($pos <= 3) {
+        return $t['placeTop'];
+    }
+    if ($pos <= 10) {
+        return sprintf($t['placeP1'], $n);
+    }
+    if ($pos <= 20) {
+        return sprintf($t['placeP2'], $n);
+    }
+    return sprintf($t['placeN'], $n);
+}
+
+function reportClientPlaceMove(float $dPos, string $lang, array $t): string
+{
+    if ($dPos >= 0.5) {
+        return sprintf($t['upPlaces'], reportNum($dPos, $lang, 1));
+    }
+    if ($dPos <= -0.5) {
+        return sprintf($t['downPlaces'], reportNum(abs($dPos), $lang, 1));
+    }
+    return '';
+}
+
+function reportClientSearchRows(array $dossier): array
+{
+    $buckets = is_array($dossier['keywords']['buckets'] ?? null) ? $dossier['keywords']['buckets'] : [];
+    $out = [];
+    $seen = [];
+    $add = static function (array $row) use (&$out, &$seen): void {
+        if (count($out) >= 8 || !is_array($row)) {
+            return;
+        }
+        $q = trim((string) ($row['q'] ?? ''));
+        if ($q === '' || isset($seen[$q])) {
+            return;
+        }
+        $seen[$q] = true;
+        $out[] = $row;
+    };
+    foreach (array_slice($buckets['top'] ?? [], 0, 6) as $row) {
+        if (is_array($row)) {
+            $add($row);
+        }
+    }
+    foreach ($buckets['striking'] ?? [] as $row) {
+        if (is_array($row)) {
+            $add($row);
+        }
+    }
+    foreach ($buckets['top'] ?? [] as $row) {
+        if (is_array($row)) {
+            $add($row);
+        }
+    }
+    return $out;
+}
+
+function reportClientTopPages(array $dossier): array
+{
+    $pages = array_values(array_filter(
+        is_array($dossier['pages'] ?? null) ? $dossier['pages'] : [],
+        static fn ($page) => is_array($page) && ((int) ($page['clicks'] ?? 0) > 0 || (int) ($page['impressions'] ?? 0) > 0)
+    ));
+    usort($pages, static fn ($a, $b) => ((int) $b['clicks'] <=> (int) $a['clicks']) ?: ((int) $b['impressions'] <=> (int) $a['impressions']));
+    $contacts = [];
+    foreach ($dossier['ga']['landings'] ?? [] as $landing) {
+        if (!is_array($landing)) {
+            continue;
+        }
+        $path = (string) ($landing['path'] ?? '');
+        $contacts[$path] = (int) ($contacts[$path] ?? 0) + (int) ($landing['keyEvents'] ?? 0);
+    }
+    $rows = [];
+    foreach (array_slice($pages, 0, 6) as $page) {
+        $path = (string) ($page['path'] ?? '/');
+        $page['contacts'] = (int) ($contacts[$path] ?? 0);
+        $rows[] = $page;
+    }
+    return $rows;
+}
+
 function reportClientRender(array $m): string
 {
     $t = $m['t'];
@@ -530,8 +829,10 @@ function reportClientRender(array $m): string
             ? '<em class="t-' . $e((string) $trend['tone']) . '">' . $e((string) $trend['word'])
                 . ($pct !== '' ? ' <b>' . $e($pct) . '</b>' : '') . '</em>'
             : '';
+        $note = trim((string) ($k['note'] ?? ''));
         $kpis .= '<article class="kpi"><span>' . $e((string) $k['label']) . '</span><strong>'
-            . $e((string) $k['value']) . '</strong>' . $badge . '</article>';
+            . $e((string) $k['value']) . '</strong>' . $badge
+            . ($note !== '' ? '<small>' . $e($note) . '</small>' : '') . '</article>';
     }
 
     $chart = $m['bars'] !== ''
@@ -555,11 +856,76 @@ function reportClientRender(array $m): string
             . '</div><ul class="mixlegend">' . $legend . '</ul></section>';
     }
 
-    $chips = '';
-    foreach ($m['queries'] as $q) {
-        $chips .= '<span class="chip">' . $e((string) $q) . '</span>';
+    $six = '';
+    if (($m['months'] ?? '') !== '') {
+        $delta = trim((string) ($m['sixDelta'] ?? ''));
+        $six = '<section class="block"><h2>' . $e($t['sixMonths']) . '</h2>' . $m['months']
+            . ($delta !== '' ? '<p class="badge">' . $e($delta) . '</p>' : '') . '</section>';
     }
-    $queries = $chips !== '' ? '<section class="block"><h2>' . $e($t['queries']) . '</h2><p class="chips">' . $chips . '</p></section>' : '';
+
+    $brandShare = $m['brandShare'] ?? null;
+    $brand = '';
+    if ($brandShare === null) {
+        $brand = '<section class="block"><h2>' . $e($t['brandTitle']) . '</h2><p class="muted">' . $e($t['brandNone']) . '</p></section>';
+    } else {
+        $known = max(0, min(1, (float) $brandShare));
+        $fresh = 1 - $known;
+        $phrase = $known >= 0.6 ? $t['brandHigh'] : ($known <= 0.35 ? $t['brandLow'] : $t['brandBalanced']);
+        $brand = '<section class="block"><h2>' . $e($t['brandTitle']) . '</h2><div class="split"><span class="known" style="width:'
+            . round($known * 100, 1) . '%"></span><span class="fresh" style="width:'
+            . round($fresh * 100, 1) . '%"></span></div><ul class="mixlegend"><li><i style="background:#c8a86b"></i>'
+            . $e($t['brandKnown']) . ' · ' . $e(reportPct($known, $m['lang'])) . '</li><li><i style="background:#1f5f4a"></i>'
+            . $e($t['brandNew']) . ' · ' . $e(reportPct($fresh, $m['lang'])) . '</li></ul><p class="muted">' . $e($phrase) . '</p></section>';
+    }
+    if (($m['hasKeywords'] ?? false) !== true) {
+        $brand = '<section class="block"><h2>' . $e($t['brandTitle']) . '</h2><p class="muted">' . $e($t['brandNone']) . '</p></section>';
+    }
+
+    $qRows = '';
+    foreach ($m['searchRows'] ?? [] as $row) {
+        $change = reportClientCountDelta((int) ($row['dClicks'] ?? 0), !empty($row['isNew']), $m['lang'], $t);
+        $move = reportClientPlaceMove((float) ($row['dPos'] ?? 0), $m['lang'], $t);
+        $qRows .= '<tr><td><strong>' . $e((string) ($row['q'] ?? '')) . '</strong>'
+            . (!empty($row['brand']) ? ' <em class="tag">' . $e($t['qBrand']) . '</em>' : '')
+            . '</td><td>' . $e(reportNum((float) (int) ($row['clicks'] ?? 0), $m['lang']))
+            . '</td><td class="delta ' . $e($change['tone']) . '">' . $e($change['text'])
+            . '</td><td>' . $e(reportNum((float) (int) ($row['impressions'] ?? 0), $m['lang']))
+            . '</td><td>' . $e(reportClientPlace((float) ($row['position'] ?? 0), $t))
+            . ($move !== '' ? ' <span class="delta ' . (str_starts_with($move, '↑') ? 'up' : 'soft') . '">' . $e($move) . '</span>' : '')
+            . '</td></tr>';
+    }
+    $queries = $qRows !== ''
+        ? '<section class="block"><h2>' . $e($t['qTitle']) . '</h2><table class="exec"><thead><tr><th>'
+            . $e($t['qColQuery']) . '</th><th>' . $e($t['qColVisits']) . '</th><th>' . $e($t['qColChange'])
+            . '</th><th>' . $e($t['qColSeen']) . '</th><th>' . $e($t['qColPlace']) . '</th></tr></thead><tbody>'
+            . $qRows . '</tbody></table></section>'
+        : '';
+
+    $showContacts = false;
+    foreach ($m['topPages'] ?? [] as $page) {
+        if ((int) ($page['contacts'] ?? 0) > 0) {
+            $showContacts = true;
+            break;
+        }
+    }
+    $pRows = '';
+    foreach ($m['topPages'] ?? [] as $page) {
+        $change = reportClientCountDelta((int) ($page['deltaClicks'] ?? 0), false, $m['lang'], $t);
+        $path = (string) ($page['path'] ?? '/');
+        $pRows .= '<tr><td><strong>' . $e(reportClientPageName($m['dossier'], $path, $t)) . '</strong><small>'
+            . $e($path) . '</small></td><td>' . $e(reportNum((float) (int) ($page['clicks'] ?? 0), $m['lang']))
+            . '</td><td class="delta ' . $e($change['tone']) . '">' . $e($change['text'])
+            . '</td><td>' . $e(reportNum((float) (int) ($page['impressions'] ?? 0), $m['lang'])) . '</td>'
+            . ($showContacts ? '<td>' . $e((int) ($page['contacts'] ?? 0) > 0 ? reportNum((float) $page['contacts'], $m['lang']) : '—') . '</td>' : '')
+            . '</tr>';
+    }
+    $pagesBlock = $pRows !== ''
+        ? '<section class="block"><h2>' . $e($t['pagesTitle']) . '</h2><table class="exec"><thead><tr><th>'
+            . $e($t['pColPage']) . '</th><th>' . $e($t['pColVisits']) . '</th><th>' . $e($t['qColChange'])
+            . '</th><th>' . $e($t['pColSeen'])
+            . ($showContacts ? '</th><th>' . $e($t['pColContacts']) : '')
+            . '</th></tr></thead><tbody>' . $pRows . '</tbody></table></section>'
+        : '';
 
     $wins = '';
     foreach ($m['wins'] as $w) {
@@ -601,6 +967,20 @@ function reportClientRender(array $m): string
     .kpi strong { display: block; margin-top: 8px; font-size: 28px; letter-spacing: -.03em; font-weight: 620; line-height: 1; }
     .kpi em { display: inline-block; margin-top: 10px; font-style: normal; font-size: 11px; padding: 3px 8px; border-radius: 999px; }
     .kpi em b { font-weight: 650; }
+    .kpi small { display: block; margin-top: 8px; color: #5f574b; font-size: 11px; line-height: 1.35; }
+    table.exec { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; break-inside: avoid; page-break-inside: avoid; }
+    table.exec th { text-align: left; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: #7a7266; font-weight: 600; padding: 8px 10px; border-bottom: 1px solid #ece6da; }
+    table.exec td { padding: 8px 10px; border-bottom: 1px solid #f3eee6; vertical-align: top; }
+    table.exec tr { break-inside: avoid; page-break-inside: avoid; }
+    table.exec small { display: block; color: #7a7266; font-size: 11px; }
+    .delta.up { color: #1f5f4a; font-weight: 650; }
+    .delta.soft { color: #7a5a1e; font-weight: 650; }
+    .delta.flat { color: #6b6458; }
+    .tag { font-style: normal; margin-left: 6px; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: #7a5a1e; }
+    .split { display: flex; height: 14px; border-radius: 999px; overflow: hidden; background: #ece6da; }
+    .split .known { background: #c8a86b; }
+    .split .fresh { background: #1f5f4a; }
+    .badge { display: inline-block; margin: 8px 0 0; padding: 4px 10px; border-radius: 999px; background: #e3efe9; color: #1f5f4a; font-size: 12px; }
     .t-up { background: #e3efe9; color: #1f5f4a; }
     .t-flat { background: #f1ece2; color: #5f574b; }
     .t-soft { background: #f6ecd9; color: #7a5a1e; }
@@ -642,8 +1022,9 @@ CSS;
         . '<br>' . $e($m['generated']) . '</p></header>'
         . '<section class="page"><p class="headline">' . $e($m['headline']) . '</p><div class="kpis" style="grid-template-columns:repeat('
         . max(1, count($m['kpis'])) . ',1fr)">' . $kpis . '</div>'
-        . $chart . $winsBlock . '</section>'
-        . '<section class="page page2">' . $channels . $queries
+        . $chart . $six . '</section>'
+        . '<section class="page page2">' . $brand . $queries . $pagesBlock . $winsBlock . '</section>'
+        . '<section class="page page2">' . $channels
         . '<h2>' . $e($t['done']) . '</h2><ul class="done">' . $done . '</ul>'
         . '<h2>' . $e($t['next']) . '</h2>' . $opps
         . '<aside class="sign"><div class="mark">ER</div><div><p class="sign__name">Eduardo Rojas · Mono Studio</p>'
@@ -673,11 +1054,17 @@ function reportClientCompose(string $dataDir, array $sa, string $host, string $l
 
     [$kpis, $visits, $seen] = reportClientKpis($dossier, $lang, $t, $speed);
     $generatedAt = new DateTimeImmutable('now', new DateTimeZone('America/Santiago'));
+    $tranches = reportClientTranches($dossier['daily'] ?? [], (string) ($windows['end'] ?? ''));
+    $hasKeywords = is_array($dossier['keywords']['buckets'] ?? null);
+    $brandShare = $hasKeywords && isset($dossier['keywords']['summary']['brandShare'])
+        ? (float) $dossier['keywords']['summary']['brandShare']
+        : null;
 
     $html = reportClientRender([
         'lang' => $lang,
         't' => $t,
         'name' => $name,
+        'dossier' => $dossier,
         'headline' => reportClientHeadline($name, $visits, $seen, $t),
         'rangeLabel' => reportDateLabel($windows['start'], $lang) . ' — ' . reportDateLabel($windows['end'], $lang),
         'generated' => $t['generated'] . ' ' . reportDateLabel($generatedAt->format('Y-m-d'), $lang),
@@ -686,13 +1073,18 @@ function reportClientCompose(string $dataDir, array $sa, string $host, string $l
             reportClickSeries($dossier['daily'] ?? [], $windows['start'], $windows['end']),
             reportClickSeries($dossier['daily'] ?? [], $windows['prevStart'], $windows['prevEnd'])
         ),
+        'months' => reportClientMonthsSvg($tranches, $lang),
+        'sixDelta' => reportClientSixDelta($tranches, $lang, $t),
+        'hasKeywords' => $hasKeywords,
+        'brandShare' => $brandShare,
+        'searchRows' => reportClientSearchRows($dossier),
+        'topPages' => reportClientTopPages($dossier),
         'wins' => reportClientWins($dossier, $lang, $t, $speed),
         'channels' => reportChannelSlices($dossier, $lang, $copy),
-        'queries' => reportTopQueries($dossier, 4),
         'done' => reportClientDone($dossier, $findings, $lang, $t),
         'opps' => reportClientOpportunities($findings, $dossier, $lang, $t),
     ]);
-    $html = str_replace(['fill="#1d4ed8"', 'fill="#d9d3c7"'], ['fill="#1f5f4a"', 'fill="#ddd3c2"'], $html);
+    $html = str_replace(['fill="#ff8a3d"', 'fill="#d9d3c7"'], ['fill="#1f5f4a"', 'fill="#ddd3c2"'], $html);
 
     $fileName = reportFileName($name);
     gscWriteJson(reportHtmlCacheFile($dataDir, $host, 'client'), [

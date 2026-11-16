@@ -11,7 +11,7 @@ if (!defined('ERS_LIBRARY')) {
     exit;
 }
 
-const REPORT_HTML_VERSION = '2026.11.14-maps';
+const REPORT_HTML_VERSION = '2026.11.16-ers';
 
 function reportExtra(string $lang): array
 {
@@ -71,6 +71,17 @@ function reportExtra(string $lang): array
             'mapsNew' => 'nuevas',
             'napOk' => 'NAP alineado',
             'napIssue' => 'NAP a unificar',
+            'horizons' => 'Horizontes',
+            'h28' => '28 días',
+            'h90' => '3 meses',
+            'h180' => '6 meses',
+            'pagesOps' => 'Páginas',
+            'colIndex' => 'Índice',
+            'colQuery' => 'Búsqueda',
+            'colCtr' => 'CTR',
+            'indexYes' => 'En Google',
+            'indexNo' => 'Fuera',
+            'indexUnknown' => 'Sin dato',
         ],
         'en' => [
             'pageHow' => 'How the month went',
@@ -127,6 +138,17 @@ function reportExtra(string $lang): array
             'mapsNew' => 'new',
             'napOk' => 'NAP aligned',
             'napIssue' => 'NAP to align',
+            'horizons' => 'Horizons',
+            'h28' => '28 days',
+            'h90' => '3 months',
+            'h180' => '6 months',
+            'pagesOps' => 'Pages',
+            'colIndex' => 'Index',
+            'colQuery' => 'Search',
+            'colCtr' => 'CTR',
+            'indexYes' => 'On Google',
+            'indexNo' => 'Out',
+            'indexUnknown' => 'No data',
         ],
         'pt' => [
             'pageHow' => 'Como foi o mês',
@@ -183,6 +205,17 @@ function reportExtra(string $lang): array
             'mapsNew' => 'novas',
             'napOk' => 'NAP alinhado',
             'napIssue' => 'NAP a unificar',
+            'horizons' => 'Horizontes',
+            'h28' => '28 dias',
+            'h90' => '3 meses',
+            'h180' => '6 meses',
+            'pagesOps' => 'Páginas',
+            'colIndex' => 'Índice',
+            'colQuery' => 'Busca',
+            'colCtr' => 'CTR',
+            'indexYes' => 'No Google',
+            'indexNo' => 'Fora',
+            'indexUnknown' => 'Sem dado',
         ],
     ];
     return $all[$lang] ?? $all['es'];
@@ -452,7 +485,7 @@ function reportBarsSvg(array $current, array $previous): string
         $ph = (($previous[$i] ?? 0) / $max) * 68;
         $ch = (($current[$i] ?? 0) / $max) * 68;
         $bars .= '<rect x="' . round($x, 1) . '" y="' . round(76 - $ph, 1) . '" width="' . round($pw, 1) . '" height="' . round(max($ph, 0), 1) . '" fill="#d9d3c7"/>';
-        $bars .= '<rect x="' . round($x, 1) . '" y="' . round(76 - $ch, 1) . '" width="' . round($pw * 0.62, 1) . '" height="' . round(max($ch, 0), 1) . '" fill="#1d4ed8"/>';
+        $bars .= '<rect x="' . round($x, 1) . '" y="' . round(76 - $ch, 1) . '" width="' . round($pw * 0.62, 1) . '" height="' . round(max($ch, 0), 1) . '" fill="#ff8a3d"/>';
     }
     return '<svg viewBox="0 0 ' . $w . ' ' . $h . '" width="100%" height="86" role="img" aria-hidden="true">' . $bars . '</svg>';
 }
@@ -589,7 +622,7 @@ function reportNarrative(string $dataDir, string $host, string $lang, array $bri
         return ['source' => 'template', 'error' => '', 'verdict' => '', 'findings' => [], 'moves' => []];
     }
 
-    $system = 'Redactás el informe que Mono Studio le entrega al dueño del negocio. '
+    $system = 'Redactás el informe interno de ERs, para quien opera el sitio. '
         . 'Idioma obligatorio: ' . reportLangName($lang) . '. No mezcles idiomas. '
         . 'No inventes cifras, búsquedas ni páginas. No pongas números en las frases: el número va aparte. '
         . 'Sin jerga (nada de CTR, indexación, Search Console, API, LCP, severidad). '
@@ -703,6 +736,88 @@ function reportNarrative(string $dataDir, string $host, string $lang, array $bri
     }
 }
 
+function reportHorizonBlock(array $dossier, string $lang, array $copy): string
+{
+    $labels = [
+        '28d' => (string) ($copy['h28'] ?? '28 días'),
+        '90d' => (string) ($copy['h90'] ?? '3 meses'),
+        '180d' => (string) ($copy['h180'] ?? '6 meses'),
+    ];
+    $byId = [];
+    foreach ($dossier['periods'] ?? [] as $period) {
+        if (is_array($period) && isset($period['id'])) {
+            $byId[(string) $period['id']] = $period;
+        }
+    }
+    $cards = '';
+    foreach ($labels as $id => $label) {
+        $period = $byId[$id] ?? null;
+        if (!is_array($period) || !is_array($period['totals'] ?? null)) {
+            continue;
+        }
+        $totals = $period['totals'];
+        $delta = is_array($period['delta'] ?? null) ? $period['delta'] : [];
+        $clicks = reportDelta((float) ($delta['clicks'] ?? 0), 'count', $lang, $copy);
+        $seen = reportDelta((float) ($delta['impressions'] ?? 0), 'count', $lang, $copy);
+        $ctr = reportDelta((float) ($delta['ctr'] ?? 0), 'pp', $lang, $copy);
+        $place = reportDelta((float) ($delta['position'] ?? 0), 'places', $lang, $copy);
+        $cell = static function (string $name, string $value, array $change): string {
+            return '<div><dt>' . reportE($name) . '</dt><dd>' . reportE($value)
+                . '<small class="' . reportE($change['tone']) . '">' . reportE($change['text']) . '</small></dd></div>';
+        };
+        $cards .= '<article class="horizon"><h3>' . reportE($label) . '</h3><dl>'
+            . $cell((string) $copy['clicks'], reportNum((float) ($totals['clicks'] ?? 0), $lang), $clicks)
+            . $cell((string) $copy['impressions'], reportNum((float) ($totals['impressions'] ?? 0), $lang), $seen)
+            . $cell((string) $copy['ctr'], reportPct((float) ($totals['ctr'] ?? 0), $lang), $ctr)
+            . $cell((string) $copy['position'], reportNum((float) ($totals['position'] ?? 0), $lang, 1), $place)
+            . '</dl></article>';
+    }
+    if ($cards === '') {
+        return '';
+    }
+    return '<section class="block"><h2>' . reportE((string) $copy['horizons']) . '</h2><div class="horizons">' . $cards . '</div></section>';
+}
+
+function reportOpsTable(array $dossier, string $lang, array $copy): string
+{
+    $pages = array_values(array_filter(
+        is_array($dossier['pages'] ?? null) ? $dossier['pages'] : [],
+        static fn ($page) => is_array($page)
+    ));
+    usort($pages, static fn ($a, $b) => ((int) ($b['clicks'] ?? 0) <=> (int) ($a['clicks'] ?? 0))
+        ?: ((int) ($b['impressions'] ?? 0) <=> (int) ($a['impressions'] ?? 0)));
+    $pages = array_slice($pages, 0, 10);
+    if ($pages === []) {
+        return '';
+    }
+    $rows = '';
+    foreach ($pages as $page) {
+        $tone = (string) ($page['indexTone'] ?? '');
+        $index = match ($tone) {
+            'indexed' => (string) $copy['indexYes'],
+            'issue' => (string) $copy['indexNo'],
+            default => trim((string) ($page['indexLabel'] ?? '')) !== ''
+                ? (string) $page['indexLabel']
+                : (string) $copy['indexUnknown'],
+        };
+        $delta = reportDelta((float) ($page['deltaClicks'] ?? 0), 'count', $lang, $copy);
+        $query = trim((string) ($page['query'] ?? ''));
+        $rows .= '<tr><td><strong>' . reportE((string) ($page['path'] ?? '/')) . '</strong></td><td class="'
+            . reportE($tone === 'indexed' ? 'up' : ($tone === 'issue' ? 'down' : '')) . '">' . reportE($index)
+            . '</td><td>' . reportE(reportNum((float) (int) ($page['clicks'] ?? 0), $lang))
+            . ' <small class="' . reportE($delta['tone']) . '">' . reportE($delta['text']) . '</small></td><td>'
+            . reportE(reportNum((float) (int) ($page['impressions'] ?? 0), $lang)) . '</td><td>'
+            . reportE(reportPct((float) ($page['ctr'] ?? 0), $lang)) . '</td><td>'
+            . reportE(reportNum((float) ($page['position'] ?? 0), $lang, 1)) . '</td><td>'
+            . reportE($query !== '' ? $query : '—') . '</td></tr>';
+    }
+    return '<section class="block"><h2>' . reportE((string) $copy['pagesOps']) . '</h2><table class="ops"><thead><tr><th>'
+        . reportE((string) $copy['colPage']) . '</th><th>' . reportE((string) $copy['colIndex']) . '</th><th>'
+        . reportE((string) $copy['colClicks']) . '</th><th>' . reportE((string) $copy['colSeen']) . '</th><th>'
+        . reportE((string) $copy['colCtr']) . '</th><th>' . reportE((string) $copy['colPlace']) . '</th><th>'
+        . reportE((string) $copy['colQuery']) . '</th></tr></thead><tbody>' . $rows . '</tbody></table></section>';
+}
+
 function reportRender(array $model): string
 {
     $lang = (string) $model['lang'];
@@ -734,7 +849,7 @@ function reportRender(array $model): string
     if (($model['channels'] ?? []) !== []) {
         $bar = '';
         $legend = '';
-        $colors = ['#1d4ed8', '#12141c', '#93c5fd', '#a8a29e', '#e7e5e4'];
+        $colors = ['#ff8a3d', '#110f16', '#ffd7a8', '#a8a29e', '#e7e5e4'];
         foreach ($model['channels'] as $i => $slice) {
             $width = max(2, round(((float) $slice['share']) * 100, 1));
             $color = $colors[$i] ?? '#e7e5e4';
@@ -792,11 +907,11 @@ function reportRender(array $model): string
 
     $css = <<<CSS
     * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; background: #f4f1ea; color: #1c1915; }
+    html, body { margin: 0; padding: 0; background: #f4efe6; color: #1c1915; }
     body { font-family: "Segoe UI", system-ui, sans-serif; font-size: 13px; line-height: 1.45; }
     .sheet { padding: 0; }
-    .mast { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; background: #12141c; color: #f6f3ec; padding: 26px 28px 22px; }
-    .kicker { margin: 0 0 8px; letter-spacing: .28em; text-transform: uppercase; font-size: 10px; color: #93c5fd; }
+    .mast { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; background: #110f16; color: #f4efe6; padding: 26px 28px 22px; }
+    .kicker { margin: 0 0 8px; letter-spacing: .28em; text-transform: uppercase; font-size: 10px; color: #ffb15a; }
     h1 { margin: 0; font-size: 32px; font-weight: 560; letter-spacing: -.03em; line-height: 1; }
     .who { margin: 8px 0 0; color: #d9d3c7; }
     .when { margin: 0; text-align: right; color: #b7b1a6; font-size: 12px; }
@@ -810,7 +925,7 @@ function reportRender(array $model): string
     .light strong { display: block; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; }
     .light p { margin: 2px 0 0; font-size: 16px; line-height: 1.35; max-width: 62ch; }
     .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
-    .kpi { background: #fff; border-top: 3px solid #1d4ed8; padding: 12px 12px 10px; min-height: 92px; }
+    .kpi { background: #fff; border-top: 3px solid #ff8a3d; padding: 12px 12px 10px; min-height: 92px; }
     .kpi span { display: block; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: #78716c; }
     .kpi strong { display: block; margin-top: 6px; font-size: 26px; letter-spacing: -.03em; font-weight: 620; line-height: 1; }
     .kpi em, .kpi small { display: block; margin-top: 6px; font-style: normal; font-size: 11px; color: #78716c; }
@@ -819,7 +934,21 @@ function reportRender(array $model): string
     h2 { margin: 18px 0 8px; font-size: 11px; letter-spacing: .16em; text-transform: uppercase; }
     .legend { display: flex; gap: 14px; align-items: center; margin: 4px 0 0; color: #57534e; font-size: 11px; }
     .swatch { width: 10px; height: 10px; display: inline-block; margin-right: 4px; }
-    .swatch--now { background: #1d4ed8; }
+    .swatch--now { background: #ff8a3d; }
+    .horizons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .horizon { background: #fff; padding: 12px; break-inside: avoid; page-break-inside: avoid; }
+    .horizon h3 { margin: 0 0 8px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #ff8a3d; }
+    .horizon dl { margin: 0; }
+    .horizon div { display: flex; justify-content: space-between; gap: 8px; margin: 0 0 4px; }
+    .horizon dt { color: #78716c; }
+    .horizon dd { margin: 0; text-align: right; }
+    .horizon small, table.ops small { display: block; font-size: 10px; }
+    .horizon small.up, table.ops .up { color: #0d6b45; }
+    .horizon small.down, table.ops .down { color: #9d2c2c; }
+    table.ops { width: 100%; border-collapse: collapse; background: #fff; font-size: 12px; }
+    table.ops th { text-align: left; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: #78716c; padding: 7px 8px; border-bottom: 1px solid #e7e5e4; }
+    table.ops td { padding: 7px 8px; border-bottom: 1px solid #f4efe6; vertical-align: top; }
+    table.ops tr { break-inside: avoid; page-break-inside: avoid; }
     .swatch--prev { background: #d9d3c7; }
     .mixbar { display: flex; height: 14px; background: #e7e5e4; overflow: hidden; }
     .mixbar span { display: block; height: 100%; }
@@ -833,18 +962,18 @@ function reportRender(array $model): string
     .found.now { border-left: 3px solid #12141c; }
     .found strong { display: block; font-size: 15px; }
     .found p { margin: 4px 0 0; max-width: 62ch; }
-    .found em { font-style: normal; font-weight: 650; color: #1d4ed8; text-align: right; max-width: 16ch; }
+    .found em { font-style: normal; font-weight: 650; color: #ff8a3d; text-align: right; max-width: 16ch; }
     .move { display: grid; grid-template-columns: 28px 1fr; gap: 10px; background: #fff; padding: 12px 14px; margin: 0 0 8px; break-inside: avoid; page-break-inside: avoid; }
-    .move span { display: block; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #1d4ed8; }
+    .move span { display: block; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #ff8a3d; }
     .move strong { display: block; margin-top: 2px; }
     .move p { margin: 3px 0 0; }
     .muted { color: #78716c; }
     .foot { margin-top: 18px; }
     .note { margin: 0 0 14px; color: #78716c; font-size: 11px; }
-    .sign { display: flex; gap: 14px; align-items: center; background: #12141c; color: #f6f3ec; padding: 16px; }
-    .mark { width: 42px; height: 42px; border: 1px solid rgba(246,243,236,.35); display: flex; align-items: center; justify-content: center; color: #93c5fd; letter-spacing: .06em; }
+    .sign { display: flex; gap: 14px; align-items: center; background: #110f16; color: #f4efe6; padding: 16px; }
+    .mark { width: 42px; height: 42px; border: 1px solid rgba(244,239,230,.35); display: flex; align-items: center; justify-content: center; color: #ffb15a; letter-spacing: .06em; }
     .sign__name { margin: 0; font-size: 16px; }
-    .sign__role { margin: 2px 0 0; letter-spacing: .16em; text-transform: uppercase; font-size: 10px; color: #93c5fd; }
+    .sign__role { margin: 2px 0 0; letter-spacing: .16em; text-transform: uppercase; font-size: 10px; color: #ffb15a; }
     .sign__note { margin: 4px 0 0; color: #d9d3c7; font-size: 12px; max-width: 52ch; }
 CSS;
 
@@ -855,12 +984,12 @@ CSS;
         . $e($model['rangeLabel']) . '<br>' . $e($model['generated']) . '</p></header>'
         . '<section class="page"><div class="light is-' . $e($tone) . '"><i></i><div><strong>' . $e($lightWord)
         . '</strong><p>' . $e((string) $model['verdict']) . '</p></div></div>'
-        . '<div class="kpis">' . $kpis . '</div>' . $chart . $channels . $queryBlock . '</section>'
-        . '<section class="page page2">' . $nowBlock . $doneBlock
+        . '<div class="kpis">' . $kpis . '</div>' . ($model['horizons'] ?? '') . $chart . $channels . $queryBlock . '</section>'
+        . '<section class="page page2">' . ($model['opsPages'] ?? '') . $nowBlock . $doneBlock
         . '<h2>' . $e($copy['found']) . '</h2>' . $found
         . ($moves !== '' ? '<h2>' . $e($copy['next']) . '</h2>' . $moves : '')
         . '<div class="foot"><p class="note">' . $e($copy['footnote']) . ' · ' . $e($model['host']) . '</p>'
-        . '<aside class="sign"><div class="mark">ER</div><div><p class="sign__name">Eduardo Rojas</p><p class="sign__role">Mono Studio</p>'
+        . '<aside class="sign"><div class="mark">ER</div><div><p class="sign__name">Eduardo Rojas</p><p class="sign__role">ERs</p>'
         . '<p class="sign__note">' . $e($copy['signNote']) . '</p></div></aside></div></section></article></body></html>';
 }
 
@@ -961,6 +1090,8 @@ function reportCompose(string $dataDir, array $sa, string $host, string $lang, b
         ),
         'channels' => reportChannelSlices($dossier, $lang, $copy),
         'queries' => reportTopQueries($dossier, 3),
+        'horizons' => reportHorizonBlock($dossier, $lang, $copy),
+        'opsPages' => reportOpsTable($dossier, $lang, $copy),
         'tasks' => array_slice($dossier['tasks'] ?? [], 0, 4),
         'now' => $now,
         'found' => $found,
@@ -968,7 +1099,7 @@ function reportCompose(string $dataDir, array $sa, string $host, string $lang, b
     ];
 
     $html = reportRender($model);
-    $fileName = 'mono-studio-' . reportFileName($name);
+    $fileName = 'ers-' . reportFileName($name);
     gscWriteJson(reportHtmlCacheFile($dataDir, $host), [
         'version' => REPORT_HTML_VERSION,
         'signature' => $signature,
