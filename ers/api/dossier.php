@@ -1371,6 +1371,9 @@ function dossierPack(string $dataDir, string $host): array
     $repo = [
         'slug' => $repoOk ? (string) $repoRaw['slug'] : '',
         'branch' => $repoOk ? (string) ($repoRaw['branch'] ?? '') : '',
+        'commitSha' => $repoOk ? (string) ($repoRaw['commitSha'] ?? '') : '',
+        'previousCommitSha' => $repoOk ? (string) ($repoRaw['previousCommitSha'] ?? '') : '',
+        'changedFiles' => $repoOk && is_array($repoRaw['changedFiles'] ?? null) ? $repoRaw['changedFiles'] : [],
         'paths' => $repoOk && is_array($repoRaw['paths'] ?? null) ? $repoRaw['paths'] : [],
         'files' => $repoOk && is_array($repoRaw['files'] ?? null) ? $repoRaw['files'] : [],
         'fetchedAt' => $repoOk ? (int) ($repoRaw['fetchedAt'] ?? 0) : 0,
@@ -1468,6 +1471,7 @@ function dossierStamps(string $dataDir, string $host): array
         'psi' => dossierPsiStamp(['pages' => $psi['pages'] ?? []]),
         'dom' => (int) ($dom['updatedAt'] ?? 0),
         'repo' => (int) ($repo['fetchedAt'] ?? 0),
+        'repoSha' => (string) ($repo['commitSha'] ?? ''),
         'gbp' => (int) ($gbp['fetchedAt'] ?? 0),
         'gbpId' => (string) ($gbp['placeId'] ?? $gbp['place']['placeId'] ?? ''),
         'tasks' => dossierTasksSig($host, $windows),

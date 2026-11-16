@@ -471,6 +471,15 @@ class SeoAuditModule {
     }).then((res) => SeoAuditModule.#read(res, "batch"));
   }
 
+  static domTouch(host, urls) {
+    return fetch(`${SeoAuditModule.API}?action=dom-touch`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ host, urls }),
+    }).then((res) => SeoAuditModule.#read(res, "batch"));
+  }
+
   static cursorAudit(host, fresh = false) {
     return fetch(`${SeoAuditModule.API}?action=cursor-audit`, {
       method: "POST",
@@ -3513,7 +3522,9 @@ class AppController {
     } else {
       parts.push(`HTML ${done}/${total || "—"}`);
       if (repo.configured) {
-        parts.push(repo.ready ? `Repo ${repo.slug || "listo"}` : "Repo pendiente");
+        const sha = String(audit.commitSha || repo.commitSha || "");
+        const short = sha ? `@${sha.slice(0, 7)}` : "";
+        parts.push(repo.ready ? `Repo ${repo.slug || "listo"}${short}` : "Repo pendiente");
       } else {
         parts.push("Sin repo (opcional)");
       }
@@ -3589,6 +3600,11 @@ class AppController {
     }
     if (!coverage.ga4 && status?.gaMessage) {
       this.dom.cursorAuditMeta.textContent += ` Analytics: ${status.gaMessage}`;
+    }
+    if (audit.codeUnchanged) {
+      this.dom.cursorAuditMeta.textContent += " El repo sigue en el mismo commit y el HTML leído no cambió: el plan anterior sigue vigente.";
+    } else if (audit.codeChanged && audit.commitSha) {
+      this.dom.cursorAuditMeta.textContent += ` Plan armado sobre el commit ${String(audit.commitSha).slice(0, 7)}.`;
     }
 
     const canGenerate = Boolean(status?.canGenerate) && !this.auditBusy;
@@ -3746,13 +3762,26 @@ class AppController {
     this.renderCursorAudit();
     try {
       const repo = this.githubRepoForHost(host);
+      let scan = null;
       if (repo) {
-        const st = this.auditData.get(host);
-        if (!st?.repo?.ready) {
-          await SeoAuditModule.repoScan(host, repo, false);
+        try {
+          scan = await SeoAuditModule.repoScan(host, repo, false);
+        } catch (err) {
+          this.showToast(err.message || "No se pudo leer el repo", 4200);
         }
       }
       const prev = this.auditData.get(host);
+      if (scan?.commitChanged) {
+        const urls = [`https://${host}/`];
+        for (const cambio of prev?.audit?.insights?.cambios || []) {
+          if (cambio?.url) urls.push(cambio.url);
+        }
+        try {
+          await SeoAuditModule.domTouch(host, urls);
+        } catch {
+          /* El plan igual cita el código nuevo. */
+        }
+      }
       const fresh = Boolean(prev?.audit?.ready);
       const data = await SeoAuditModule.cursorAudit(host, fresh);
       const status = await SeoAuditModule.status(host, repo);
@@ -3767,6 +3796,10 @@ class AppController {
           insights: data.insights,
           keywordsAi: data.keywordsAi || null,
           coverage: data.coverage,
+          commitSha: data.commitSha || "",
+          codeChanged: Boolean(data.codeChanged),
+          codeUnchanged: Boolean(data.codeUnchanged),
+          codeNote: data.codeNote || "",
         };
       }
       this.auditData.set(host, status);
@@ -3786,8 +3819,13 @@ class AppController {
           };
         }
       }
-      if (data.narrative === "fallback") {
+      if (data.codeUnchanged) {
+        this.showToast(data.codeNote || "El repo no tiene commits nuevos. Hacé push y volvé a generar el plan.", 6800);
+      } else if (data.narrative === "fallback") {
         this.showToast("Plan listo con redacción base (Gemini no devolvió JSON)", 5200);
+      } else if (data.codeChanged) {
+        const short = String(data.commitSha || "").slice(0, 7);
+        this.showToast(short ? `Plan nuevo sobre el commit ${short}` : "Plan nuevo sobre el código actual");
       } else if (kwAi?.insights) {
         this.showToast("Plan de crecimiento listo · keywords incluidas");
       } else {

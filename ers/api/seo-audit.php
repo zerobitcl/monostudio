@@ -28,7 +28,7 @@ const SEO_AUDIT_DOM_TTL = 604800; // 7 días: re-scrape si el HTML cambió de fi
 const SEO_AUDIT_REPO_TTL = 21600; // 6 h
 const SEO_AUDIT_REPO_BYTES = 110000;
 const SEO_AUDIT_AI_TIMEOUT = 75;
-const SEO_AUDIT_VERSION = '2026.11.14-context';
+const SEO_AUDIT_VERSION = '2026.11.16-head';
 
 if ($seoAuditStandalone) {
     header('X-Content-Type-Options: nosniff');
@@ -286,6 +286,48 @@ function seoAuditRunDomBatch(string $dataDir, string $host, int $limit = SEO_AUD
     ];
 }
 
+/** Relee solo las URLs del plan anterior. El resto del HTML sigue en caché. */
+function seoAuditTouchDom(string $dataDir, string $host, array $urls): array
+{
+    $cache = seoAuditDomCache($dataDir, $host);
+    $pick = [];
+    foreach ($urls as $url) {
+        $url = trim((string) $url);
+        if ($url === '' || !gscUrlBelongsToHost($url, $host)) {
+            continue;
+        }
+        $pick[$url] = true;
+        if (count($pick) >= 8) {
+            break;
+        }
+    }
+    if ($pick === []) {
+        return ['ok' => true, 'host' => $host, 'touched' => 0, 'updatedAt' => (int) ($cache['updatedAt'] ?? 0)];
+    }
+
+    @set_time_limit(40);
+    $deadline = microtime(true) + 24;
+    $n = 0;
+    foreach (array_keys($pick) as $url) {
+        if (gscTimeLeft($deadline) < 3) {
+            break;
+        }
+        $cache['pages'][$url] = seoAuditFetchDom($url);
+        $n += 1;
+    }
+    $cache['host'] = $host;
+    $cache['version'] = SEO_AUDIT_VERSION;
+    $cache['updatedAt'] = time();
+    gscWriteJson(seoAuditDomFile($dataDir, $host), $cache);
+
+    return [
+        'ok' => true,
+        'host' => $host,
+        'touched' => $n,
+        'updatedAt' => $cache['updatedAt'],
+    ];
+}
+
 function seoAuditGithubHttp(string $method, string $url, string $token, int $timeout = 25): array
 {
     $headers = [
@@ -333,6 +375,97 @@ function seoAuditGithubHttp(string $method, string $url, string $token, int $tim
     // Sin curl no hay status confiable; si parsea JSON útil asumimos 200.
     $code = is_array($data) ? 200 : 502;
     return ['code' => $code, 'data' => is_array($data) ? $data : null, 'raw' => $raw];
+}
+
+/** SHA del HEAD. Vacío si GitHub no responde: el llamador conserva la caché. */
+function seoAuditGithubHead(string $owner, string $repo, string $branch, string $token): string
+{
+    $branch = trim($branch);
+    if ($owner === '' || $repo === '' || $branch === '' || $token === '') {
+        return '';
+    }
+    $url = 'https://api.github.com/repos/' . rawurlencode($owner) . '/' . rawurlencode($repo)
+        . '/git/ref/heads/' . rawurlencode($branch);
+    $res = seoAuditGithubHttp('GET', $url, $token, 15);
+    if ($res['code'] >= 400 || !is_array($res['data'])) {
+        return '';
+    }
+    return (string) ($res['data']['object']['sha'] ?? '');
+}
+
+/** Rutas tocadas entre dos commits. Sin parches: el contenido se baja aparte. */
+function seoAuditGithubChangedPaths(string $owner, string $repo, string $base, string $head, string $token): array
+{
+    if ($owner === '' || $repo === '' || $base === '' || $head === '' || $base === $head || $token === '') {
+        return [];
+    }
+    $url = 'https://api.github.com/repos/' . rawurlencode($owner) . '/' . rawurlencode($repo)
+        . '/compare/' . rawurlencode($base) . '...' . rawurlencode($head);
+    $res = seoAuditGithubHttp('GET', $url, $token, 20);
+    if ($res['code'] >= 400 || !is_array($res['data'])) {
+        return [];
+    }
+    $paths = [];
+    foreach ($res['data']['files'] ?? [] as $file) {
+        if (!is_array($file)) {
+            continue;
+        }
+        $name = str_replace('\\', '/', (string) ($file['filename'] ?? ''));
+        if ($name === '' || isset($paths[$name])) {
+            continue;
+        }
+        $paths[$name] = true;
+        if (count($paths) >= 40) {
+            break;
+        }
+    }
+    return array_keys($paths);
+}
+
+function seoAuditIsTextPath(string $path): bool
+{
+    $lower = strtolower(str_replace('\\', '/', $path));
+    if (preg_match('#(^|/)(node_modules|dist|build|\.next|coverage|vendor|\.git)/#', $lower)) {
+        return false;
+    }
+    if (preg_match('#\.(png|jpe?g|gif|webp|avif|ico|svg|woff2?|ttf|eot|mp4|pdf|zip|gz|lock)$#', $lower)) {
+        return false;
+    }
+    return (bool) preg_match('#\.(tsx?|jsx?|vue|svelte|astro|php|html?|css|scss|json|md|txt|xml|toml|ya?ml)$#', $lower);
+}
+
+/** Archivos que el plan anterior le pidió a Cursor: hay que releer su contenido actual. */
+function seoAuditWantedPaths(string $dataDir, string $host): array
+{
+    $cursor = gscReadJson(seoAuditCursorFile($dataDir, $host), []);
+    $set = [];
+    foreach ($cursor['insights']['cambios'] ?? [] as $cambio) {
+        if (!is_array($cambio)) {
+            continue;
+        }
+        $file = strtolower(str_replace('\\', '/', trim((string) ($cambio['archivo'] ?? ''))));
+        if ($file !== '') {
+            $set[$file] = true;
+        }
+    }
+    return $set;
+}
+
+function seoAuditPathWanted(string $path, array $wanted): bool
+{
+    if ($wanted === []) {
+        return false;
+    }
+    $key = strtolower(str_replace('\\', '/', $path));
+    if (isset($wanted[$key])) {
+        return true;
+    }
+    foreach ($wanted as $w => $_) {
+        if ($w !== '' && (str_ends_with($key, '/' . $w) || str_ends_with($w, '/' . $key))) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function seoAuditIsSeoPath(string $path): bool
@@ -411,15 +544,31 @@ function seoAuditRunRepoScan(string $dataDir, string $host, string $repoRaw, boo
 
     $cacheFile = seoAuditRepoFile($dataDir, $host);
     $cached = gscReadJson($cacheFile, []);
-    if (
-        !$fresh
-        && ($cached['host'] ?? '') === $host
-        && ($cached['slug'] ?? '') === $parsed['slug']
+    $sameRepo = ($cached['host'] ?? '') === $host && ($cached['slug'] ?? '') === $parsed['slug'];
+    $previousSha = $sameRepo ? (string) ($cached['commitSha'] ?? '') : '';
+    $cacheUsable = $sameRepo
         && ($cached['fetchedAt'] ?? 0) > 0
-        && (time() - (int) $cached['fetchedAt']) < SEO_AUDIT_REPO_TTL
-    ) {
-        $cached['cached'] = true;
-        return $cached;
+        && ($cached['version'] ?? '') === SEO_AUDIT_VERSION
+        && $previousSha !== '';
+
+    // La caché de 6 h no alcanza: un push nuevo tiene que invalidarla aunque el TTL siga vivo.
+    if (!$fresh && $cacheUsable) {
+        $cfgEarly = seoAuditLoadGithubConfig();
+        $head = '';
+        $branch = (string) ($cached['branch'] ?? '');
+        if ($cfgEarly['token'] !== '' && $branch !== '') {
+            try {
+                $head = seoAuditGithubHead($parsed['owner'], $parsed['repo'], $branch, $cfgEarly['token']);
+            } catch (Throwable) {
+                $head = '';
+            }
+        }
+        $ttlOk = (time() - (int) $cached['fetchedAt']) < SEO_AUDIT_REPO_TTL;
+        if (($head !== '' && $head === $previousSha) || ($head === '' && $ttlOk)) {
+            $cached['cached'] = true;
+            $cached['commitChanged'] = false;
+            return $cached;
+        }
     }
 
     $cfg = seoAuditLoadGithubConfig();
@@ -445,6 +594,23 @@ function seoAuditRunRepoScan(string $dataDir, string $host, string $repoRaw, boo
     }
 
     $defaultBranch = (string) ($metaRes['data']['default_branch'] ?? 'main');
+    $head = '';
+    try {
+        $head = seoAuditGithubHead($parsed['owner'], $parsed['repo'], $defaultBranch, $cfg['token']);
+    } catch (Throwable) {
+        $head = '';
+    }
+    $changed = [];
+    if ($previousSha !== '' && $head !== '' && $previousSha !== $head) {
+        try {
+            $changed = seoAuditGithubChangedPaths($parsed['owner'], $parsed['repo'], $previousSha, $head, $cfg['token']);
+        } catch (Throwable) {
+            $changed = [];
+        }
+    }
+    $changedSet = array_fill_keys($changed, true);
+    $wanted = seoAuditWantedPaths($dataDir, $host);
+
     $treeRes = seoAuditGithubHttp(
         'GET',
         $base . '/git/trees/' . rawurlencode($defaultBranch) . '?recursive=1',
@@ -456,32 +622,64 @@ function seoAuditRunRepoScan(string $dataDir, string $host, string $repoRaw, boo
     }
 
     $tree = [];
+    $extra = [];
     foreach ($treeRes['data']['tree'] ?? [] as $item) {
         if (!is_array($item) || ($item['type'] ?? '') !== 'blob') {
             continue;
         }
         $path = (string) ($item['path'] ?? '');
-        if ($path === '' || !seoAuditIsSeoPath($path)) {
+        if ($path === '') {
             continue;
         }
         $size = (int) ($item['size'] ?? 0);
         if ($size > 120000) {
             continue;
         }
-        $tree[] = [
+        $isChanged = isset($changedSet[$path]);
+        $isWanted = seoAuditPathWanted($path, $wanted);
+        $entry = [
             'path' => $path,
             'size' => $size,
             'sha' => (string) ($item['sha'] ?? ''),
-            'score' => seoAuditScorePath($path),
+            'score' => seoAuditScorePath($path) + (($isChanged || $isWanted) ? 220 : 0),
         ];
+        if (seoAuditIsSeoPath($path)) {
+            $tree[] = $entry;
+        } elseif (($isChanged || $isWanted) && seoAuditIsTextPath($path)) {
+            $extra[$path] = $entry;
+        }
     }
 
     usort($tree, static fn ($a, $b) => ($b['score'] <=> $a['score']) ?: strcmp($a['path'], $b['path']));
     $candidates = array_slice($tree, 0, 28);
+    $have = [];
+    foreach ($candidates as $candidate) {
+        $have[$candidate['path']] = true;
+    }
+    if ($extra !== []) {
+        $extraList = array_values($extra);
+        usort($extraList, static fn ($a, $b) => ($b['score'] <=> $a['score']) ?: strcmp($a['path'], $b['path']));
+        foreach ($extraList as $entry) {
+            if (isset($have[$entry['path']])) {
+                continue;
+            }
+            $candidates[] = $entry;
+            $have[$entry['path']] = true;
+            if (count($candidates) >= 40) {
+                break;
+            }
+        }
+    }
+    // Los archivos del commit nuevo van primero: si no, el tope de bytes se los come el layout viejo.
+    usort($candidates, static fn ($a, $b) => ($b['score'] <=> $a['score']) ?: strcmp($a['path'], $b['path']));
 
     $files = [];
     $bytes = 0;
     $paths = array_map(static fn ($t) => $t['path'], $tree);
+    foreach ($extra as $path => $_) {
+        $paths[] = $path;
+    }
+    $paths = array_values(array_unique($paths));
 
     foreach ($candidates as $item) {
         if ($bytes >= SEO_AUDIT_REPO_BYTES) {
@@ -522,6 +720,26 @@ function seoAuditRunRepoScan(string $dataDir, string $host, string $repoRaw, boo
         $bytes += strlen($clip);
     }
 
+    // Sin SHA previo (planes viejos) igual se ve qué archivo cambió de texto.
+    if ($changed === [] && $sameRepo && is_array($cached['files'] ?? null)) {
+        $oldByPath = [];
+        foreach ($cached['files'] as $old) {
+            if (!is_array($old)) {
+                continue;
+            }
+            $oldPath = (string) ($old['path'] ?? '');
+            if ($oldPath !== '') {
+                $oldByPath[$oldPath] = (string) ($old['content'] ?? '');
+            }
+        }
+        foreach ($files as $file) {
+            $path = (string) ($file['path'] ?? '');
+            if ($path !== '' && isset($oldByPath[$path]) && $oldByPath[$path] !== (string) ($file['content'] ?? '')) {
+                $changed[] = $path;
+            }
+        }
+    }
+
     $payload = [
         'ok' => true,
         'cached' => false,
@@ -530,6 +748,10 @@ function seoAuditRunRepoScan(string $dataDir, string $host, string $repoRaw, boo
         'owner' => $parsed['owner'],
         'repo' => $parsed['repo'],
         'branch' => $defaultBranch,
+        'commitSha' => $head,
+        'previousCommitSha' => $previousSha,
+        'commitChanged' => ($head !== '' && $head !== $previousSha) || $changed !== [],
+        'changedFiles' => $changed,
         'fetchedAt' => time(),
         'version' => SEO_AUDIT_VERSION,
         'paths' => array_slice($paths, 0, 400),
@@ -929,6 +1151,10 @@ function seoAuditRepoExcerpt(array $repo, array $findings): string
         return '';
     }
     $needles = [];
+    $changed = [];
+    foreach ($repo['changedFiles'] ?? [] as $changedPath) {
+        $changed[strtolower(str_replace('\\', '/', (string) $changedPath))] = true;
+    }
     foreach ($findings as $finding) {
         $file = strtolower(str_replace('\\', '/', (string) ($finding['file'] ?? '')));
         if ($file !== '') {
@@ -952,6 +1178,9 @@ function seoAuditRepoExcerpt(array $repo, array $findings): string
         }
         $lower = strtolower(str_replace('\\', '/', $path));
         $score = 0;
+        if (isset($changed[$lower])) {
+            $score += 120;
+        }
         if (preg_match('#(^|/)(layout|robots\.txt|sitemap)#', $lower)) {
             $score += 50;
         }
@@ -986,8 +1215,94 @@ function seoAuditRepoExcerpt(array $repo, array $findings): string
     return implode("\n\n", $chunks);
 }
 
+/** Commit, HTML y Search Console iguales al plan guardado: no gastar otra redacción. */
+function seoAuditSameInputsPlan(string $dataDir, string $host): ?array
+{
+    $cacheFile = seoAuditCursorFile($dataDir, $host);
+    $cached = gscReadJson($cacheFile, []);
+    if (
+        ($cached['host'] ?? '') !== $host
+        || !is_array($cached['insights'] ?? null)
+        || ($cached['version'] ?? '') !== SEO_AUDIT_VERSION
+    ) {
+        return null;
+    }
+
+    $repo = gscReadJson(seoAuditRepoFile($dataDir, $host), []);
+    $dom = gscReadJson(seoAuditDomFile($dataDir, $host), []);
+    $gsc = gscReadJson(gscHostCacheFile($dataDir, $host), []);
+    $kw = gscReadJson(gscKeywordCacheFile($dataDir, $host), []);
+    $commitSha = ($repo['host'] ?? '') === $host ? (string) ($repo['commitSha'] ?? '') : '';
+    $domStamp = (int) ($dom['updatedAt'] ?? 0);
+    $gscAt = (int) ($gsc['fetchedAt'] ?? 0);
+    $kwAt = (int) ($kw['fetchedAt'] ?? 0);
+    $same = $commitSha !== ''
+        && $commitSha === (string) ($cached['commitSha'] ?? '')
+        && $domStamp > 0
+        && $domStamp === (int) ($cached['domStamp'] ?? 0)
+        && $gscAt > 0
+        && $gscAt === (int) ($cached['gscFetchedAt'] ?? 0)
+        && $kwAt === (int) ($cached['kwFetchedAt'] ?? -1);
+    if (!$same) {
+        return null;
+    }
+
+    $short = substr($commitSha, 0, 7);
+    $cached['cached'] = true;
+    $cached['stale'] = false;
+    $cached['codeUnchanged'] = true;
+    $cached['codeChanged'] = false;
+    $cached['codeNote'] = 'El código en GitHub sigue en el commit ' . $short
+        . ' y el HTML leído no cambió. Si ya aplicaste el plan en Cursor, hacé push a la rama por defecto y volvé a generar: el siguiente plan sale de ese código.';
+    gscWriteJson($cacheFile, $cached);
+    return $cached;
+}
+
+function seoAuditCodeDeltaBlock(array $repo, string $prevSha): string
+{
+    $sha = (string) ($repo['commitSha'] ?? '');
+    $changed = [];
+    foreach ($repo['changedFiles'] ?? [] as $path) {
+        $path = trim((string) $path);
+        if ($path !== '') {
+            $changed[] = $path;
+        }
+    }
+    if ($sha === '') {
+        return 'Sin commit de GitHub. El plan sale del HTML publicado y, si hay, de la caché del repo.';
+    }
+    $lines = ['Commit actual: ' . $sha];
+    if ($prevSha === '' && $changed === []) {
+        $lines[] = 'Primera pasada con el commit fijado. La siguiente compara contra este SHA.';
+        return implode("\n", $lines);
+    }
+    if ($prevSha !== '' && $prevSha === $sha && $changed === []) {
+        $lines[] = 'Mismo commit que el plan anterior. No hay código nuevo en GitHub.';
+        return implode("\n", $lines);
+    }
+    if ($prevSha !== '') {
+        $lines[] = 'Commit del plan anterior: ' . $prevSha;
+    }
+    $lines[] = 'El código avanzó respecto del plan anterior. Estos archivos ya se editaron: no pidas el mismo cambio otra vez.';
+    if ($changed === []) {
+        $lines[] = '(El diff no listó archivos. Igual no repitas tareas del ciclo anterior sobre un archivo cuyo contenido ya ves más abajo.)';
+    } else {
+        foreach (array_slice($changed, 0, 30) as $path) {
+            $lines[] = '- ' . $path;
+        }
+    }
+    $lines[] = 'Si el HTML publicado todavía muestra el problema viejo, es un deploy pendiente: no pidas reimplementarlo. Proponé el siguiente escalón.';
+    return implode("\n", $lines);
+}
+
 function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): array
 {
+    // $fresh pide otra redacción, pero con el mismo commit y el mismo HTML sale el mismo plan.
+    $unchanged = seoAuditSameInputsPlan($dataDir, $host);
+    if ($unchanged !== null) {
+        return $unchanged;
+    }
+
     $started = microtime(true);
     $cfg = ersLoadGeminiConfig();
     if ($cfg['apiKey'] === '') {
@@ -1063,6 +1378,16 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
         return $cached;
     }
 
+    $prevSha = (string) ($cached['commitSha'] ?? '');
+    $commitSha = (string) ($repo['commitSha'] ?? '');
+    $changedNow = is_array($repo['changedFiles'] ?? null) && $repo['changedFiles'] !== [];
+    $codeChanged = $changedNow || ($commitSha !== '' && $prevSha !== '' && $commitSha !== $prevSha);
+    $delta = seoAuditCodeDeltaBlock($repo, $prevSha);
+    $repoLabel = ($repo['slug'] ?? '') !== '' ? (string) $repo['slug'] : 'no conectado';
+    if ($commitSha !== '') {
+        $repoLabel .= ' @ ' . substr($commitSha, 0, 7);
+    }
+
     $search = $dossier['search'] ?? [];
     $paths = array_slice($repo['paths'] ?? [], 0, 80);
     $hasKwAi = is_array($kwAi['insights'] ?? null);
@@ -1074,7 +1399,7 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
         'Contactos (key events): ' . (int) ($dossier['ga']['contacts'] ?? 0)
             . (!empty($dossier['sources']['keyEvents']) ? '' : ' — sin eventos clave'),
         'HTML: ' . (int) ($domProgress['done'] ?? 0) . '/' . (int) ($domProgress['total'] ?? 0),
-        'Repo: ' . (($repo['slug'] ?? '') !== '' ? $repo['slug'] : 'no conectado'),
+        'Repo: ' . $repoLabel,
         'PSI home: ' . (string) ($dossier['psi']['home']['score'] ?? '—'),
         'Google Maps: ' . (!empty($dossier['sources']['gbp'])
             ? ((string) ($dossier['gbp']['displayName'] ?? 'vinculado') . ' · ★' . (string) ($dossier['gbp']['rating'] ?? '—'))
@@ -1100,6 +1425,9 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
         '',
         '## CICLO ANTERIOR',
         seoAuditCycleBlock($dataDir, $host, $dossier),
+        '',
+        '## CÓDIGO DESDE EL ÚLTIMO PLAN',
+        $delta,
     ];
     $excerpt = seoAuditRepoExcerpt($repo, $findings);
     if ($excerpt !== '') {
@@ -1120,6 +1448,7 @@ No descubras otros problemas. No inventes métricas, queries, URLs, teléfonos, 
 Si hay HTML ACTUAL, el title/meta que proponés parte de ese texto, no de uno imaginado.
 Si hay CÓDIGO REAL DEL REPO, el cursorPrompt cita el archivo y el cambio concreto sobre ese código. No pidas reescribir un archivo cuyo contenido no viste.
 Si hay CICLO ANTERIOR, no repitas un cambio ya pedido ni una tarea ya cerrada: proponé el siguiente escalón y decí si los clics subieron o no.
+Si CÓDIGO DESDE EL ÚLTIMO PLAN dice que el commit cambió, ese código ya está hecho: no lo pongas en cambios ni en cursorPrompt. Si el HTML todavía muestra el problema, es pendiente de publicar: una frase en el resumen y el lugar del cambio se usa para el siguiente escalón.
 Respondés en español neutro-chileno, directo.
 
 Salida JSON:
@@ -1135,7 +1464,7 @@ Salida JSON:
   7) Reglas: no inventar archivos, rutas, keywords ni NAP; no tocar secretos; preguntar si falta un path
   8) Si no hay key events, sección Medición (click_whatsapp, phone_click, generate_lead)
 
-Cubrí severidad 3 y 2 de hallazgos, y todas las acciones de keywords de impacto alto/medio.
+Cubrí severidad 3 y 2 de hallazgos, y todas las acciones de keywords de impacto alto/medio, salvo lo que el commit nuevo ya cubre.
 Cada pasada debe dejar el sitio en un nivel más alto que la anterior: priorizá quick wins de demanda + correcciones que desbloquean indexación + coherencia NAP.
 TXT;
 
@@ -1171,6 +1500,9 @@ TXT;
     $insights = seoAuditSanitizeCursor($raw, $host, $urls, $repo['paths'] ?? []);
     seoAuditRememberCycle($dataDir, $host, $dossier, $findings, $insights);
     $closed = "\n\n## Hallazgos detectados (lista cerrada, no omitir)\n" . findingsCursorBlock($findings);
+    if ($codeChanged && $delta !== '') {
+        $closed = "\n\n## CÓDIGO ACTUAL (no reimplementar lo ya commiteado)\n" . $delta . $closed;
+    }
     $closed .= "\n\n## DATOS REALES GOOGLE BUSINESS PROFILE (NAP OFICIAL, no inventar)\n" . seoAuditGbpBlock($dossier);
     $closed .= "\n\n## Crecimiento por queries (lista cerrada, no omitir)\n" . gscKeywordsGrowthBlock($kwAi);
     if (empty($dossier['sources']['keyEvents'])) {
@@ -1213,6 +1545,16 @@ TXT;
             'insights' => $kwAi['insights'],
         ] : null,
         'insights' => $insights,
+        'commitSha' => $commitSha,
+        'previousCommitSha' => $prevSha,
+        'codeChanged' => $codeChanged,
+        'codeUnchanged' => false,
+        'codeNote' => $codeChanged
+            ? ('Plan sobre el código nuevo ' . substr($commitSha, 0, 7) . '.')
+            : '',
+        'domStamp' => (int) ($domProgress['updatedAt'] ?? 0),
+        'gscFetchedAt' => (int) ($site['fetchedAt'] ?? 0),
+        'kwFetchedAt' => (int) (gscReadJson(gscKeywordCacheFile($dataDir, $host), [])['fetchedAt'] ?? 0),
         'version' => SEO_AUDIT_VERSION,
     ];
     gscWriteJson($cacheFile, $out);
@@ -1230,10 +1572,15 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
     $repoRaw = seoAuditResolveRepo($host, $repoRaw);
     $parsed = seoAuditParseRepo($repoRaw);
     $repo = gscReadJson(seoAuditRepoFile($dataDir, $host), []);
+    $repoSha = ($repo['host'] ?? '') === $host ? (string) ($repo['commitSha'] ?? '') : '';
     $repoOk = ($repo['host'] ?? '') === $host
         && ($parsed['slug'] === '' || ($repo['slug'] ?? '') === $parsed['slug'])
         && ($repo['fetchedAt'] ?? 0) > 0
-        && (time() - (int) $repo['fetchedAt']) < SEO_AUDIT_REPO_TTL;
+        && ($repo['version'] ?? '') === SEO_AUDIT_VERSION
+        && (
+            (time() - (int) $repo['fetchedAt']) < SEO_AUDIT_REPO_TTL
+            || $repoSha !== ''
+        );
 
     $cursor = gscReadJson(seoAuditCursorFile($dataDir, $host), []);
     $hasCursor = ($cursor['host'] ?? '') === $host && is_array($cursor['insights'] ?? null);
@@ -1246,9 +1593,11 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
     $findings = !empty($dossier['ok']) ? findingsDetect($dossier) : [];
     $fingerprint = seoAuditFingerprint($dossier, seoAuditKwAiSig($kwAi));
 
+    $planSha = (string) ($cursor['commitSha'] ?? '');
     if ($hasCursor) {
         $cursor['stale'] = ($cursor['fingerprint'] ?? '') !== $fingerprint
-            || ($cursor['version'] ?? '') !== SEO_AUDIT_VERSION;
+            || ($cursor['version'] ?? '') !== SEO_AUDIT_VERSION
+            || ($repoSha !== '' && $planSha !== '' && $repoSha !== $planSha);
     }
 
     $gh = seoAuditLoadGithubConfig();
@@ -1279,6 +1628,7 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
             'ready' => $repoOk,
             'tokenConfigured' => $gh['token'] !== '',
             'fetchedAt' => (int) ($repo['fetchedAt'] ?? 0),
+            'commitSha' => $repoSha,
             'fileCount' => (int) ($repo['fileCount'] ?? 0),
             'pathCount' => (int) ($repo['pathCount'] ?? 0),
             'error' => '',
@@ -1297,6 +1647,10 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
             'insights' => $cursor['insights'],
             'keywordsAi' => $cursor['keywordsAi'] ?? null,
             'coverage' => $cursor['coverage'] ?? null,
+            'commitSha' => $planSha,
+            'codeChanged' => (bool) ($cursor['codeChanged'] ?? false),
+            'codeUnchanged' => (bool) ($cursor['codeUnchanged'] ?? false),
+            'codeNote' => (string) ($cursor['codeNote'] ?? ''),
         ] : [
             'ready' => false,
             'stale' => false,
@@ -1307,6 +1661,10 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
             'insights' => null,
             'keywordsAi' => null,
             'coverage' => null,
+            'commitSha' => '',
+            'codeChanged' => false,
+            'codeUnchanged' => false,
+            'codeNote' => '',
         ],
         'canGenerate' => $domProgress['done'] > 0 && $hasSite,
     ];
@@ -1361,6 +1719,19 @@ try {
         seoAuditJson(seoAuditRunDomBatch($dataDir, $host, $limit, $fresh));
     }
 
+    if ($action === 'dom-touch') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            seoAuditJson(['error' => 'Método no permitido'], 405);
+        }
+        $input = seoAuditInput();
+        $host = gscSanitizeHost((string) ($input['host'] ?? ''));
+        if ($host === '') {
+            seoAuditJson(['error' => 'Indica el dominio del cliente'], 400);
+        }
+        $urls = is_array($input['urls'] ?? null) ? $input['urls'] : [];
+        seoAuditJson(seoAuditTouchDom($dataDir, $host, $urls));
+    }
+
     if ($action === 'repo-scan') {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
             seoAuditJson(['error' => 'Método no permitido'], 405);
@@ -1388,7 +1759,7 @@ try {
         seoAuditJson(seoAuditRunCursor($dataDir, $host, $fresh));
     }
 
-    seoAuditJson(['error' => 'Acción no reconocida. Usá status, dom-batch, repo-scan o cursor-audit.'], 400);
+    seoAuditJson(['error' => 'Acción no reconocida. Usá status, dom-batch, dom-touch, repo-scan o cursor-audit.'], 400);
 } catch (Throwable $e) {
     seoAuditJson(['error' => $e->getMessage()], 500);
 }
