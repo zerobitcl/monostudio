@@ -488,6 +488,33 @@ class SeoAuditModule {
       body: JSON.stringify({ host, fresh }),
     }).then((res) => SeoAuditModule.#read(res, "plan"));
   }
+
+  static markApplied(host, cambio, commitSha = "") {
+    return fetch(`${SeoAuditModule.API}?action=mark-applied`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ host, cambio, commitSha }),
+    }).then((res) => SeoAuditModule.#read(res));
+  }
+
+  static unmarkApplied(host, key) {
+    return fetch(`${SeoAuditModule.API}?action=unmark-applied`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ host, key }),
+    }).then((res) => SeoAuditModule.#read(res));
+  }
+
+  static verifyApplied(host) {
+    return fetch(`${SeoAuditModule.API}?action=verify-applied`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ host }),
+    }).then((res) => SeoAuditModule.#read(res, "batch"));
+  }
 }
 
 /** Google Business Profile vía Places API (New). */
@@ -1181,7 +1208,7 @@ class AppController {
       "growthPanel", "growthMeta", "growthList",
       "cursorAuditPanel", "cursorAuditMeta", "cursorAuditProgress", "cursorAuditBar",
       "cursorAuditStatus", "cursorAuditCoverage", "cursorAuditCounts", "cursorAuditResult", "cursorAuditSummary", "cursorAuditChanges",
-      "cursorAuditPrompt", "btnAuditBatch", "btnAuditGenerate", "btnAuditCopy",
+      "cursorAuditPrompt", "btnAuditBatch", "btnAuditGenerate", "btnAuditCopy", "btnAuditVerify",
       "briefTitle", "reportFrame",
       "clientModal", "requestModal", "taskModal", "notebookModal",
       "clientForm", "clientModalTitle", "clientSubmitBtn", "btnDeleteClient", "clientIdField",
@@ -1497,6 +1524,8 @@ class AppController {
     this.dom.btnAuditBatch.addEventListener("click", () => this.runAuditBatch({ autoContinue: true }));
     this.dom.btnAuditGenerate.addEventListener("click", () => this.generateCursorAudit());
     this.dom.btnAuditCopy.addEventListener("click", () => this.copyCursorPrompt());
+    this.dom.btnAuditVerify?.addEventListener("click", () => this.verifyAppliedImprovements());
+    this.dom.cursorAuditChanges?.addEventListener("change", (e) => this.handleCambioCheck(e));
     this.dom.btnGbpSearch?.addEventListener("click", () => this.searchGbp());
     this.dom.gbpSearchInput?.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
@@ -3655,12 +3684,35 @@ class AppController {
     }
     this.dom.cursorAuditPrompt.value = insights.cursorPrompt || "";
     this.dom.btnAuditCopy.disabled = !insights.cursorPrompt;
+    const appliedCount = (status?.applied || audit.applied || []).filter(
+      (x) => x.status === "applied" || x.status === "verified"
+    ).length;
+    if (this.dom.btnAuditVerify) {
+      this.dom.btnAuditVerify.disabled = this.auditBusy || appliedCount === 0;
+      this.dom.btnAuditVerify.hidden = !audit.ready;
+    }
 
     const list = this.dom.cursorAuditChanges;
     list.innerHTML = "";
-    (insights.cambios || []).forEach((c) => {
+    (insights.cambios || []).forEach((c, idx) => {
+      const statusKey = c.status || "";
+      const done = statusKey === "applied" || statusKey === "verified";
       const li = document.createElement("li");
-      li.className = `kw-action is-${c.impacto || "medio"}`;
+      li.className = `kw-action is-${c.impacto || "medio"}${done ? ` is-${statusKey}` : ""}`;
+      li.dataset.cambioIndex = String(idx);
+
+      const checkLabel = document.createElement("label");
+      checkLabel.className = "kw-action__check";
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.checked = done;
+      check.disabled = this.auditBusy;
+      check.dataset.act = "cambio-check";
+      check.setAttribute("aria-label", "Marcar mejora como hecha");
+      const checkText = document.createElement("span");
+      checkText.textContent = statusKey === "verified" ? "Verificado" : "Hecho";
+      checkLabel.append(check, checkText);
+
       const top = document.createElement("div");
       top.className = "kw-action__top";
       const strong = document.createElement("strong");
@@ -3674,8 +3726,19 @@ class AppController {
       effort.className = "seo-tag";
       effort.textContent = `Esfuerzo ${c.esfuerzo || "medio"}`;
       tags.append(impact, effort);
+      if (statusKey === "verified") {
+        const verified = document.createElement("span");
+        verified.className = "seo-tag is-up";
+        verified.textContent = "Comprobado";
+        tags.appendChild(verified);
+      } else if (statusKey === "applied") {
+        const pending = document.createElement("span");
+        pending.className = "seo-tag";
+        pending.textContent = "Pendiente verificar";
+        tags.appendChild(pending);
+      }
       top.append(strong, tags);
-      li.appendChild(top);
+      li.append(checkLabel, top);
       if (c.porque) {
         const p = document.createElement("p");
         p.className = "kw-action__detail";
@@ -3702,6 +3765,77 @@ class AppController {
       if (foot.childNodes.length) li.appendChild(foot);
       list.appendChild(li);
     });
+  }
+
+  async handleCambioCheck(e) {
+    const input = e.target;
+    if (!(input instanceof HTMLInputElement) || input.dataset.act !== "cambio-check") return;
+    const host = this.seoHost;
+    if (!host) return;
+    const li = input.closest("li");
+    const idx = Number(li?.dataset.cambioIndex ?? -1);
+    const status = this.auditData.get(host);
+    const cambio = status?.audit?.insights?.cambios?.[idx];
+    if (!cambio) return;
+    const key = cambio.key || cambio.findingId || "";
+    input.disabled = true;
+    try {
+      if (input.checked) {
+        const data = await SeoAuditModule.markApplied(host, cambio, status?.audit?.commitSha || "");
+        if (status.audit?.insights?.cambios?.[idx]) {
+          status.audit.insights.cambios[idx].status = "applied";
+          status.audit.insights.cambios[idx].key = data.item?.id || key;
+          status.audit.insights.cambios[idx].appliedAt = data.item?.appliedAt || Date.now() / 1000;
+        }
+        status.applied = data.items || status.applied;
+        this.showToast("Mejora marcada como hecha. El próximo plan no la vuelve a pedir.");
+      } else {
+        const data = await SeoAuditModule.unmarkApplied(host, key || cambio.titulo);
+        if (status.audit?.insights?.cambios?.[idx]) {
+          status.audit.insights.cambios[idx].status = "";
+          status.audit.insights.cambios[idx].appliedAt = 0;
+          status.audit.insights.cambios[idx].verifiedAt = 0;
+        }
+        status.applied = data.items || [];
+        this.showToast("Check quitado");
+      }
+      this.auditData.set(host, status);
+      this.renderCursorAudit();
+    } catch (err) {
+      input.checked = !input.checked;
+      this.showToast(err.message || "No se pudo guardar el check", 4500);
+    } finally {
+      input.disabled = false;
+    }
+  }
+
+  async verifyAppliedImprovements() {
+    const host = this.seoHost;
+    if (!host || this.auditBusy) return;
+    this.auditBusy = true;
+    this.renderCursorAudit();
+    try {
+      const data = await SeoAuditModule.verifyApplied(host);
+      const status = await SeoAuditModule.status(host, this.githubRepoForHost(host));
+      status.applied = data.items || status.applied;
+      this.auditData.set(host, status);
+      const verified = Number(data.autoVerified || 0);
+      const pending = Number(data.pending || 0);
+      if (verified > 0 && pending === 0) {
+        this.showToast(`Listo: ${verified} mejora${verified === 1 ? "" : "s"} comprobada${verified === 1 ? "" : "s"} en el HTML`);
+      } else if (verified > 0) {
+        this.showToast(`${verified} verificada${verified === 1 ? "" : "s"} · ${pending} aún pendiente${pending === 1 ? "" : "s"} (deploy o GSC)`);
+      } else if (pending > 0) {
+        this.showToast(`Todavía se ve el problema en ${pending} mejora${pending === 1 ? "" : "s"}. Revisá deploy o push.`, 6200);
+      } else {
+        this.showToast("Nada pendiente de verificar");
+      }
+    } catch (err) {
+      this.showToast(err.message || "No se pudo verificar", 4500);
+    } finally {
+      this.auditBusy = false;
+      if (this.module === "seo" && host === this.seoHost) this.renderCursorAudit();
+    }
   }
 
   async runAuditBatch({ autoContinue = false } = {}) {
@@ -3800,7 +3934,9 @@ class AppController {
           codeChanged: Boolean(data.codeChanged),
           codeUnchanged: Boolean(data.codeUnchanged),
           codeNote: data.codeNote || "",
+          applied: data.applied || status.applied || [],
         };
+        status.applied = data.applied || status.applied || [];
       }
       this.auditData.set(host, status);
       // Sincroniza la lectura de keywords en el panel (ya no hace falta el botón aparte).

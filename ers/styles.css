@@ -2538,6 +2538,34 @@ body {
   border-left: 2px solid var(--neon-green);
 }
 
+.kw-action.is-applied,
+.kw-action.is-verified {
+  opacity: 0.72;
+}
+
+.kw-action.is-verified {
+  border-left: 2px solid var(--neon-green);
+}
+
+.kw-action__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--txt-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.kw-action__check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--neon-green);
+  cursor: pointer;
+}
+
 .kw-action__top {
   display: flex;
   justify-content: space-between;
@@ -2843,6 +2871,8 @@ body {
 .cursor-audit__copy-row {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .cursor-audit.is-busy {

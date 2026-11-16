@@ -12,13 +12,13 @@ if (!defined('ERS_LIBRARY')) {
     exit;
 }
 
-const REPORT_CLIENT_VERSION = '2026.11.16-exec';
+const REPORT_CLIENT_VERSION = '2026.11.16-er';
 
 function reportClientCopy(string $lang): array
 {
     $all = [
         'es' => [
-            'kicker' => 'Mono Studio',
+            'kicker' => 'ER',
             'title' => 'Informe mensual',
             'pageHow' => 'Así avanzó su sitio este mes',
             'generated' => 'Preparado el',
@@ -126,7 +126,7 @@ function reportClientCopy(string $lang): array
             'home' => 'Inicio',
         ],
         'en' => [
-            'kicker' => 'Mono Studio',
+            'kicker' => 'ER',
             'title' => 'Monthly report',
             'pageHow' => 'How your site moved forward this month',
             'generated' => 'Prepared on',
@@ -234,7 +234,7 @@ function reportClientCopy(string $lang): array
             'home' => 'Home',
         ],
         'pt' => [
-            'kicker' => 'Mono Studio',
+            'kicker' => 'ER',
             'title' => 'Relatório mensal',
             'pageHow' => 'Como seu site avançou este mês',
             'generated' => 'Preparado em',
@@ -1008,11 +1008,9 @@ function reportClientRender(array $m): string
     .opp p { margin: 3px 0 0; color: #5f574b; }
     .opp em { font-style: normal; font-weight: 650; color: #1f5f4a; text-align: right; max-width: 15ch; font-size: 12px; }
     .muted { color: #7a7266; }
-    .sign { display: flex; gap: 14px; align-items: center; margin-top: 22px; background: #1f5f4a; color: #faf7f1; padding: 16px 18px; border-radius: 12px; }
-    .mark { width: 42px; height: 42px; border-radius: 50%; border: 1px solid rgba(250,247,241,.4); display: flex; align-items: center; justify-content: center; color: #e6d3a8; letter-spacing: .06em; }
-    .sign p { margin: 0; }
-    .sign__name { font-size: 16px; }
-    .sign__note { margin-top: 3px !important; color: #dbe8e1; font-size: 12px; }
+    .sign { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-top: 22px; padding: 8px 0 4px; color: #7a7266; }
+    .mark { font-size: 11px; letter-spacing: .18em; color: #7a7266; }
+    .sign__note { margin: 0; font-size: 11px; color: #7a7266; max-width: 42ch; text-align: right; }
 CSS;
 
     return '<!DOCTYPE html><html lang="' . $e($m['lang']) . '"><head><meta charset="utf-8"><title>'
@@ -1027,8 +1025,8 @@ CSS;
         . '<section class="page page2">' . $channels
         . '<h2>' . $e($t['done']) . '</h2><ul class="done">' . $done . '</ul>'
         . '<h2>' . $e($t['next']) . '</h2>' . $opps
-        . '<aside class="sign"><div class="mark">ER</div><div><p class="sign__name">Eduardo Rojas · Mono Studio</p>'
-        . '<p class="sign__note">' . $e($t['sign']) . '</p></div></aside></section></body></html>';
+        . '<aside class="sign"><p class="sign__note">' . $e($t['sign']) . '</p><span class="mark">ER</span></aside>'
+        . '</section></body></html>';
 }
 
 function reportClientCompose(string $dataDir, array $sa, string $host, string $lang, bool $fresh): array

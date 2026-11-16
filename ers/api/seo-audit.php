@@ -6,6 +6,9 @@
  * POST action=dom-batch        → scrape HTML de un lote de URLs del inventario
  * POST action=repo-scan        → lee tree + archivos SEO de un repo GitHub privado
  * POST action=cursor-audit     → plan integral de crecimiento (hallazgos + keywords IA + prompt Cursor)
+ * POST action=mark-applied     → check “Hecho” en un cambio del plan
+ * POST action=unmark-applied   → quitar el check
+ * POST action=verify-applied   → releer HTML y pasar a verified lo que ya no detecta el motor
  *
  * Credenciales GitHub: data/github.json → { "token": "ghp_..." }
  */
@@ -28,7 +31,7 @@ const SEO_AUDIT_DOM_TTL = 604800; // 7 días: re-scrape si el HTML cambió de fi
 const SEO_AUDIT_REPO_TTL = 21600; // 6 h
 const SEO_AUDIT_REPO_BYTES = 110000;
 const SEO_AUDIT_AI_TIMEOUT = 75;
-const SEO_AUDIT_VERSION = '2026.11.16-head';
+const SEO_AUDIT_VERSION = '2026.11.16-checks';
 
 if ($seoAuditStandalone) {
     header('X-Content-Type-Options: nosniff');
@@ -58,6 +61,355 @@ function seoAuditRepoFile(string $dataDir, string $host): string
 function seoAuditCursorFile(string $dataDir, string $host): string
 {
     return $dataDir . '/seo-cursor-' . md5($host) . '.json';
+}
+
+function seoAuditAppliedFile(string $dataDir, string $host): string
+{
+    return $dataDir . '/seo-applied-' . md5($host) . '.json';
+}
+
+/** Clave estable de un cambio: findingId si hay, si no hash de titulo|archivo|url. */
+function seoAuditCambioKey(array $c): string
+{
+    $fid = trim((string) ($c['findingId'] ?? ''));
+    if ($fid !== '') {
+        return ersClip($fid, 200);
+    }
+    $blob = strtolower(
+        trim((string) ($c['titulo'] ?? '')) . '|'
+        . trim((string) ($c['archivo'] ?? '')) . '|'
+        . trim((string) ($c['url'] ?? ''))
+    );
+    return md5($blob);
+}
+
+function seoAuditReadApplied(string $dataDir, string $host): array
+{
+    $data = gscReadJson(seoAuditAppliedFile($dataDir, $host), []);
+    $items = [];
+    $seen = [];
+    foreach (is_array($data['items'] ?? null) ? $data['items'] : [] as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $id = ersClip(trim((string) ($row['id'] ?? '')), 200);
+        if ($id === '' || isset($seen[$id])) {
+            continue;
+        }
+        $status = (string) ($row['status'] ?? 'applied');
+        if (!in_array($status, ['applied', 'verified', 'dismissed'], true)) {
+            $status = 'applied';
+        }
+        $seen[$id] = true;
+        $items[] = [
+            'id' => $id,
+            'findingId' => ersClip(trim((string) ($row['findingId'] ?? '')), 200),
+            'titulo' => ersClip(trim((string) ($row['titulo'] ?? '')), 160),
+            'archivo' => ersClip(trim((string) ($row['archivo'] ?? '')), 260),
+            'url' => ersClip(trim((string) ($row['url'] ?? '')), 500),
+            'status' => $status,
+            'appliedAt' => (int) ($row['appliedAt'] ?? 0),
+            'verifiedAt' => (int) ($row['verifiedAt'] ?? 0),
+            'commitSha' => ersClip(trim((string) ($row['commitSha'] ?? '')), 64),
+        ];
+    }
+    return ['host' => $host, 'items' => $items];
+}
+
+function seoAuditWriteApplied(string $dataDir, string $host, array $items): array
+{
+    $payload = [
+        'host' => $host,
+        'items' => array_values(array_slice($items, -200)),
+        'updatedAt' => time(),
+    ];
+    gscWriteJson(seoAuditAppliedFile($dataDir, $host), $payload);
+    return $payload;
+}
+
+/** Mapas rápidos: por id de cambio y por findingId → status. */
+function seoAuditAppliedMaps(string $dataDir, string $host): array
+{
+    $byId = [];
+    $findingStatus = [];
+    foreach (seoAuditReadApplied($dataDir, $host)['items'] as $item) {
+        $byId[$item['id']] = $item;
+        if (!in_array($item['status'], ['applied', 'verified'], true)) {
+            continue;
+        }
+        $findingStatus[$item['id']] = $item['status'];
+        if ($item['findingId'] !== '') {
+            $findingStatus[$item['findingId']] = $item['status'];
+        }
+    }
+    return ['byId' => $byId, 'findingStatus' => $findingStatus];
+}
+
+/** Quita del prompt los hallazgos ya marcados hechos o verificados. */
+function seoAuditFilterFindings(array $findings, string $dataDir, string $host): array
+{
+    $maps = seoAuditAppliedMaps($dataDir, $host);
+    if ($maps['findingStatus'] === []) {
+        return $findings;
+    }
+    $out = [];
+    foreach ($findings as $f) {
+        if (!is_array($f)) {
+            continue;
+        }
+        $id = (string) ($f['id'] ?? '');
+        if ($id !== '' && isset($maps['findingStatus'][$id])) {
+            continue;
+        }
+        $out[] = $f;
+    }
+    return $out;
+}
+
+function seoAuditAnnotateCambios(array $cambios, string $dataDir, string $host): array
+{
+    $maps = seoAuditAppliedMaps($dataDir, $host);
+    $out = [];
+    foreach ($cambios as $c) {
+        if (!is_array($c)) {
+            continue;
+        }
+        $key = seoAuditCambioKey($c);
+        $hit = $maps['byId'][$key] ?? null;
+        if ($hit === null) {
+            $fid = trim((string) ($c['findingId'] ?? ''));
+            if ($fid !== '') {
+                $hit = $maps['byId'][$fid] ?? null;
+            }
+        }
+        $c['key'] = $key;
+        $c['status'] = is_array($hit) ? (string) ($hit['status'] ?? '') : '';
+        $c['appliedAt'] = is_array($hit) ? (int) ($hit['appliedAt'] ?? 0) : 0;
+        $c['verifiedAt'] = is_array($hit) ? (int) ($hit['verifiedAt'] ?? 0) : 0;
+        $out[] = $c;
+    }
+    return $out;
+}
+
+function seoAuditAppliedBlock(string $dataDir, string $host): string
+{
+    $items = seoAuditReadApplied($dataDir, $host)['items'];
+    $applied = [];
+    $verified = [];
+    foreach ($items as $item) {
+        if ($item['status'] === 'verified') {
+            $verified[] = $item;
+        } elseif ($item['status'] === 'applied') {
+            $applied[] = $item;
+        }
+    }
+    if ($applied === [] && $verified === []) {
+        return 'Ninguna mejora marcada como hecha todavía.';
+    }
+    $lines = [];
+    if ($verified !== []) {
+        $lines[] = 'Ya verificadas (NO las vuelvas a pedir):';
+        foreach (array_slice($verified, -12) as $item) {
+            $lines[] = '- ' . $item['titulo']
+                . ($item['findingId'] !== '' ? ' [' . $item['findingId'] . ']' : '');
+        }
+    }
+    if ($applied !== []) {
+        $lines[] = 'Marcadas hechas, pendientes de verificar en HTML/GSC (NO reimplementar; como máximo una nota de deploy/medición pendiente):';
+        foreach (array_slice($applied, -12) as $item) {
+            $lines[] = '- ' . $item['titulo'];
+        }
+    }
+    return implode("\n", $lines);
+}
+
+/** Si un finding marcado applied ya no aparece en el detector, pasa a verified. */
+function seoAuditAutoVerify(string $dataDir, string $host, array $currentFindings): int
+{
+    $present = [];
+    foreach ($currentFindings as $f) {
+        $id = is_array($f) ? (string) ($f['id'] ?? '') : '';
+        if ($id !== '') {
+            $present[$id] = true;
+        }
+    }
+    $pack = seoAuditReadApplied($dataDir, $host);
+    $changed = 0;
+    foreach ($pack['items'] as &$item) {
+        if (($item['status'] ?? '') !== 'applied') {
+            continue;
+        }
+        $fid = (string) ($item['findingId'] ?? '');
+        if ($fid === '' || isset($present[$fid])) {
+            continue;
+        }
+        $item['status'] = 'verified';
+        $item['verifiedAt'] = time();
+        $changed += 1;
+    }
+    unset($item);
+    if ($changed > 0) {
+        seoAuditWriteApplied($dataDir, $host, $pack['items']);
+    }
+    return $changed;
+}
+
+function seoAuditMatchFindingId(array $c, array $findings): string
+{
+    $url = trim((string) ($c['url'] ?? ''));
+    $path = $url !== '' ? (string) (parse_url($url, PHP_URL_PATH) ?: '/') : '';
+    $pathNorm = strtolower(rtrim($path, '/') ?: '/');
+    $titulo = strtolower(trim((string) ($c['titulo'] ?? '')));
+    $archivo = strtolower(trim((string) ($c['archivo'] ?? '')));
+    $best = '';
+    $bestScore = 0;
+    foreach ($findings as $f) {
+        if (!is_array($f)) {
+            continue;
+        }
+        $score = 0;
+        $fUrl = (string) ($f['url'] ?? '');
+        $fPath = strtolower(rtrim((string) ($f['path'] ?? ''), '/') ?: '/');
+        $fTitle = strtolower((string) ($f['lines']['es']['title'] ?? ''));
+        $fFile = strtolower((string) ($f['file'] ?? ''));
+        $kind = strtolower((string) ($f['kind'] ?? ''));
+        if ($url !== '' && $fUrl === $url) {
+            $score += 5;
+        }
+        if ($pathNorm !== '/' && $fPath === $pathNorm) {
+            $score += 3;
+        }
+        if ($titulo !== '' && $fTitle !== '' && (str_contains($titulo, $fTitle) || str_contains($fTitle, $titulo))) {
+            $score += 4;
+        }
+        if ($kind !== '' && $titulo !== '' && str_contains($titulo, $kind)) {
+            $score += 2;
+        }
+        if ($archivo !== '' && $fFile !== '' && ($archivo === $fFile || str_ends_with($archivo, $fFile) || str_ends_with($fFile, $archivo))) {
+            $score += 3;
+        }
+        if ($score > $bestScore) {
+            $bestScore = $score;
+            $best = (string) ($f['id'] ?? '');
+        }
+    }
+    return $bestScore >= 3 ? $best : '';
+}
+
+function seoAuditAttachFindingIds(array $cambios, array $findings): array
+{
+    $out = [];
+    foreach ($cambios as $c) {
+        if (!is_array($c)) {
+            continue;
+        }
+        if (trim((string) ($c['findingId'] ?? '')) === '') {
+            $c['findingId'] = seoAuditMatchFindingId($c, $findings);
+        }
+        $c['key'] = seoAuditCambioKey($c);
+        $out[] = $c;
+    }
+    return $out;
+}
+
+function seoAuditMarkApplied(string $dataDir, string $host, array $raw, string $commitSha = ''): array
+{
+    $titulo = ersClip(trim((string) ($raw['titulo'] ?? '')), 160);
+    if ($titulo === '') {
+        throw new RuntimeException('Falta el título del cambio.');
+    }
+    $item = [
+        'id' => '',
+        'findingId' => ersClip(trim((string) ($raw['findingId'] ?? '')), 200),
+        'titulo' => $titulo,
+        'archivo' => ersClip(trim((string) ($raw['archivo'] ?? '')), 260),
+        'url' => ersClip(trim((string) ($raw['url'] ?? '')), 500),
+        'status' => 'applied',
+        'appliedAt' => time(),
+        'verifiedAt' => 0,
+        'commitSha' => ersClip($commitSha !== '' ? $commitSha : trim((string) ($raw['commitSha'] ?? '')), 64),
+    ];
+    if (trim((string) ($raw['key'] ?? '')) !== '') {
+        $item['id'] = ersClip(trim((string) $raw['key']), 200);
+    } else {
+        $item['id'] = seoAuditCambioKey($item);
+    }
+    $pack = seoAuditReadApplied($dataDir, $host);
+    $items = [];
+    $replaced = false;
+    foreach ($pack['items'] as $row) {
+        if ($row['id'] === $item['id'] || ($item['findingId'] !== '' && $row['findingId'] === $item['findingId'])) {
+            $item['appliedAt'] = (int) ($row['appliedAt'] ?? time()) ?: time();
+            $items[] = $item;
+            $replaced = true;
+            continue;
+        }
+        $items[] = $row;
+    }
+    if (!$replaced) {
+        $items[] = $item;
+    }
+    seoAuditWriteApplied($dataDir, $host, $items);
+    return ['ok' => true, 'host' => $host, 'item' => $item, 'items' => seoAuditReadApplied($dataDir, $host)['items']];
+}
+
+function seoAuditUnmarkApplied(string $dataDir, string $host, string $key): array
+{
+    $key = ersClip(trim($key), 200);
+    if ($key === '') {
+        throw new RuntimeException('Falta la clave del cambio.');
+    }
+    $pack = seoAuditReadApplied($dataDir, $host);
+    $items = array_values(array_filter(
+        $pack['items'],
+        static fn (array $row): bool => $row['id'] !== $key && $row['findingId'] !== $key
+    ));
+    seoAuditWriteApplied($dataDir, $host, $items);
+    return ['ok' => true, 'host' => $host, 'items' => $items];
+}
+
+function seoAuditVerifyApplied(string $dataDir, string $host): array
+{
+    $pack = seoAuditReadApplied($dataDir, $host);
+    $urls = [];
+    foreach ($pack['items'] as $item) {
+        if (($item['status'] ?? '') !== 'applied') {
+            continue;
+        }
+        $url = trim((string) ($item['url'] ?? ''));
+        if ($url !== '' && gscUrlBelongsToHost($url, $host)) {
+            $urls[] = $url;
+        }
+    }
+    $touched = 0;
+    if ($urls !== []) {
+        $touch = seoAuditTouchDom($dataDir, $host, array_values(array_unique($urls)));
+        $touched = (int) ($touch['touched'] ?? count($urls));
+    }
+    $sa = gscLoadServiceAccount($dataDir, $dataDir . '/gsc-service-account.json');
+    $dossier = dossierBuild($dataDir, $sa, $host, false, true);
+    $findings = !empty($dossier['ok']) ? findingsDetect($dossier) : [];
+    $auto = seoAuditAutoVerify($dataDir, $host, $findings);
+    $items = seoAuditReadApplied($dataDir, $host)['items'];
+    $verified = 0;
+    $pending = 0;
+    foreach ($items as $item) {
+        if ($item['status'] === 'verified') {
+            $verified += 1;
+        } elseif ($item['status'] === 'applied') {
+            $pending += 1;
+        }
+    }
+    return [
+        'ok' => true,
+        'host' => $host,
+        'touched' => $touched,
+        'autoVerified' => $auto,
+        'verified' => $verified,
+        'pending' => $pending,
+        'items' => $items,
+        'findingCounts' => findingsCounts(seoAuditFilterFindings($findings, $dataDir, $host)),
+    ];
 }
 
 function seoAuditLoadGithubConfig(): array
@@ -787,6 +1139,7 @@ function seoAuditCursorSchema(): array
                 'esfuerzo' => $enum(['bajo', 'medio', 'alto']),
                 'url' => $str,
                 'archivo' => $str,
+                'findingId' => $str,
             ]),
         ],
         'cursorPrompt' => $str,
@@ -847,14 +1200,17 @@ function seoAuditSanitizeCursor(array $raw, string $host, array $knownUrls, arra
         if ($titulo === '') {
             continue;
         }
-        $cambios[] = [
+        $row = [
             'titulo' => $titulo,
             'porque' => $clip($c['porque'] ?? '', 420),
             'impacto' => $oneOf($c['impacto'] ?? '', ['alto', 'medio', 'bajo'], 'medio'),
             'esfuerzo' => $oneOf($c['esfuerzo'] ?? '', ['bajo', 'medio', 'alto'], 'medio'),
             'url' => $resolveUrl((string) ($c['url'] ?? '')),
             'archivo' => $resolveFile((string) ($c['archivo'] ?? '')),
+            'findingId' => $clip($c['findingId'] ?? '', 200),
         ];
+        $row['key'] = seoAuditCambioKey($row);
+        $cambios[] = $row;
     }
 
     $prompt = $clip($raw['cursorPrompt'] ?? '', 14000);
@@ -887,14 +1243,17 @@ function seoAuditFallbackRaw(array $findings): array
     $cambios = [];
     foreach (array_slice($findings, 0, 12) as $f) {
         $sev = (int) ($f['severity'] ?? 1);
-        $cambios[] = [
+        $row = [
             'titulo' => (string) ($f['lines']['es']['title'] ?? $f['kind']),
             'porque' => (string) ($f['techText'] ?? ''),
             'impacto' => $sev >= 3 ? 'alto' : ($sev === 2 ? 'medio' : 'bajo'),
             'esfuerzo' => in_array($f['kind'], ['gap', 'titleMissing', 'metaMissing', 'schema', 'og', 'measure', 'alts'], true) ? 'bajo' : 'medio',
             'url' => (string) ($f['url'] ?? ''),
             'archivo' => (string) ($f['file'] ?? ''),
+            'findingId' => (string) ($f['id'] ?? ''),
         ];
+        $row['key'] = seoAuditCambioKey($row);
+        $cambios[] = $row;
     }
     return [
         'resumenSimple' => 'La redacción automática no llegó. Los cambios salen directo de los datos del sitio, en orden de prioridad.',
@@ -1254,6 +1613,10 @@ function seoAuditSameInputsPlan(string $dataDir, string $host): ?array
     $cached['codeChanged'] = false;
     $cached['codeNote'] = 'El código en GitHub sigue en el commit ' . $short
         . ' y el HTML leído no cambió. Si ya aplicaste el plan en Cursor, hacé push a la rama por defecto y volvé a generar: el siguiente plan sale de ese código.';
+    if (is_array($cached['insights']['cambios'] ?? null)) {
+        $cached['insights']['cambios'] = seoAuditAnnotateCambios($cached['insights']['cambios'], $dataDir, $host);
+    }
+    $cached['applied'] = seoAuditReadApplied($dataDir, $host)['items'];
     gscWriteJson($cacheFile, $cached);
     return $cached;
 }
@@ -1361,7 +1724,9 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
     $kwAiSig = seoAuditKwAiSig($kwAi);
 
     $repo = $dossier['repo'] ?? [];
-    $findings = findingsDetect($dossier);
+    $allFindings = findingsDetect($dossier);
+    seoAuditAutoVerify($dataDir, $host, $allFindings);
+    $findings = seoAuditFilterFindings($allFindings, $dataDir, $host);
     $fingerprint = seoAuditFingerprint($dossier, $kwAiSig);
 
     $cacheFile = seoAuditCursorFile($dataDir, $host);
@@ -1375,6 +1740,10 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
     ) {
         $cached['cached'] = true;
         $cached['stale'] = false;
+        if (is_array($cached['insights']['cambios'] ?? null)) {
+            $cached['insights']['cambios'] = seoAuditAnnotateCambios($cached['insights']['cambios'], $dataDir, $host);
+        }
+        $cached['applied'] = seoAuditReadApplied($dataDir, $host)['items'];
         return $cached;
     }
 
@@ -1426,6 +1795,9 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
         '## CICLO ANTERIOR',
         seoAuditCycleBlock($dataDir, $host, $dossier),
         '',
+        '## MEJORAS YA MARCADAS (checks del operador)',
+        seoAuditAppliedBlock($dataDir, $host),
+        '',
         '## CÓDIGO DESDE EL ÚLTIMO PLAN',
         $delta,
     ];
@@ -1448,12 +1820,13 @@ No descubras otros problemas. No inventes métricas, queries, URLs, teléfonos, 
 Si hay HTML ACTUAL, el title/meta que proponés parte de ese texto, no de uno imaginado.
 Si hay CÓDIGO REAL DEL REPO, el cursorPrompt cita el archivo y el cambio concreto sobre ese código. No pidas reescribir un archivo cuyo contenido no viste.
 Si hay CICLO ANTERIOR, no repitas un cambio ya pedido ni una tarea ya cerrada: proponé el siguiente escalón y decí si los clics subieron o no.
+Si MEJORAS YA MARCADAS lista un findingId o título, no lo pongas en cambios ni en cursorPrompt.
 Si CÓDIGO DESDE EL ÚLTIMO PLAN dice que el commit cambió, ese código ya está hecho: no lo pongas en cambios ni en cursorPrompt. Si el HTML todavía muestra el problema, es pendiente de publicar: una frase en el resumen y el lugar del cambio se usa para el siguiente escalón.
 Respondés en español neutro-chileno, directo.
 
 Salida JSON:
 - resumenSimple: 3 a 6 frases, sin jerga (nada de CTR, LCP, indexación). Qué nivel se gana (tráfico / autoridad de página / contactos / presencia local) y por qué le importa al negocio.
-- cambios: máx 12, en orden de ejecución. Mezclá hallazgos técnicos con acciones de keywords cuando apunten a la misma URL. url y archivo solo si aparecen en los datos; si no, "".
+- cambios: máx 12, en orden de ejecución. Mezclá hallazgos técnicos con acciones de keywords cuando apunten a la misma URL. url y archivo solo si aparecen en los datos; si no, "". findingId debe copiar el id exacto del bloque HALLAZGOS cuando el cambio lo cubre; si no aplica, "".
 - cursorPrompt: prompt para Cursor Agent orientado a crecimiento, en este orden:
   1) Contexto del sitio + objetivo de nivel (qué mejora esta pasada)
   2) Si hay bloque CORREGIR AHORA: indexación pública primero (una URL por cambio). No postergar. No indexes login, gracias, admin, carrito ni preview.
@@ -1498,6 +1871,26 @@ TXT;
     }
 
     $insights = seoAuditSanitizeCursor($raw, $host, $urls, $repo['paths'] ?? []);
+    $insights['cambios'] = seoAuditAttachFindingIds(
+        is_array($insights['cambios'] ?? null) ? $insights['cambios'] : [],
+        $allFindings
+    );
+    // No devolver en el plan ítems que el operador ya marcó hechos/verificados.
+    $maps = seoAuditAppliedMaps($dataDir, $host);
+    if ($maps['findingStatus'] !== []) {
+        $insights['cambios'] = array_values(array_filter(
+            $insights['cambios'],
+            static function (array $c) use ($maps): bool {
+                $key = seoAuditCambioKey($c);
+                $fid = trim((string) ($c['findingId'] ?? ''));
+                if (isset($maps['findingStatus'][$key]) || ($fid !== '' && isset($maps['findingStatus'][$fid]))) {
+                    return false;
+                }
+                return true;
+            }
+        ));
+    }
+    $insights['cambios'] = seoAuditAnnotateCambios($insights['cambios'], $dataDir, $host);
     seoAuditRememberCycle($dataDir, $host, $dossier, $findings, $insights);
     $closed = "\n\n## Hallazgos detectados (lista cerrada, no omitir)\n" . findingsCursorBlock($findings);
     if ($codeChanged && $delta !== '') {
@@ -1555,6 +1948,7 @@ TXT;
         'domStamp' => (int) ($domProgress['updatedAt'] ?? 0),
         'gscFetchedAt' => (int) ($site['fetchedAt'] ?? 0),
         'kwFetchedAt' => (int) (gscReadJson(gscKeywordCacheFile($dataDir, $host), [])['fetchedAt'] ?? 0),
+        'applied' => seoAuditReadApplied($dataDir, $host)['items'],
         'version' => SEO_AUDIT_VERSION,
     ];
     gscWriteJson($cacheFile, $out);
@@ -1590,14 +1984,22 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
         ? gscKeywordAiFor($dataDir, $host, (int) ($kw['fetchedAt'] ?? 0))
         : null;
     $dossier = dossierRead($dataDir, $host);
-    $findings = !empty($dossier['ok']) ? findingsDetect($dossier) : [];
+    $allFindings = !empty($dossier['ok']) ? findingsDetect($dossier) : [];
+    if ($allFindings !== []) {
+        seoAuditAutoVerify($dataDir, $host, $allFindings);
+    }
+    $findings = seoAuditFilterFindings($allFindings, $dataDir, $host);
     $fingerprint = seoAuditFingerprint($dossier, seoAuditKwAiSig($kwAi));
+    $appliedItems = seoAuditReadApplied($dataDir, $host)['items'];
 
     $planSha = (string) ($cursor['commitSha'] ?? '');
     if ($hasCursor) {
         $cursor['stale'] = ($cursor['fingerprint'] ?? '') !== $fingerprint
             || ($cursor['version'] ?? '') !== SEO_AUDIT_VERSION
             || ($repoSha !== '' && $planSha !== '' && $repoSha !== $planSha);
+        if (is_array($cursor['insights']['cambios'] ?? null)) {
+            $cursor['insights']['cambios'] = seoAuditAnnotateCambios($cursor['insights']['cambios'], $dataDir, $host);
+        }
     }
 
     $gh = seoAuditLoadGithubConfig();
@@ -1637,6 +2039,7 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
         'coverage' => $coverage,
         'gaMessage' => (string) ($dossier['gaMeta']['message'] ?? ''),
         'findingCounts' => findingsCounts($findings),
+        'applied' => $appliedItems,
         'audit' => $hasCursor ? [
             'ready' => true,
             'stale' => (bool) ($cursor['stale'] ?? false),
@@ -1651,6 +2054,7 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
             'codeChanged' => (bool) ($cursor['codeChanged'] ?? false),
             'codeUnchanged' => (bool) ($cursor['codeUnchanged'] ?? false),
             'codeNote' => (string) ($cursor['codeNote'] ?? ''),
+            'applied' => $appliedItems,
         ] : [
             'ready' => false,
             'stale' => false,
@@ -1665,6 +2069,7 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
             'codeChanged' => false,
             'codeUnchanged' => false,
             'codeNote' => '',
+            'applied' => $appliedItems,
         ],
         'canGenerate' => $domProgress['done'] > 0 && $hasSite,
     ];
@@ -1759,7 +2164,46 @@ try {
         seoAuditJson(seoAuditRunCursor($dataDir, $host, $fresh));
     }
 
-    seoAuditJson(['error' => 'Acción no reconocida. Usá status, dom-batch, dom-touch, repo-scan o cursor-audit.'], 400);
+    if ($action === 'mark-applied') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            seoAuditJson(['error' => 'Método no permitido'], 405);
+        }
+        $input = seoAuditInput();
+        $host = gscSanitizeHost((string) ($input['host'] ?? ''));
+        if ($host === '') {
+            seoAuditJson(['error' => 'Indica el dominio del cliente'], 400);
+        }
+        $cambio = is_array($input['cambio'] ?? null) ? $input['cambio'] : $input;
+        $commitSha = (string) ($input['commitSha'] ?? '');
+        seoAuditJson(seoAuditMarkApplied($dataDir, $host, $cambio, $commitSha));
+    }
+
+    if ($action === 'unmark-applied') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            seoAuditJson(['error' => 'Método no permitido'], 405);
+        }
+        $input = seoAuditInput();
+        $host = gscSanitizeHost((string) ($input['host'] ?? ''));
+        $key = (string) ($input['key'] ?? $input['id'] ?? '');
+        if ($host === '') {
+            seoAuditJson(['error' => 'Indica el dominio del cliente'], 400);
+        }
+        seoAuditJson(seoAuditUnmarkApplied($dataDir, $host, $key));
+    }
+
+    if ($action === 'verify-applied') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            seoAuditJson(['error' => 'Método no permitido'], 405);
+        }
+        $input = seoAuditInput();
+        $host = gscSanitizeHost((string) ($input['host'] ?? ''));
+        if ($host === '') {
+            seoAuditJson(['error' => 'Indica el dominio del cliente'], 400);
+        }
+        seoAuditJson(seoAuditVerifyApplied($dataDir, $host));
+    }
+
+    seoAuditJson(['error' => 'Acción no reconocida. Usá status, dom-batch, dom-touch, repo-scan, cursor-audit, mark-applied, unmark-applied o verify-applied.'], 400);
 } catch (Throwable $e) {
     seoAuditJson(['error' => $e->getMessage()], 500);
 }

@@ -294,9 +294,10 @@
           <p class="kw-ai__summary" id="cursorAuditSummary"></p>
           <ol class="kw-ai__actions" id="cursorAuditChanges"></ol>
           <h4 class="kw-ai__label">Prompt para Cursor</h4>
-          <p class="kw__hint">Pegalo en Cursor Agent. El plan lee el commit que está en GitHub: si los cambios no están pusheados, no los ve.</p>
+          <p class="kw__hint">Marcá Hecho en cada mejora aplicada. Verificá tras el deploy: el próximo plan no repite lo comprobado. El plan lee el commit de GitHub: sin push, no lo ve.</p>
           <textarea class="cursor-audit__prompt" id="cursorAuditPrompt" readonly rows="12" spellcheck="false"></textarea>
           <div class="cursor-audit__copy-row">
+            <button class="btn btn--ghost" id="btnAuditVerify" type="button" hidden>Verificar mejoras</button>
             <button class="btn btn--neon" id="btnAuditCopy" type="button">Copiar prompt para Cursor</button>
           </div>
         </div>

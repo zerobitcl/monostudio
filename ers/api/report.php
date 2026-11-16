@@ -523,14 +523,17 @@ function reportCachedHtml(string $dataDir, string $host, string $lang, string $v
     return null;
 }
 
-function reportPdf(string $apiKey, string $html, string $fileName, string $lang = 'es', string $sign = 'Eduardo Rojas · Mono Studio'): string
+function reportPdf(string $apiKey, string $html, string $fileName, string $lang = 'es', string $sign = 'ER'): string
 {
     $copy = reportCopy($lang);
+    // Pie discreto: páginas a la izquierda, marca ER a la derecha (sin MonoStudio).
     $footer = '<div style="font-size:9px;width:100%;padding:0 18px;color:#7a746a;font-family:Arial,sans-serif;">'
-        . '<span style="float:left">' . htmlspecialchars($sign, ENT_QUOTES | ENT_HTML5, 'UTF-8') . '</span>'
-        . '<span style="float:right">' . htmlspecialchars($copy['pageOf'], ENT_QUOTES | ENT_HTML5, 'UTF-8')
+        . '<span style="float:left">' . htmlspecialchars($copy['pageOf'], ENT_QUOTES | ENT_HTML5, 'UTF-8')
         . ' <span class="pageNumber"></span> ' . htmlspecialchars($copy['of'], ENT_QUOTES | ENT_HTML5, 'UTF-8')
-        . ' <span class="totalPages"></span></span></div>';
+        . ' <span class="totalPages"></span></span>'
+        . '<span style="float:right;letter-spacing:.12em;">'
+        . htmlspecialchars($sign !== '' ? $sign : 'ER', ENT_QUOTES | ENT_HTML5, 'UTF-8')
+        . '</span></div>';
     $res = gscHttp('POST', 'https://v2.api2pdf.com/chrome/pdf/html', [
         'html' => $html,
         'inline' => false,
@@ -615,8 +618,7 @@ if ($isEntry) {
                     if ($apiKey === '') {
                         gscJson(['error' => 'Falta la clave de api2pdf. Copiá ers/data/api2pdf.example.json a api2pdf.json.'], 400);
                     }
-                    $sign = $variant === 'client' ? 'Eduardo Rojas · Mono Studio' : 'ERs';
-                    $url = reportPdf($apiKey, $cachedHtml['html'], $cachedHtml['fileName'], $lang, $sign);
+                    $url = reportPdf($apiKey, $cachedHtml['html'], $cachedHtml['fileName'], $lang, 'ER');
                     gscJson(['ok' => true, 'url' => $url, 'fileName' => $cachedHtml['fileName'], 'fromCache' => true]);
                 }
             }
@@ -631,8 +633,7 @@ if ($isEntry) {
             if ($apiKey === '') {
                 gscJson(['error' => 'Falta la clave de api2pdf. Copiá ers/data/api2pdf.example.json a api2pdf.json.'], 400);
             }
-            $sign = $variant === 'client' ? 'Eduardo Rojas · Mono Studio' : 'ERs';
-            $url = reportPdf($apiKey, $built['html'], $built['fileName'], $lang, $sign);
+            $url = reportPdf($apiKey, $built['html'], $built['fileName'], $lang, 'ER');
             gscJson(['ok' => true, 'url' => $url, 'fileName' => $built['fileName']]);
         }
 
