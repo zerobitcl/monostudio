@@ -3752,7 +3752,10 @@ class AppController {
       } else if (statusKey === "applied") {
         const pending = document.createElement("span");
         pending.className = "seo-tag";
-        pending.textContent = "Pendiente verificar";
+        const manualHint = /google|maps|gbp|fotograf|photo|reseñ|business profile|ficha/i.test(
+          `${c.titulo || ""} ${c.url || ""} ${c.archivo || ""}`
+        ) || (!c.url && !c.archivo);
+        pending.textContent = manualHint ? "Manual · sin auto-check" : "Pendiente verificar";
         tags.appendChild(pending);
       }
       top.append(strong, tags);
@@ -3886,14 +3889,20 @@ class AppController {
       this.auditData.set(host, status);
       const verified = Number(data.autoVerified || 0);
       const pending = Number(data.pending || 0);
+      const manual = Number(data.manual || 0);
+      const repaired = Number(data.repaired || 0);
       if (data.note) {
-        this.showToast(data.note, 5200);
+        this.showToast(data.note, 7200);
       } else if (verified > 0 && pending === 0) {
         this.showToast(`Listo: ${verified} mejora${verified === 1 ? "" : "s"} comprobada${verified === 1 ? "" : "s"} en el HTML`);
       } else if (verified > 0) {
-        this.showToast(`${verified} verificada${verified === 1 ? "" : "s"} · ${pending} aún pendiente${pending === 1 ? "" : "s"} (deploy o GSC)`, 6200);
+        this.showToast(`${verified} verificada${verified === 1 ? "" : "s"} · ${pending} aún pendiente${pending === 1 ? "" : "s"}`, 6200);
+      } else if (manual > 0 && pending === manual) {
+        this.showToast("Esas mejoras son manuales/Maps: no se pueden comprobar solas. Desmarcá el check si no las hiciste.", 7200);
       } else if (pending > 0) {
         this.showToast(`Todavía se ve el problema en ${pending} mejora${pending === 1 ? "" : "s"}. Revisá deploy o push.`, 6200);
+      } else if (repaired > 0) {
+        this.showToast("Se corrigieron comprobaciones sin evidencia", 5200);
       } else {
         this.showToast("Nada pendiente de verificar");
       }

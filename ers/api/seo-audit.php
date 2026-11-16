@@ -223,7 +223,62 @@ function seoAuditAppliedBlock(string $dataDir, string $host): string
     return implode("\n", $lines);
 }
 
-/** Si un finding marcado applied ya no aparece en el detector, pasa a verified. */
+/**
+ * Mejoras que el motor no puede comprobar solo (Maps, fotos, reseñas, sin URL/archivo).
+ * Quedan en “Hecho” hasta confirmación humana; nunca pasan solas a verified.
+ */
+function seoAuditIsManualOnly(array $item): bool
+{
+    $blob = strtolower(
+        trim((string) ($item['titulo'] ?? '')) . ' '
+        . trim((string) ($item['archivo'] ?? '')) . ' '
+        . trim((string) ($item['url'] ?? '')) . ' '
+        . trim((string) ($item['findingId'] ?? ''))
+    );
+    foreach ([
+        'google business', 'business profile', 'google maps', 'gbp',
+        'ficha de google', 'mi negocio', 'fotograf', 'photo', 'reseñ', 'review',
+        'maps.google', 'abrir en maps',
+    ] as $needle) {
+        if ($needle !== '' && str_contains($blob, $needle)) {
+            return true;
+        }
+    }
+    return trim((string) ($item['url'] ?? '')) === ''
+        && trim((string) ($item['archivo'] ?? '')) === '';
+}
+
+/**
+ * Deshace “Comprobado” falso: verified sin findingId no debió existir
+ * (el detector no tenía evidencia; p. ej. fotos en GBP).
+ */
+function seoAuditRepairFalseVerified(string $dataDir, string $host): int
+{
+    $pack = seoAuditReadApplied($dataDir, $host);
+    $fixed = 0;
+    foreach ($pack['items'] as &$item) {
+        if (($item['status'] ?? '') !== 'verified') {
+            continue;
+        }
+        $fid = trim((string) ($item['findingId'] ?? ''));
+        if ($fid !== '' && !seoAuditIsManualOnly($item)) {
+            continue;
+        }
+        $item['status'] = 'applied';
+        $item['verifiedAt'] = 0;
+        $fixed += 1;
+    }
+    unset($item);
+    if ($fixed > 0) {
+        seoAuditWriteApplied($dataDir, $host, $pack['items']);
+    }
+    return $fixed;
+}
+
+/**
+ * Solo verifica con evidencia: findingId conocido que ya no dispara el detector.
+ * Sin findingId → intenta reatachar; si no hay match, sigue en applied (no inventa “comprobado”).
+ */
 function seoAuditAutoVerify(string $dataDir, string $host, array $currentFindings): int
 {
     $present = [];
@@ -240,25 +295,18 @@ function seoAuditAutoVerify(string $dataDir, string $host, array $currentFinding
         if (($item['status'] ?? '') !== 'applied') {
             continue;
         }
+        if (seoAuditIsManualOnly($item)) {
+            continue;
+        }
         $fid = trim((string) ($item['findingId'] ?? ''));
         if ($fid === '') {
-            // Reatacha id si el hallazgo sigue abierto; si no matchea ninguno, se dio por resuelto.
             $matched = seoAuditMatchFindingId($item, $currentFindings);
             if ($matched !== '') {
                 $item['findingId'] = $matched;
-                if ($item['id'] === '' || strlen($item['id']) === 32) {
-                    $item['id'] = seoAuditCambioKey($item);
-                }
+                $item['id'] = seoAuditCambioKey($item);
                 $dirty = true;
-                continue;
             }
-            if (trim((string) ($item['titulo'] ?? '')) === '' && trim((string) ($item['url'] ?? '')) === '') {
-                continue;
-            }
-            $item['status'] = 'verified';
-            $item['verifiedAt'] = time();
-            $verified += 1;
-            $dirty = true;
+            // Sin id estable no hay prueba de que el problema desapareció.
             continue;
         }
         if (isset($present[$fid])) {
@@ -399,27 +447,35 @@ function seoAuditUnmarkApplied(string $dataDir, string $host, string $key): arra
 function seoAuditVerifyApplied(string $dataDir, string $host): array
 {
     @set_time_limit(55);
+    $repaired = seoAuditRepairFalseVerified($dataDir, $host);
     $pack = seoAuditReadApplied($dataDir, $host);
     $pendingBefore = 0;
+    $manualBefore = 0;
     $urls = [];
     foreach ($pack['items'] as $item) {
         if (($item['status'] ?? '') !== 'applied') {
             continue;
         }
         $pendingBefore += 1;
+        if (seoAuditIsManualOnly($item)) {
+            $manualBefore += 1;
+            continue;
+        }
         $url = trim((string) ($item['url'] ?? ''));
         if ($url !== '' && gscUrlBelongsToHost($url, $host)) {
             $urls[] = $url;
         }
     }
-    if ($pendingBefore === 0) {
+    if ($pendingBefore === 0 && $repaired === 0) {
         return [
             'ok' => true,
             'host' => $host,
             'touched' => 0,
             'autoVerified' => 0,
+            'repaired' => 0,
             'verified' => 0,
             'pending' => 0,
+            'manual' => 0,
             'items' => $pack['items'],
             'findingCounts' => [],
             'note' => 'No hay mejoras en estado “Hecho” para verificar. Marcá el check primero.',
@@ -437,22 +493,42 @@ function seoAuditVerifyApplied(string $dataDir, string $host): array
     $items = seoAuditReadApplied($dataDir, $host)['items'];
     $verified = 0;
     $pending = 0;
+    $manual = 0;
     foreach ($items as $item) {
         if ($item['status'] === 'verified') {
             $verified += 1;
         } elseif ($item['status'] === 'applied') {
             $pending += 1;
+            if (seoAuditIsManualOnly($item)) {
+                $manual += 1;
+            }
         }
     }
+    $note = '';
+    if ($repaired > 0) {
+        $note = $repaired === 1
+            ? 'Se revirtió 1 “Comprobado” sin evidencia (p. ej. Maps/manual). Quedó en Hecho.'
+            : "Se revirtieron {$repaired} “Comprobado” sin evidencia. Quedaron en Hecho.";
+    }
+    if ($manual > 0 && $auto === 0) {
+        $manualNote = $manual === 1
+            ? '1 mejora es manual/Maps: el sistema no puede comprobarla solo. Dejala en Hecho o desmarcá el check.'
+            : "{$manual} mejoras son manuales/Maps: el sistema no puede comprobarlas solo.";
+        $note = $note !== '' ? $note . ' ' . $manualNote : $manualNote;
+    }
+
     return [
         'ok' => true,
         'host' => $host,
         'touched' => $touched,
         'autoVerified' => $auto,
+        'repaired' => $repaired,
         'verified' => $verified,
         'pending' => $pending,
+        'manual' => $manual,
         'items' => $items,
         'findingCounts' => findingsCounts(seoAuditFilterFindings($findings, $dataDir, $host)),
+        'note' => $note,
     ];
 }
 
@@ -2029,6 +2105,8 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
         : null;
     $dossier = dossierRead($dataDir, $host);
     $allFindings = !empty($dossier['ok']) ? findingsDetect($dossier) : [];
+    // Repara “Comprobado” sin evidencia (Maps/manual) antes de anotar la UI.
+    seoAuditRepairFalseVerified($dataDir, $host);
     if ($allFindings !== []) {
         seoAuditAutoVerify($dataDir, $host, $allFindings);
     }
