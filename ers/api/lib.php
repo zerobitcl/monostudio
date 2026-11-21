@@ -873,6 +873,68 @@ function ersBuildSeoReportMarkdown(string $host, array $summary, ?array $client)
             $lines[] = '- ' . $task['title'];
         }
     }
+
+    $opp = [];
+    foreach ($dossier['keywords']['buckets']['striking'] ?? [] as $row) {
+        if (!is_array($row) || count($opp) >= 6) {
+            continue;
+        }
+        $q = trim((string) ($row['q'] ?? ''));
+        if ($q === '') {
+            continue;
+        }
+        $opp[] = '- «' . $q . '» → `' . dossierNormPath((string) ($row['page'] ?? ''))
+            . '` · pos ' . round((float) ($row['position'] ?? 0), 1)
+            . ' · +' . (int) ($row['gain'] ?? 0) . ' clics pot.';
+    }
+    if ($opp !== []) {
+        $lines[] = '';
+        $lines[] = '## Oportunidades por página';
+        $lines = array_merge($lines, $opp);
+    }
+
+    $gscMeta = is_array($dossier['gscMeta'] ?? null) ? $dossier['gscMeta'] : [];
+    $freshBits = [];
+    if ((int) ($gscMeta['fullFetchedAt'] ?? 0) > 0) {
+        $freshBits[] = 'GSC completo ' . gmdate('Y-m-d H:i', (int) $gscMeta['fullFetchedAt']) . ' UTC';
+    }
+    if (!empty($gscMeta['isPartialRadar']) && (int) ($gscMeta['radarRefreshedAt'] ?? 0) > 0) {
+        $freshBits[] = 'radar ' . gmdate('Y-m-d H:i', (int) $gscMeta['radarRefreshedAt']) . ' UTC';
+    }
+    if ((int) ($dossier['domProgress']['updatedAt'] ?? 0) > 0) {
+        $freshBits[] = 'HTML ' . gmdate('Y-m-d H:i', (int) $dossier['domProgress']['updatedAt']) . ' UTC';
+    }
+    if ($freshBits !== []) {
+        $lines[] = '';
+        $lines[] = '## Frescura de datos';
+        $lines[] = '- ' . implode(' · ', $freshBits);
+    }
+
+    if (is_file(__DIR__ . '/seo-audit.php')) {
+        require_once __DIR__ . '/seo-audit.php';
+        if (function_exists('seoAuditReadApplied')) {
+            $done = [];
+            foreach (seoAuditReadApplied(ersDataDir(), $safeHost)['items'] ?? [] as $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+                $st = (string) ($item['status'] ?? '');
+                if (!in_array($st, ['applied', 'verified'], true)) {
+                    continue;
+                }
+                $done[] = '- [' . $st . '] ' . (string) ($item['titulo'] ?? $item['title'] ?? '');
+                if (count($done) >= 8) {
+                    break;
+                }
+            }
+            if ($done !== []) {
+                $lines[] = '';
+                $lines[] = '## Mejoras aplicadas / verificadas';
+                $lines = array_merge($lines, $done);
+            }
+        }
+    }
+
     $lines[] = '';
     $lines[] = '_Mono Studio OS · mismo dossier que el informe cliente y el prompt de Cursor_';
     return implode("\n", $lines);
@@ -2007,8 +2069,12 @@ function ersRadarRefreshGsc(string $dataDir, string $host, array $cache): array
         }
     }
     $cache['signals'] = gscMergeLocalSignals($dataDir, $host, gscBuildSignals($pages));
-    $cache['fetchedAt'] = time();
+    // Solo métricas 28d: no mentir con fetchedAt/fullFetchedAt del barrido completo.
+    $cache['radarRefreshedAt'] = time();
     $cache['radarRefresh'] = true;
+    if (!isset($cache['fullFetchedAt']) && isset($cache['fetchedAt'])) {
+        $cache['fullFetchedAt'] = (int) $cache['fetchedAt'];
+    }
     gscWriteJson(gscHostCacheFile($dataDir, $host), $cache);
     return $cache;
 }

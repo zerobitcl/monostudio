@@ -105,6 +105,84 @@ function findingsSkip(string $path): bool
     return (bool) preg_match('#/(legal|privacidad|privacy|cookies|terminos|terms|login|cart|carrito|gracias|thanks|thank-you)(/|$)#', $path);
 }
 
+/** Stopwords ES/EN para gap semántico por tokens. */
+function findingsStopwords(): array
+{
+    static $set = null;
+    if ($set !== null) {
+        return $set;
+    }
+    $words = [
+        'a', 'al', 'con', 'de', 'del', 'el', 'en', 'la', 'las', 'los', 'para', 'por', 'se', 'su', 'sus',
+        'un', 'una', 'unos', 'y', 'o', 'u', 'que', 'como', 'mas', 'más', 'muy', 'ya', 'lo', 'le', 'les',
+        'the', 'and', 'for', 'of', 'to', 'in', 'on', 'at', 'is', 'are', 'with', 'from', 'or', 'an',
+        'near', 'cerca', 'mejor', 'mejores', 'precio', 'precios',
+    ];
+    $set = array_fill_keys($words, true);
+    return $set;
+}
+
+function findingsNormalizeToken(string $token): string
+{
+    $t = preg_replace('/[^a-z0-9]+/', '', gscAscii($token)) ?? '';
+    if (strlen($t) > 4 && str_ends_with($t, 'es')) {
+        $t = substr($t, 0, -2);
+    } elseif (strlen($t) > 3 && str_ends_with($t, 's')) {
+        $t = substr($t, 0, -1);
+    }
+    return $t;
+}
+
+/** @return list<string> */
+function findingsQueryTokens(string $query): array
+{
+    $stop = findingsStopwords();
+    $parts = preg_split('/\s+/u', trim($query), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+    $out = [];
+    foreach ($parts as $part) {
+        $tok = findingsNormalizeToken($part);
+        if ($tok === '' || strlen($tok) < 3 || isset($stop[$tok])) {
+            continue;
+        }
+        $out[$tok] = true;
+    }
+    return array_keys($out);
+}
+
+/**
+ * Cobertura de tokens de la query en un haystack (title/h1/h2).
+ * @return array{covered:int, total:int, missing:list<string>, ratio:float}
+ */
+function findingsTokenCoverage(string $query, string $haystack): array
+{
+    $tokens = findingsQueryTokens($query);
+    if ($tokens === []) {
+        return ['covered' => 0, 'total' => 0, 'missing' => [], 'ratio' => 1.0];
+    }
+    $hay = ' ' . findingsNormalizeToken($haystack) . ' ';
+    // Reconstruir hay como tokens unidos para contains
+    $hayTokens = findingsQueryTokens($haystack);
+    $haySet = array_fill_keys($hayTokens, true);
+    // También buscar substrings en el texto normalizado continuo
+    $hayFlat = findingsNormalizeToken($haystack);
+    $missing = [];
+    $covered = 0;
+    foreach ($tokens as $tok) {
+        if (isset($haySet[$tok]) || str_contains($hayFlat, $tok)) {
+            $covered++;
+        } else {
+            $missing[] = $tok;
+        }
+    }
+    $total = count($tokens);
+    return [
+        'covered' => $covered,
+        'total' => $total,
+        'missing' => $missing,
+        'ratio' => $total > 0 ? $covered / $total : 1.0,
+    ];
+}
+
 function findingsByPath(array $dossier, string $path): ?array
 {
     foreach ($dossier['pages'] ?? [] as $page) {
@@ -785,18 +863,21 @@ function findingsOnPage(array $dossier): array
             }
         }
 
-        if ($thin < 4 && array_key_exists('wordCount', $dom) && (int) $dom['wordCount'] > 0 && (int) $dom['wordCount'] < 150 && $impr >= 20 && !findingsSkip((string) $path)) {
+        $mainWords = (int) ($dom['mainWordCount'] ?? 0);
+        $allWords = (int) ($dom['wordCount'] ?? 0);
+        $wordsForThin = $mainWords > 0 ? $mainWords : $allWords;
+        if ($thin < 4 && $wordsForThin > 0 && $wordsForThin < 150 && $impr >= 20 && !findingsSkip((string) $path)) {
             $thin++;
             $out[] = findingsMake(
                 'thin',
                 'onpage',
                 1,
                 max(3, (int) round($impr * 0.02)),
-                findingsFigure((int) $dom['wordCount'], 'words', 'risk'),
+                findingsFigure($wordsForThin, 'words', 'risk'),
                 (string) $path,
                 $url,
                 (string) ($page['query'] ?? ''),
-                ['words' => (int) $dom['wordCount']],
+                ['words' => $wordsForThin, 'mainWordCount' => $mainWords, 'wordCount' => $allWords],
                 findingsSay(
                     'La página dice muy poco',
                     'Hay poca explicación para lo que la gente busca. Ampliarla ayuda a que Google la entienda.',
@@ -805,7 +886,8 @@ function findingsOnPage(array $dossier): array
                     'A página diz muito pouco',
                     'Há pouca explicação para o que as pessoas buscam. Ampliar ajuda o Google a entendê-la.'
                 ),
-                'Contenido delgado en ' . $path . ': ' . (int) $dom['wordCount'] . ' palabras visibles.'
+                'Contenido delgado en ' . $path . ': ' . $wordsForThin . ' palabras en el contenido principal'
+                    . ($mainWords > 0 ? ' (total página ' . $allWords . ')' : '') . '.'
             );
         }
 
@@ -892,7 +974,8 @@ function findingsOnPage(array $dossier): array
     }
 
     $gaps = 0;
-    foreach ($buckets = ($dossier['keywords']['buckets']['striking'] ?? []) as $row) {
+    $h2Gaps = 0;
+    foreach ($dossier['keywords']['buckets']['striking'] ?? [] as $row) {
         if ($gaps >= 4 || !is_array($row) || !empty($row['brand'])) {
             continue;
         }
@@ -907,14 +990,68 @@ function findingsOnPage(array $dossier): array
         if ($dom === null) {
             continue;
         }
+        $titleH1 = ($dom['title'] ?? '') . ' ' . ($dom['h1'] ?? '');
+        $h2h3 = ($dom['h2'] ?? '') . ' ' . ($dom['h3'] ?? '');
+        $covTitle = findingsTokenCoverage($query, $titleH1);
+        $covAll = findingsTokenCoverage($query, $titleH1 . ' ' . $h2h3);
+        // Frase exacta o ≥70% de tokens en title/H1 → no hay gap de título.
         $needle = gscAscii($query);
-        $hay = ($dom['title'] ?? '') . ' ' . ($dom['h1'] ?? '') . ' ' . ($dom['h2'] ?? '');
-        if ($needle === '' || str_contains($hay, $needle)) {
+        if ($needle !== '' && str_contains(gscAscii($titleH1), $needle)) {
+            continue;
+        }
+        if ($covTitle['ratio'] >= 0.7) {
+            // Tokens faltantes solo en H2: oportunidad de sección sin tocar H1.
+            if ($covAll['ratio'] < 0.85 && $h2Gaps < 3 && $covTitle['missing'] !== []) {
+                $h2Gaps++;
+                $gain = (int) ($row['gain'] ?? 0);
+                $page = findingsByPath($dossier, $path);
+                $out[] = findingsMake(
+                    'gapH2',
+                    'onpage',
+                    1,
+                    max(3, (int) round($gain * 0.6)),
+                    findingsFigure(max(3, $gain), 'clicks', 'gain'),
+                    $path,
+                    (string) ($page['url'] ?? ''),
+                    $query,
+                    [
+                        'position' => $pos,
+                        'impressions' => $impr,
+                        'gain' => $gain,
+                        'missingTokens' => $covTitle['missing'],
+                        'protectQueries' => array_map(
+                            static fn ($q) => is_array($q) ? (string) ($q['q'] ?? '') : (string) $q,
+                            array_slice($page['protectQueries'] ?? [], 0, 3)
+                        ),
+                    ],
+                    findingsSay(
+                        'Sumá «' . $query . '» como sección',
+                        'El título ya cubre la idea; falta un H2 o FAQ con los términos que faltan.',
+                        'Add “' . $query . '” as a section',
+                        'The title already covers the idea; add an H2 or FAQ with the missing terms.',
+                        'Inclua «' . $query . '» como seção',
+                        'O título já cobre a ideia; falta um H2 ou FAQ com os termos que faltam.'
+                    ),
+                    'Gap H2/FAQ: «' . $query . '» en ' . $path . ' — tokens faltantes: '
+                        . implode(', ', $covTitle['missing']) . '. No reescribas el H1; añadí sección. Queries a proteger: '
+                        . implode(', ', array_map(
+                            static fn ($q) => is_array($q) ? (string) ($q['q'] ?? '') : (string) $q,
+                            array_slice($page['protectQueries'] ?? [], 0, 3)
+                        )) . '.'
+                );
+            }
+            continue;
+        }
+        if ($covAll['ratio'] >= 0.85) {
             continue;
         }
         $gaps++;
         $gain = (int) ($row['gain'] ?? 0);
         $page = findingsByPath($dossier, $path);
+        $protect = array_map(
+            static fn ($q) => is_array($q) ? (string) ($q['q'] ?? '') : (string) $q,
+            array_slice($page['protectQueries'] ?? [], 0, 3)
+        );
         $out[] = findingsMake(
             'gap',
             'onpage',
@@ -924,7 +1061,14 @@ function findingsOnPage(array $dossier): array
             $path,
             (string) ($page['url'] ?? ''),
             $query,
-            ['position' => $pos, 'impressions' => $impr, 'gain' => $gain],
+            [
+                'position' => $pos,
+                'impressions' => $impr,
+                'gain' => $gain,
+                'tokenRatio' => $covTitle['ratio'],
+                'missingTokens' => $covTitle['missing'],
+                'protectQueries' => $protect,
+            ],
             findingsSay(
                 'Falta «' . $query . '» en la página',
                 'La gente busca esa frase y casi no está en el título ni en los encabezados.',
@@ -933,7 +1077,11 @@ function findingsOnPage(array $dossier): array
                 'Falta «' . $query . '» na página',
                 'As pessoas buscam essa frase e ela quase não está no título nem nos títulos internos.'
             ),
-            'Gap on-page: «' . $query . '» no está en title/H1/H2 de ' . $path . ' (pos ' . round($pos, 1) . ', ' . $impr . ' imp).'
+            'Gap on-page: «' . $query . '» cubre '
+                . round($covTitle['ratio'] * 100) . '% de tokens en title/H1 de ' . $path
+                . ' (pos ' . round($pos, 1) . ', ' . $impr . ' imp). Faltan: '
+                . implode(', ', $covTitle['missing'])
+                . '. Al reescribir, conservá: ' . ($protect !== [] ? implode(', ', $protect) : 'las queries con clics actuales') . '.'
         );
     }
 
@@ -1812,6 +1960,198 @@ function findingsLocalSignals(array $dossier): array
     return array_slice($signals, 0, 10);
 }
 
+/**
+ * Enlazado interno, redirecciones, X-Robots-Tag y rastreo desactualizado.
+ */
+function findingsLinkingAndCrawl(array $dossier): array
+{
+    $out = [];
+    $orphan = 0;
+    $redirects = 0;
+    $xrobots = 0;
+    $crawlStale = 0;
+    $domReady = ($dossier['dom'] ?? []) !== [];
+
+    foreach ($dossier['pages'] ?? [] as $page) {
+        if (!is_array($page)) {
+            continue;
+        }
+        $path = (string) ($page['path'] ?? '');
+        $url = (string) ($page['url'] ?? '');
+        $impr = (int) ($page['impressions'] ?? 0);
+        $pos = (float) ($page['position'] ?? 0);
+        $clicks = (int) ($page['clicks'] ?? 0);
+        if ($path === '' || findingsSkip($path)) {
+            continue;
+        }
+
+        $dom = findingsDom($dossier, $path);
+
+        if ($xrobots < 3 && $dom !== null) {
+            $xr = strtolower((string) ($dom['xRobots'] ?? $page['xRobots'] ?? ''));
+            if ($xr !== '' && (str_contains($xr, 'noindex') || str_contains($xr, 'none'))) {
+                $xrobots++;
+                $out[] = findingsMake(
+                    'xRobotsNoindex',
+                    'index',
+                    3,
+                    max(20, $impr),
+                    findingsFigure($impr, 'impressions', 'risk'),
+                    $path,
+                    $url,
+                    '',
+                    ['xRobots' => $xr],
+                    findingsSay(
+                        'La cabecera HTTP bloquea a Google',
+                        'X-Robots-Tag dice noindex. La página no puede rankear aunque el HTML esté bien.',
+                        'The HTTP header blocks Google',
+                        'X-Robots-Tag says noindex. The page cannot rank even if the HTML is fine.',
+                        'O cabeçalho HTTP bloqueia o Google',
+                        'X-Robots-Tag diz noindex. A página não consegue rankear mesmo com o HTML ok.'
+                    ),
+                    'X-Robots-Tag «' . $xr . '» en ' . $path . '. Quitá noindex de la cabecera HTTP.',
+                    'cursor'
+                );
+            }
+        }
+
+        if ($redirects < 4 && $dom !== null) {
+            $redir = (int) ($dom['redirectCount'] ?? $page['redirectCount'] ?? 0);
+            $effective = trim((string) ($dom['effectiveUrl'] ?? $page['effectiveUrl'] ?? ''));
+            $canonical = trim((string) ($dom['canonical'] ?? ''));
+            $hop = false;
+            if ($redir > 0) {
+                $hop = true;
+            } elseif ($effective !== '' && dossierNormPath($effective) !== $path) {
+                $hop = true;
+            } elseif ($canonical !== '' && preg_match('#^https?://#i', $canonical) && dossierNormPath($canonical) !== $path && $impr >= 20) {
+                $hop = true;
+            }
+            if ($hop && $impr >= 15) {
+                $redirects++;
+                $out[] = findingsMake(
+                    'canonicalHop',
+                    'index',
+                    2,
+                    max(8, (int) round($impr * 0.05)),
+                    findingsFigure($redir > 0 ? $redir : 1, 'hops', 'risk'),
+                    $path,
+                    $url,
+                    '',
+                    [
+                        'redirectCount' => $redir,
+                        'effectiveUrl' => $effective,
+                        'canonical' => $canonical,
+                    ],
+                    findingsSay(
+                        'La URL del inventario no es la final',
+                        'Hay redirección o el canónico apunta a otra dirección. Unificá a una sola URL.',
+                        'The inventory URL is not the final one',
+                        'There is a redirect or the canonical points elsewhere. Keep a single URL.',
+                        'A URL do inventário não é a final',
+                        'Há redirecionamento ou o canônico aponta para outra. Unifique em uma URL.'
+                    ),
+                    'Redirect/canonical hop en ' . $path
+                        . ($redir > 0 ? ' (' . $redir . ' hops)' : '')
+                        . ($effective !== '' ? ' → ' . $effective : '')
+                        . ($canonical !== '' ? ' · canonical ' . $canonical : '') . '.',
+                    'cursor'
+                );
+            }
+        }
+
+        // Huérfana / infra-enlazada: demanda real y casi sin inlinks contextuales.
+        if ($orphan < 4 && $domReady && $impr >= 40 && $pos >= 4 && $pos <= 20) {
+            $inCtx = (int) ($page['inlinksContextual'] ?? 0);
+            $inTotal = (int) ($page['inlinksTotal'] ?? 0);
+            if ($inCtx <= 1) {
+                $orphan++;
+                $donors = array_slice(is_array($page['inlinkFrom'] ?? null) ? $page['inlinkFrom'] : [], 0, 3);
+                // Sugerir páginas fuertes del sitio como donantes si no hay inlinks.
+                if ($donors === []) {
+                    $strong = [];
+                    foreach ($dossier['pages'] ?? [] as $cand) {
+                        if (!is_array($cand) || ($cand['path'] ?? '') === $path) {
+                            continue;
+                        }
+                        if ((int) ($cand['clicks'] ?? 0) >= 5) {
+                            $strong[] = (string) $cand['path'];
+                        }
+                        if (count($strong) >= 3) {
+                            break;
+                        }
+                    }
+                    $donors = $strong;
+                }
+                $out[] = findingsMake(
+                    'underlinked',
+                    'onpage',
+                    2,
+                    max(6, (int) round($impr * 0.04)),
+                    findingsFigure($inCtx, 'inlinks', 'risk'),
+                    $path,
+                    $url,
+                    (string) ($page['query'] ?? ''),
+                    [
+                        'inlinksContextual' => $inCtx,
+                        'inlinksTotal' => $inTotal,
+                        'suggestedFrom' => $donors,
+                        'position' => $pos,
+                        'impressions' => $impr,
+                    ],
+                    findingsSay(
+                        'Esta página casi no recibe enlaces internos',
+                        'Google la ve poco reforzada desde el resto del sitio. Enlazala desde páginas fuertes.',
+                        'This page gets almost no internal links',
+                        'Google sees little reinforcement from the rest of the site. Link to it from strong pages.',
+                        'Esta página quase não recebe links internos',
+                        'O Google a vê pouco reforçada. Linke a partir de páginas fortes.'
+                    ),
+                    'Infra-enlazada: ' . $path . ' tiene ' . $inCtx . ' inlinks contextuales con '
+                        . $impr . ' impr / pos ' . round($pos, 1)
+                        . '. Enlazá desde: ' . ($donors !== [] ? implode(', ', $donors) : 'home y servicios top') . '.'
+                );
+            }
+        }
+
+        // Crawl stale: lastCrawl viejo en páginas con demanda.
+        if ($crawlStale < 3 && ($impr >= 50 || $clicks >= 5)) {
+            $lastCrawl = trim((string) ($page['lastCrawl'] ?? ''));
+            if ($lastCrawl !== '') {
+                $crawlTs = strtotime($lastCrawl);
+                if ($crawlTs !== false && (time() - $crawlTs) > 45 * 86400) {
+                    $crawlStale++;
+                    $days = (int) floor((time() - $crawlTs) / 86400);
+                    $out[] = findingsMake(
+                        'crawlStale',
+                        'index',
+                        2,
+                        max(5, (int) round($impr * 0.03)),
+                        findingsFigure($days, 'days', 'risk'),
+                        $path,
+                        $url,
+                        '',
+                        ['lastCrawl' => $lastCrawl, 'days' => $days, 'impressions' => $impr],
+                        findingsSay(
+                            'Google hace mucho que no la rastrea',
+                            'Sin un rastreo reciente los cambios no entran al índice. Pedí inspección o reforzá el sitemap.',
+                            'Google has not crawled it in a long time',
+                            'Without a recent crawl, changes do not enter the index. Request inspection or reinforce the sitemap.',
+                            'O Google faz tempo que não a rastreia',
+                            'Sem rastreio recente as mudanças não entram no índice. Peça inspeção ou reforce o sitemap.'
+                        ),
+                        'lastCrawlTime ' . $lastCrawl . ' (' . $days . 'd) en ' . $path
+                            . '. Solicitá indexación o asegurate de que el sitemap la lista con lastmod fresco.',
+                        'cursor'
+                    );
+                }
+            }
+        }
+    }
+
+    return $out;
+}
+
 function findingsDetect(array $dossier): array
 {
     if (empty($dossier['ok'])) {
@@ -1821,6 +2161,7 @@ function findingsDetect(array $dossier): array
         findingsIndex($dossier),
         findingsDemand($dossier),
         findingsOnPage($dossier),
+        findingsLinkingAndCrawl($dossier),
         findingsConversion($dossier),
         findingsSpeed($dossier),
         findingsLocal($dossier)

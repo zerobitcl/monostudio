@@ -515,6 +515,46 @@ class SeoAuditModule {
       body: JSON.stringify({ host }),
     }).then((res) => SeoAuditModule.#read(res, "batch"));
   }
+
+  static refreshContext(host, repo = "", fresh = true) {
+    return fetch(`${SeoAuditModule.API}?action=refresh-context`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ host, repo, fresh }),
+    }).then((res) => SeoAuditModule.#read(res, "batch"));
+  }
+
+  /** Etiqueta corta de frescura a partir de timestamp Unix (segundos). */
+  static fmtStamp(ts) {
+    const at = Number(ts || 0);
+    if (!at) return "";
+    const sec = Math.max(0, Math.floor(Date.now() / 1000 - at));
+    let rel = "ahora";
+    if (sec >= 86400) rel = `${Math.round(sec / 86400)}d`;
+    else if (sec >= 3600) rel = `${Math.round(sec / 3600)}h`;
+    else if (sec >= 60) rel = `${Math.max(1, Math.round(sec / 60))}m`;
+    const d = new Date(at * 1000);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    const clock = `${hh}:${mm}`;
+    if (sameDay) return `hoy ${clock} · hace ${rel}`;
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mo = String(d.getMonth() + 1).padStart(2, "0");
+    return `${dd}/${mo} ${clock} · hace ${rel}`;
+  }
+
+  static fmtStampShort(ts) {
+    const at = Number(ts || 0);
+    if (!at) return "";
+    const sec = Math.max(0, Math.floor(Date.now() / 1000 - at));
+    if (sec < 60) return "ahora";
+    if (sec < 3600) return `${Math.max(1, Math.round(sec / 60))}m`;
+    if (sec < 86400) return `${Math.round(sec / 3600)}h`;
+    return `${Math.round(sec / 86400)}d`;
+  }
 }
 
 /** Google Business Profile vía Places API (New). */
@@ -636,6 +676,10 @@ class SeoStore {
     return {
       version: value.version,
       fetchedAt: value.fetchedAt,
+      fullFetchedAt: value.fullFetchedAt,
+      radarRefreshedAt: value.radarRefreshedAt,
+      radarRefresh: value.radarRefresh,
+      isPartialRadar: value.isPartialRadar,
       cached: value.cached,
       error: value.error,
       totals: value.totals,
@@ -652,12 +696,14 @@ class SeoStore {
         current: p.current,
         delta: p.delta,
         thermometer: p.thermometer,
+        lastmod: p.lastmod || "",
         indexStatus: p.indexStatus
           ? {
               label: p.indexStatus.label,
               tone: p.indexStatus.tone,
               reason: p.indexStatus.reason,
               coverage: p.indexStatus.coverage,
+              lastCrawl: p.indexStatus.lastCrawl || "",
             }
           : null,
         queries: Array.isArray(p.queries) ? p.queries.slice(0, 3) : [],
@@ -727,9 +773,10 @@ class SeoStore {
     SeoStore.persist();
   }
 
-  /** Edad de la caché en horas (null si no hay fetchedAt). */
+  /** Edad del barrido GSC completo en horas (ignora sello parcial del radar). */
   static ageHours(host) {
-    const at = Number(SeoStore.get(host)?.fetchedAt || 0);
+    const data = SeoStore.get(host);
+    const at = Number(data?.fullFetchedAt || data?.fetchedAt || 0);
     if (!at) return null;
     return Math.max(0, (Date.now() / 1000 - at) / 3600);
   }
@@ -3058,11 +3105,15 @@ class AppController {
   async loadSeoHost(host, fresh = false) {
     if (!host || this.seoLoadingHosts.has(host)) return;
     this.seoLoadingHosts.add(host);
-    if (host === this.seoHost) {
-      this.dom.btnGscRefresh.disabled = true;
+    const notice = (text) => {
+      if (host !== this.seoHost) return;
       this.dom.seoNotice.hidden = false;
       this.dom.seoNotice.className = "notice";
-      this.dom.seoNotice.textContent = "Consultando Search Console…";
+      this.dom.seoNotice.textContent = text;
+    };
+    if (host === this.seoHost) {
+      this.dom.btnGscRefresh.disabled = true;
+      notice(fresh ? "1/4 Search Console completo…" : "Consultando Search Console…");
     }
     try {
       SeoStore.set(host, await GscModule.site(host, fresh));
@@ -3076,9 +3127,28 @@ class AppController {
       this.renderStats();
       this.renderAgenda();
     }
-    // Secuencial a propósito: en paralelo con el análisis de páginas compite por el límite de 60s del proxy.
-    if (fresh) this.loadKeywords(host, true);
-    this.loadGbpHost(host, fresh);
+    // Secuencial: Keywords → Maps → contexto GA4/PSI/Repo → status auditoría.
+    if (fresh) {
+      notice("2/4 Keywords…");
+      await this.loadKeywords(host, true);
+      notice("3/4 Google Maps…");
+      await this.loadGbpHost(host, true);
+      notice("4/4 Analytics, PageSpeed y repo…");
+      try {
+        await SeoAuditModule.refreshContext(host, this.githubRepoForHost(host), true);
+      } catch (err) {
+        if (host === this.seoHost) {
+          this.showToast(err.message || "Contexto GA4/PSI incompleto", 4200);
+        }
+      }
+      await this.refreshAuditStatus();
+      if (host === this.seoHost) {
+        this.dom.seoNotice.hidden = true;
+        this.showToast("Sitio actualizado · frescura por fuente en el plan");
+      }
+    } else {
+      this.loadGbpHost(host, false);
+    }
   }
 
   async loadGbpHost(host, fresh = false) {
@@ -3563,6 +3633,7 @@ class AppController {
     }
     this.dom.cursorAuditStatus.textContent = parts.join(" · ");
     const coverage = status?.coverage || audit.coverage?.sources || {};
+    const freshness = status?.freshness || {};
     const sourceLabels = [
       ["gsc", "Search Console"],
       ["ga4", "Analytics"],
@@ -3572,6 +3643,7 @@ class AppController {
       ["keywords", "Keywords"],
       ["keywordsAi", "Keywords IA"],
       ["gbp", "Google Maps"],
+      ["plan", "Plan"],
     ];
     const coverageEl = this.dom.cursorAuditCoverage;
     if (coverageEl) {
@@ -3580,14 +3652,39 @@ class AppController {
     if (!coverageEl.hidden) {
       sourceLabels.forEach(([key, label]) => {
         const chip = document.createElement("span");
+        const fr = freshness[key] || {};
         const gbpLive = key === "gbp" && Boolean(this.gbpData.get(this.seoHost)?.gbp?.ok);
         const on = Boolean(
           coverage[key]
           || (key === "keywordsAi" && (audit.keywordsAi?.insights || audit.insights?.keywords))
+          || (key === "plan" && audit.ready)
           || gbpLive
         );
-        chip.className = on ? "is-on" : "is-off";
-        chip.textContent = `${on ? "✓" : "○"} ${label}`;
+        const state = fr.state || (on ? "fresh" : "missing");
+        chip.className = on ? `is-on is-${state}` : "is-off";
+        let ageBit = "";
+        if (key === "dom" && fr.done != null) {
+          ageBit = ` ${fr.done}/${fr.total || "—"}`;
+          if (fr.newestUrlAt) ageBit += ` · ${SeoAuditModule.fmtStampShort(fr.newestUrlAt)}`;
+        } else if (key === "repo" && fr.commitSha) {
+          ageBit = ` @${String(fr.commitSha).slice(0, 7)}`;
+          if (fr.updatedAt) ageBit += ` · ${SeoAuditModule.fmtStampShort(fr.updatedAt)}`;
+        } else if (key === "gsc" && fr.isPartialRadar) {
+          ageBit = ` parcial · ${SeoAuditModule.fmtStampShort(fr.radarRefreshedAt || fr.updatedAt)}`;
+        } else if (fr.updatedAt) {
+          ageBit = ` · ${SeoAuditModule.fmtStampShort(fr.updatedAt)}`;
+        } else if (key === "keywordsAi" && (audit.keywordsAi?.generatedAt || fr.aiGeneratedAt)) {
+          ageBit = ` · ${SeoAuditModule.fmtStampShort(audit.keywordsAi?.generatedAt || fr.aiGeneratedAt)}`;
+        } else if (key === "plan" && audit.generatedAt) {
+          ageBit = ` · ${SeoAuditModule.fmtStampShort(audit.generatedAt)}`;
+        }
+        chip.textContent = `${on ? "✓" : "○"} ${label}${ageBit}`;
+        const tipParts = [label];
+        if (fr.updatedAt) tipParts.push(SeoAuditModule.fmtStamp(fr.updatedAt));
+        if (fr.fullFetchedAt) tipParts.push(`completo ${SeoAuditModule.fmtStamp(fr.fullFetchedAt)}`);
+        if (fr.radarRefreshedAt) tipParts.push(`radar ${SeoAuditModule.fmtStamp(fr.radarRefreshedAt)}`);
+        if (state && state !== "missing") tipParts.push(state);
+        chip.title = tipParts.join(" · ");
         coverageEl.appendChild(chip);
       });
       if (coverage.ga4 && !coverage.keyEvents) {
@@ -3747,16 +3844,53 @@ class AppController {
       if (statusKey === "verified") {
         const verified = document.createElement("span");
         verified.className = "seo-tag is-up";
-        verified.textContent = "Comprobado";
+        const vAt = Number(c.verifiedAt || 0);
+        verified.textContent = vAt
+          ? `Comprobado ${SeoAuditModule.fmtStampShort(vAt)}`
+          : "Comprobado";
+        if (vAt) verified.title = SeoAuditModule.fmtStamp(vAt);
         tags.appendChild(verified);
       } else if (statusKey === "applied") {
         const pending = document.createElement("span");
         pending.className = "seo-tag";
+        const aAt = Number(c.appliedAt || 0);
         const manualHint = /google|maps|gbp|fotograf|photo|reseñ|business profile|ficha/i.test(
           `${c.titulo || ""} ${c.url || ""} ${c.archivo || ""}`
         ) || (!c.url && !c.archivo);
-        pending.textContent = manualHint ? "Manual · sin auto-check" : "Pendiente verificar";
+        pending.textContent = manualHint
+          ? "Manual · sin auto-check"
+          : aAt
+            ? `Hecho ${SeoAuditModule.fmtStampShort(aAt)}`
+            : "Pendiente verificar";
+        if (aAt) pending.title = SeoAuditModule.fmtStamp(aAt);
         tags.appendChild(pending);
+      }
+      // Rastreo Google pendiente: lastCrawl anterior a verified/applied.
+      const crawlPending = (() => {
+        if (!c.url || !seo?.pages) return false;
+        const page = seo.pages.find((p) => p.url === c.url || GscModule.pagePath(p.url) === GscModule.pagePath(c.url));
+        const lastCrawl = page?.indexStatus?.lastCrawl || page?.lastCrawl || "";
+        const crawlTs = lastCrawl ? Date.parse(lastCrawl) / 1000 : 0;
+        const markAt = Number(c.verifiedAt || c.appliedAt || 0);
+        return markAt > 0 && crawlTs > 0 && crawlTs < markAt;
+      })();
+      if (crawlPending) {
+        const crawl = document.createElement("button");
+        crawl.type = "button";
+        crawl.className = "seo-tag is-push cursor-audit__crawl-btn";
+        crawl.textContent = "Pendiente rastreo Google";
+        crawl.title = "El HTML ya cambió pero Google aún no volvió a rastrear. Pedí inspección.";
+        crawl.addEventListener("click", async (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          try {
+            await GscModule.indexUrls({ host, urls: [c.url] });
+            this.showToast("Solicitud de indexación enviada");
+          } catch (err) {
+            this.showToast(err.message || "No se pudo pedir indexación", 4200);
+          }
+        });
+        tags.appendChild(crawl);
       }
       top.append(strong, tags);
       li.append(checkLabel, top);
@@ -4595,19 +4729,23 @@ class AppController {
 
     if (range?.start) {
       const label = period?.label || "28 días";
-      const ageH = SeoStore.ageHours(this.seoHost);
+      const fullAt = Number(data.fullFetchedAt || data.fetchedAt || 0);
+      const radarAt = Number(data.radarRefreshedAt || 0);
+      const partial = Boolean(data.isPartialRadar || data.radarRefresh);
       let cacheLabel = "";
-      if (ageH != null) {
-        cacheLabel =
-          ageH < 1
-            ? " · actualizado hace min"
-            : ageH < 24
-              ? ` · caché ${ageH.toFixed(ageH < 10 ? 1 : 0)}h`
-              : ` · caché ${Math.round(ageH / 24)}d`;
+      if (partial && radarAt > 0 && fullAt > 0) {
+        cacheLabel = ` · parcial radar ${SeoAuditModule.fmtStampShort(radarAt)} · completo ${SeoAuditModule.fmtStampShort(fullAt)}`;
+      } else if (fullAt > 0) {
+        cacheLabel = ` · actualizado ${SeoAuditModule.fmtStamp(fullAt)}`;
       } else if (data.cached) {
         cacheLabel = " · caché";
       }
       this.dom.seoRange.textContent = `${label} · ${range.start} → ${range.end}${cacheLabel}`;
+      if (fullAt > 0) {
+        this.dom.seoRange.title = partial
+          ? `Radar: ${SeoAuditModule.fmtStamp(radarAt)}\nBarrido completo: ${SeoAuditModule.fmtStamp(fullAt)}`
+          : `Barrido completo: ${SeoAuditModule.fmtStamp(fullAt)}`;
+      }
     }
 
     this.dom.seoClicks.textContent = GscModule.fmt(totals.clicks);

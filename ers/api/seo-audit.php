@@ -9,6 +9,7 @@
  * POST action=mark-applied     → check “Hecho” en un cambio del plan
  * POST action=unmark-applied   → quitar el check
  * POST action=verify-applied   → releer HTML y pasar a verified lo que ya no detecta el motor
+ * POST action=refresh-context  → refresca GA4/PSI/Repo HEAD + reconstruye dossier
  *
  * Credenciales GitHub: data/github.json → { "token": "ghp_..." }
  */
@@ -31,7 +32,7 @@ const SEO_AUDIT_DOM_TTL = 604800; // 7 días: re-scrape si el HTML cambió de fi
 const SEO_AUDIT_REPO_TTL = 21600; // 6 h
 const SEO_AUDIT_REPO_BYTES = 110000;
 const SEO_AUDIT_AI_TIMEOUT = 75;
-const SEO_AUDIT_VERSION = '2026.11.16-checks';
+const SEO_AUDIT_VERSION = '2026.11.21-tuning';
 
 if ($seoAuditStandalone) {
     header('X-Content-Type-Options: nosniff');
@@ -486,6 +487,8 @@ function seoAuditVerifyApplied(string $dataDir, string $host): array
         $touch = seoAuditTouchDom($dataDir, $host, array_values(array_unique($urls)));
         $touched = (int) ($touch['touched'] ?? count($urls));
     }
+    // HTML nuevo debe invalidar el dossier empaquetado para no leer sellos viejos.
+    seoAuditInvalidateDossier($dataDir, $host);
     // Solo relee cachés (HTML tocado arriba). Evita el dossierBuild completo que corta por timeout.
     $dossier = dossierRead($dataDir, $host);
     $findings = !empty($dossier['ok']) ? findingsDetect($dossier) : [];
@@ -676,9 +679,10 @@ function seoAuditDomProgress(array $domCache, array $urls): array
     $now = time();
     foreach ($urls as $url) {
         $row = $pages[$url] ?? null;
-        // h1Count marca el scrape ampliado: sin ese campo hay que releer.
+        // mainWordCount marca el scrape profundo 2026.11.21; sin eso hay que releer.
         $fresh = is_array($row)
             && array_key_exists('h1Count', $row)
+            && array_key_exists('mainWordCount', $row)
             && (($row['fetchedAt'] ?? 0) > 0)
             && ($now - (int) $row['fetchedAt']) < SEO_AUDIT_DOM_TTL;
         if ($fresh) {
@@ -1573,57 +1577,138 @@ function seoAuditRememberCycle(string $dataDir, string $host, array $dossier, ar
     gscWriteJson(seoAuditCycleFile($dataDir, $host), ['host' => $host, 'snapshots' => $snaps]);
 }
 
-/** Title, meta y H1 reales de las URLs que el plan va a tocar. */
+/** Title, meta y H1 reales — legado; preferí Page SEO Cards. */
 function seoAuditDomBrief(array $dossier, array $findings): string
 {
-    $paths = [];
-    foreach ($findings as $finding) {
-        if ((int) ($finding['severity'] ?? 0) < 2) {
-            continue;
+    $cards = dossierBuildPageCards($dossier, $findings, is_array($dossier['keywords'] ?? null) ? $dossier['keywords'] : [], 12);
+    return dossierPageCardsBlock($cards);
+}
+
+/**
+ * Prompt Cursor único: estrategia Gemini + appendix cerrado una sola vez (sin duplicar bloques).
+ */
+function seoAuditAssembleCursorPrompt(
+    string $host,
+    array $insights,
+    array $findings,
+    array $dossier,
+    array $cards,
+    string $delta,
+    bool $codeChanged
+): string {
+    $parts = [];
+    $geminiPrompt = trim((string) ($insights['cursorPrompt'] ?? ''));
+    $resumen = trim((string) ($insights['resumenSimple'] ?? ''));
+    if ($geminiPrompt !== '') {
+        $parts[] = $geminiPrompt;
+    } else {
+        $parts[] = "Sos un agente de Cursor trabajando en el sitio {$host}.";
+        if ($resumen !== '') {
+            $parts[] = "Objetivo de esta pasada:\n" . $resumen;
         }
-        $path = dossierNormPath((string) ($finding['path'] ?? ''));
-        if ($path !== '') {
-            $paths[$path] = true;
-        }
-        if (count($paths) >= 10) {
-            break;
-        }
-    }
-    foreach ($dossier['keywords']['buckets']['striking'] ?? [] as $row) {
-        if (count($paths) >= 12 || !is_array($row)) {
-            continue;
-        }
-        $path = dossierNormPath((string) ($row['page'] ?? ''));
-        if ($path !== '') {
-            $paths[$path] = true;
-        }
-    }
-    if ($paths === []) {
-        $paths['/'] = true;
+        $parts[] = "Implementá los cambios listados abajo en orden, sin inventar archivos.";
     }
 
-    $dom = is_array($dossier['dom'] ?? null) ? $dossier['dom'] : [];
-    $lines = [];
-    foreach (array_keys($paths) as $path) {
-        $row = $dom[$path] ?? null;
-        if (!is_array($row) || empty($row['ok'])) {
-            continue;
+    $cambios = is_array($insights['cambios'] ?? null) ? $insights['cambios'] : [];
+    if ($cambios !== []) {
+        $parts[] = "## Cambios a ejecutar (orden estricto)";
+        foreach ($cambios as $i => $c) {
+            if (!is_array($c)) {
+                continue;
+            }
+            $n = $i + 1;
+            $line = "{$n}. " . (string) ($c['titulo'] ?? '');
+            if (($c['porque'] ?? '') !== '') {
+                $line .= "\n   Por qué: " . $c['porque'];
+            }
+            if (($c['archivo'] ?? '') !== '') {
+                $line .= "\n   Archivo: " . $c['archivo'];
+            }
+            if (($c['url'] ?? '') !== '') {
+                $line .= "\n   URL: " . $c['url'];
+            }
+            if (($c['findingId'] ?? '') !== '') {
+                $line .= "\n   findingId: " . $c['findingId'];
+            }
+            $parts[] = $line;
         }
-        $schemas = is_array($row['schemas'] ?? null) ? implode(', ', array_slice($row['schemas'], 0, 6)) : '';
-        $lines[] = $path
-            . "\n  title: " . (string) ($row['title'] ?? '')
-            . "\n  meta: " . (string) ($row['meta'] ?? '')
-            . "\n  h1: " . (string) ($row['h1'] ?? '')
-            . "\n  palabras: " . (int) ($row['wordCount'] ?? 0)
-            . ($schemas !== '' ? "\n  schema: " . $schemas : '');
     }
-    return $lines === []
-        ? 'Sin HTML scrapeado de las URLs con hallazgos. No inventes el title actual.'
-        : implode("\n", $lines);
+
+    $parts[] = "## Page SEO Cards (contexto real — anti-regresión)";
+    $parts[] = dossierPageCardsBlock($cards);
+
+    $parts[] = "## Hallazgos pendientes (lista cerrada, no inventar otros)";
+    $parts[] = findingsCursorBlock($findings);
+
+    $parts[] = "## NAP oficial Google Business Profile (no inventar)";
+    $parts[] = seoAuditGbpBlock($dossier);
+
+    if ($codeChanged && $delta !== '') {
+        $parts[] = "## Código ya avanzado (no reimplementar)";
+        $parts[] = $delta;
+    }
+
+    if (empty($dossier['sources']['keyEvents'])) {
+        $parts[] = trim(seoAuditMeasurementNote());
+    }
+
+    $parts[] = "## Reglas finales";
+    $parts[] = "- Conservá las queries de PROTEGER en cada Card al reescribir title/H1/meta.\n"
+        . "- No inventes archivos, URLs, keywords ni NAP.\n"
+        . "- Un cambio por URL cuando haya bloque CORREGIR AHORA.\n"
+        . "- Criterios de aceptación: qué debe verse en la URL / Search Console / JSON-LD después.";
+
+    return ersClip(trim(implode("\n\n", array_filter($parts, static fn ($p) => trim((string) $p) !== ''))), 28000);
+}
+
+/** Invalida dossier-<md5>.json para forzar rebuild en la próxima lectura. */
+function seoAuditInvalidateDossier(string $dataDir, string $host): void
+{
+    $file = dossierCacheFile($dataDir, $host);
+    if (is_file($file)) {
+        @unlink($file);
+    }
+}
+
+/**
+ * Refresco inteligente de contexto (GA4/PSI/GBP + HEAD repo ligero) sin re-scrapear todo el HTML.
+ */
+function seoAuditRefreshContext(string $dataDir, string $host, string $repoRaw = '', bool $fresh = true): array
+{
+    @set_time_limit(55);
+    $sa = gscLoadServiceAccount($dataDir, $dataDir . '/gsc-service-account.json');
+    $dossier = dossierBuild($dataDir, $sa, $host, $fresh, true);
+
+    $repoNote = '';
+    $repoRaw = seoAuditResolveRepo($host, $repoRaw);
+    $parsed = seoAuditParseRepo($repoRaw);
+    if ($parsed['slug'] !== '') {
+        try {
+            seoAuditRunRepoScan($dataDir, $host, $repoRaw, false);
+            $repoNote = 'Repo verificado';
+        } catch (Throwable $e) {
+            $repoNote = 'Repo: ' . ersClip($e->getMessage(), 120);
+        }
+    }
+
+    seoAuditInvalidateDossier($dataDir, $host);
+    $dossier = dossierBuild($dataDir, $sa, $host, false, false);
+
+    return [
+        'ok' => true,
+        'host' => $host,
+        'dossierOk' => !empty($dossier['ok']),
+        'freshness' => is_array($dossier['freshness'] ?? null)
+            ? $dossier['freshness']
+            : dossierFreshnessLedger($dataDir, $host, $dossier),
+        'sources' => $dossier['sources'] ?? [],
+        'repoNote' => $repoNote,
+        'gaMessage' => (string) ($dossier['gaMeta']['message'] ?? ''),
+    ];
 }
 
 /** Extractos del repo ya descargados. El scan los guardaba y el prompt no los usaba. */
-function seoAuditRepoExcerpt(array $repo, array $findings): string
+function seoAuditRepoExcerpt(array $repo, array $findings, array $cards = []): string
 {
     $files = is_array($repo['files'] ?? null) ? $repo['files'] : [];
     if ($files === []) {
@@ -1640,6 +1725,19 @@ function seoAuditRepoExcerpt(array $repo, array $findings): string
             $needles[$file] = true;
         }
         $slug = strtolower(basename(trim((string) ($finding['path'] ?? ''), '/')));
+        if ($slug !== '' && $slug !== '/') {
+            $needles[$slug] = true;
+        }
+    }
+    foreach ($cards as $card) {
+        if (!is_array($card)) {
+            continue;
+        }
+        $file = strtolower(str_replace('\\', '/', (string) ($card['targetFile'] ?? '')));
+        if ($file !== '') {
+            $needles[$file] = true;
+        }
+        $slug = strtolower(basename(trim((string) ($card['path'] ?? ''), '/')));
         if ($slug !== '' && $slug !== '/') {
             $needles[$slug] = true;
         }
@@ -1909,8 +2007,8 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
         '## PATHS DEL REPO',
         $paths === [] ? 'Sin repo. El prompt debe decir que se aplique en el proyecto local abierto en Cursor.' : implode("\n", array_map(static fn ($p) => '- ' . $p, $paths)),
         '',
-        '## HTML ACTUAL DE LAS URLS AFECTADAS (title/meta/h1 reales; no inventes otro title actual)',
-        seoAuditDomBrief($dossier, $findings),
+        '## PAGE SEO CARDS (radiografía por URL: métricas, queries a PROTEGER/CAPTURAR, DOM real)',
+        dossierPageCardsBlock($pageCards = dossierBuildPageCards($dossier, $findings, $kw, 12)),
         '',
         '## CICLO ANTERIOR',
         seoAuditCycleBlock($dataDir, $host, $dossier),
@@ -1921,7 +2019,7 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
         '## CÓDIGO DESDE EL ÚLTIMO PLAN',
         $delta,
     ];
-    $excerpt = seoAuditRepoExcerpt($repo, $findings);
+    $excerpt = seoAuditRepoExcerpt($repo, $findings, $pageCards);
     if ($excerpt !== '') {
         $parts[] = '';
         $parts[] = '## CÓDIGO REAL DEL REPO (editá esto; no inventes archivos que no estén acá)';
@@ -1936,29 +2034,21 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
     $system = <<<TXT
 Sos un tech lead SEO. Tu trabajo es SUBIR DE NIVEL el sitio en cada pasada: más demanda capturada, mejor on-page, más contactos y coherencia local (Maps ↔ web).
 Los problemas YA están en HALLAZGOS. La estrategia de queries YA está en CRECIMIENTO POR QUERIES y en los buckets. El NAP oficial YA está en DATOS REALES GOOGLE BUSINESS PROFILE.
+Las PAGE SEO CARDS traen el estado real por URL (title/meta/H1/H2, queries a PROTEGER y a CAPTURAR, inlinks). No inventes otro title actual.
+REGLA ANTI-REGRESIÓN: al proponer title/H1/meta, conservá las queries de PROTEGER de esa Card y sumá CAPTURAR sin borrar lo que ya trae clics.
 No descubras otros problemas. No inventes métricas, queries, URLs, teléfonos, direcciones ni archivos.
-Si hay HTML ACTUAL, el title/meta que proponés parte de ese texto, no de uno imaginado.
-Si hay CÓDIGO REAL DEL REPO, el cursorPrompt cita el archivo y el cambio concreto sobre ese código. No pidas reescribir un archivo cuyo contenido no viste.
-Si hay CICLO ANTERIOR, no repitas un cambio ya pedido ni una tarea ya cerrada: proponé el siguiente escalón y decí si los clics subieron o no.
-Si MEJORAS YA MARCADAS lista un findingId o título, no lo pongas en cambios ni en cursorPrompt.
-Si CÓDIGO DESDE EL ÚLTIMO PLAN dice que el commit cambió, ese código ya está hecho: no lo pongas en cambios ni en cursorPrompt. Si el HTML todavía muestra el problema, es pendiente de publicar: una frase en el resumen y el lugar del cambio se usa para el siguiente escalón.
+Si hay CÓDIGO REAL DEL REPO, citá el archivo y el cambio concreto. No pidas reescribir un archivo cuyo contenido no viste.
+Si hay CICLO ANTERIOR, no repitas un cambio ya pedido ni una tarea ya cerrada.
+Si MEJORAS YA MARCADAS lista un findingId o título, no lo pongas en cambios.
+Si CÓDIGO DESDE EL ÚLTIMO PLAN dice que el commit cambió, ese código ya está hecho.
 Respondés en español neutro-chileno, directo.
 
 Salida JSON:
-- resumenSimple: 3 a 6 frases, sin jerga (nada de CTR, LCP, indexación). Qué nivel se gana (tráfico / autoridad de página / contactos / presencia local) y por qué le importa al negocio.
-- cambios: máx 12, en orden de ejecución. Mezclá hallazgos técnicos con acciones de keywords cuando apunten a la misma URL. url y archivo solo si aparecen en los datos; si no, "". findingId debe copiar el id exacto del bloque HALLAZGOS cuando el cambio lo cubre; si no aplica, "".
-- cursorPrompt: prompt para Cursor Agent orientado a crecimiento, en este orden:
-  1) Contexto del sitio + objetivo de nivel (qué mejora esta pasada)
-  2) Si hay bloque CORREGIR AHORA: indexación pública primero (una URL por cambio). No postergar. No indexes login, gracias, admin, carrito ni preview.
-  3) SEO local: si hay GBP, inyectar/corregir JSON-LD LocalBusiness (o subtipo) con el NAP EXACTO de Maps; alinear teléfonos/dirección en footer/contacto si hay napPhoneMismatch; potenciar landings locales con ubicación real + prueba social (rating/reseñas) solo con datos del bloque GBP
-  4) Crecimiento por queries: implementar las ACCIONES DE CRECIMIENTO (title/meta, ampliar contenido, enlazado, canibalización, contenido nuevo). Citá queries textuales del bloque. Amarrá cada acción a un archivo del repo si hay path.
-  5) Resto de hallazgos (on-page, velocidad, conversión, local), ordenados por archivo, citando kind/id
-  6) Criterios de aceptación comprobables (qué debe verse en la URL, en Search Console o en el JSON-LD después)
-  7) Reglas: no inventar archivos, rutas, keywords ni NAP; no tocar secretos; preguntar si falta un path
-  8) Si no hay key events, sección Medición (click_whatsapp, phone_click, generate_lead)
+- resumenSimple: 3 a 6 frases, sin jerga. Qué nivel se gana y por qué importa al negocio.
+- cambios: máx 12, en orden. Incluí before→after concreto para title/meta/H1/H2/enlaces cuando aplique. url y archivo solo si aparecen en los datos. findingId = id exacto de HALLAZGOS cuando corresponde.
+- cursorPrompt: instrucciones cortas para Cursor Agent (contexto + orden de trabajo + criterios de aceptación). NO copies literales los bloques HALLAZGOS/GBP/CRECIMIENTO: el sistema los anexará una sola vez. Enfocate en el plan de ejecución quirúrgico por archivo/URL.
 
-Cubrí severidad 3 y 2 de hallazgos, y todas las acciones de keywords de impacto alto/medio, salvo lo que el commit nuevo ya cubre.
-Cada pasada debe dejar el sitio en un nivel más alto que la anterior: priorizá quick wins de demanda + correcciones que desbloquean indexación + coherencia NAP.
+Cubrí severidad 3 y 2, y acciones de keywords de impacto alto/medio, salvo lo que el commit nuevo ya cubre.
 TXT;
 
     $payload = [
@@ -2012,16 +2102,16 @@ TXT;
     }
     $insights['cambios'] = seoAuditAnnotateCambios($insights['cambios'], $dataDir, $host);
     seoAuditRememberCycle($dataDir, $host, $dossier, $findings, $insights);
-    $closed = "\n\n## Hallazgos detectados (lista cerrada, no omitir)\n" . findingsCursorBlock($findings);
-    if ($codeChanged && $delta !== '') {
-        $closed = "\n\n## CÓDIGO ACTUAL (no reimplementar lo ya commiteado)\n" . $delta . $closed;
-    }
-    $closed .= "\n\n## DATOS REALES GOOGLE BUSINESS PROFILE (NAP OFICIAL, no inventar)\n" . seoAuditGbpBlock($dossier);
-    $closed .= "\n\n## Crecimiento por queries (lista cerrada, no omitir)\n" . gscKeywordsGrowthBlock($kwAi);
-    if (empty($dossier['sources']['keyEvents'])) {
-        $closed = seoAuditMeasurementNote() . $closed;
-    }
-    $insights['cursorPrompt'] = ersClip(trim((string) ($insights['cursorPrompt'] ?? '') . $closed), 28000);
+    // Un solo prompt ensamblado: sin duplicar HALLAZGOS/GBP/queries al final.
+    $insights['cursorPrompt'] = seoAuditAssembleCursorPrompt(
+        $host,
+        $insights,
+        $findings,
+        $dossier,
+        $pageCards,
+        $delta,
+        $codeChanged
+    );
     if ($hasKwAi) {
         $insights['keywords'] = $kwAi['insights'];
     }
@@ -2194,6 +2284,15 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
             'applied' => $appliedItems,
         ],
         'canGenerate' => $domProgress['done'] > 0 && $hasSite,
+        'freshness' => dossierFreshnessLedger($dataDir, $host, is_array($dossier) ? $dossier : [], [
+            'cursor' => $hasCursor ? $cursor : [],
+        ]),
+        'gscMeta' => [
+            'fullFetchedAt' => (int) ($site['fullFetchedAt'] ?? $site['fetchedAt'] ?? 0),
+            'radarRefreshedAt' => (int) ($site['radarRefreshedAt'] ?? 0),
+            'isPartialRadar' => !empty($site['radarRefresh']),
+            'fetchedAt' => (int) ($site['fetchedAt'] ?? 0),
+        ],
     ];
 }
 
@@ -2325,7 +2424,21 @@ try {
         seoAuditJson(seoAuditVerifyApplied($dataDir, $host));
     }
 
-    seoAuditJson(['error' => 'Acción no reconocida. Usá status, dom-batch, dom-touch, repo-scan, cursor-audit, mark-applied, unmark-applied o verify-applied.'], 400);
+    if ($action === 'refresh-context') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            seoAuditJson(['error' => 'Método no permitido'], 405);
+        }
+        $input = seoAuditInput();
+        $host = gscSanitizeHost((string) ($input['host'] ?? ''));
+        if ($host === '') {
+            seoAuditJson(['error' => 'Indica el dominio del cliente'], 400);
+        }
+        $repo = (string) ($input['repo'] ?? '');
+        $fresh = !isset($input['fresh']) || in_array((string) ($input['fresh'] ?? ''), ['1', 'true'], true) || ($input['fresh'] ?? null) === true;
+        seoAuditJson(seoAuditRefreshContext($dataDir, $host, $repo, $fresh));
+    }
+
+    seoAuditJson(['error' => 'Acción no reconocida. Usá status, dom-batch, dom-touch, repo-scan, cursor-audit, mark-applied, unmark-applied, verify-applied o refresh-context.'], 400);
 } catch (Throwable $e) {
     seoAuditJson(['error' => $e->getMessage()], 500);
 }

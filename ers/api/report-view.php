@@ -11,7 +11,7 @@ if (!defined('ERS_LIBRARY')) {
     exit;
 }
 
-const REPORT_HTML_VERSION = '2026.11.16-ers';
+const REPORT_HTML_VERSION = '2026.11.21-tuning';
 
 function reportExtra(string $lang): array
 {
@@ -1042,6 +1042,68 @@ function reportCompose(string $dataDir, array $sa, string $host, string $lang, b
         $dossier['fingerprint'] ?? '',
     ], JSON_UNESCAPED_UNICODE) ?: '');
 
+    $pages = is_array($dossier['pages'] ?? null) ? $dossier['pages'] : [];
+    $rising = $pages;
+    $falling = $pages;
+    usort($rising, static fn ($a, $b) => ((int) ($b['deltaClicks'] ?? 0) <=> (int) ($a['deltaClicks'] ?? 0)));
+    usort($falling, static fn ($a, $b) => ((int) ($a['deltaClicks'] ?? 0) <=> (int) ($b['deltaClicks'] ?? 0)));
+    $briefPages = static function (array $rows, int $limit, bool $winners): array {
+        $out = [];
+        foreach ($rows as $p) {
+            if (!is_array($p)) {
+                continue;
+            }
+            $delta = (int) ($p['deltaClicks'] ?? 0);
+            if ($winners && $delta <= 0) {
+                continue;
+            }
+            if (!$winners && $delta >= 0) {
+                continue;
+            }
+            $out[] = [
+                'path' => (string) ($p['path'] ?? ''),
+                'clicks' => (int) ($p['clicks'] ?? 0),
+                'delta' => $delta,
+                'query' => (string) ($p['query'] ?? ''),
+            ];
+            if (count($out) >= $limit) {
+                break;
+            }
+        }
+        return $out;
+    };
+    $kwOpp = [];
+    foreach ($dossier['keywords']['buckets']['striking'] ?? [] as $row) {
+        if (!is_array($row) || count($kwOpp) >= 5) {
+            continue;
+        }
+        $kwOpp[] = [
+            'q' => (string) ($row['q'] ?? ''),
+            'gain' => (int) ($row['gain'] ?? 0),
+            'position' => round((float) ($row['position'] ?? 0), 1),
+            'path' => dossierNormPath((string) ($row['page'] ?? '')),
+        ];
+    }
+    $appliedNote = [];
+    if (!function_exists('seoAuditReadApplied') && is_file(__DIR__ . '/seo-audit.php')) {
+        require_once __DIR__ . '/seo-audit.php';
+    }
+    if (function_exists('seoAuditReadApplied')) {
+        foreach (array_slice(seoAuditReadApplied($dataDir, $host)['items'] ?? [], 0, 5) as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $st = (string) ($item['status'] ?? '');
+            if (!in_array($st, ['applied', 'verified'], true)) {
+                continue;
+            }
+            $appliedNote[] = [
+                'title' => (string) ($item['titulo'] ?? $item['title'] ?? ''),
+                'status' => $st,
+            ];
+        }
+    }
+
     $narrative = reportNarrative($dataDir, $host, $lang, [
         'client' => $name,
         'tone' => $tone,
@@ -1051,6 +1113,22 @@ function reportCompose(string $dataDir, array $sa, string $host, string $lang, b
             'delta' => $k['delta']['text'] ?? '',
         ], $kpis),
         'findings' => $briefFindings,
+        'winners' => $briefPages($rising, 3, true),
+        'losers' => $briefPages($falling, 3, false),
+        'keywordOpportunities' => $kwOpp,
+        'applied' => $appliedNote,
+        'contacts' => (int) ($dossier['ga']['contacts'] ?? 0),
+        'maps' => !empty($dossier['sources']['gbp'])
+            ? [
+                'name' => (string) ($dossier['gbp']['displayName'] ?? ''),
+                'rating' => $dossier['gbp']['rating'] ?? null,
+                'reviews' => (int) ($dossier['gbp']['userRatingCount'] ?? 0),
+            ]
+            : null,
+        'freshness' => [
+            'gsc' => (int) ($dossier['gscMeta']['fullFetchedAt'] ?? 0),
+            'dom' => (int) ($dossier['domProgress']['updatedAt'] ?? 0),
+        ],
     ], $signature, $fresh);
 
     $found = [];

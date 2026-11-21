@@ -797,12 +797,16 @@ function gscMergePages(array ...$groups): array
                 if (($out[$seen[$key]]['label'] ?? '') === '' && !empty($page['label'])) {
                     $out[$seen[$key]]['label'] = trim((string) $page['label']);
                 }
+                if (($out[$seen[$key]]['lastmod'] ?? '') === '' && !empty($page['lastmod'])) {
+                    $out[$seen[$key]]['lastmod'] = trim((string) $page['lastmod']);
+                }
                 continue;
             }
             $seen[$key] = count($out);
             $out[] = [
                 'url' => $url,
                 'label' => trim((string) ($page['label'] ?? '')),
+                'lastmod' => trim((string) ($page['lastmod'] ?? '')),
             ];
         }
     }
@@ -901,7 +905,11 @@ function gscParseSitemapXml(string $xml): array
             if ($loc === '' || !preg_match('#^https?://#i', $loc) || gscIsAgencyHost($loc)) {
                 continue;
             }
-            $urls[] = $loc;
+            $lastmod = trim((string) ($entry->lastmod ?? ''));
+            $urls[] = [
+                'url' => $loc,
+                'lastmod' => $lastmod !== '' ? $lastmod : '',
+            ];
         }
     } elseif ($root === 'sitemapindex') {
         foreach ($children->sitemap as $entry) {
@@ -940,11 +948,23 @@ function gscDiscoverPagesFromSitemap(array $candidates, float $deadline = INF): 
             if ($source === '') {
                 $source = $current;
             }
-            foreach ($parsed['urls'] as $url) {
+            foreach ($parsed['urls'] as $entry) {
                 if (count($pages) >= GSC_MAX_SITEMAP_URLS) {
                     break;
                 }
-                $pages[] = ['url' => $url, 'label' => ''];
+                if (is_string($entry)) {
+                    $pages[] = ['url' => $entry, 'label' => '', 'lastmod' => ''];
+                    continue;
+                }
+                $loc = (string) ($entry['url'] ?? '');
+                if ($loc === '') {
+                    continue;
+                }
+                $pages[] = [
+                    'url' => $loc,
+                    'label' => '',
+                    'lastmod' => (string) ($entry['lastmod'] ?? ''),
+                ];
             }
             foreach ($parsed['sitemaps'] as $child) {
                 if (!isset($visited[$child]) && count($queue) < 18) {
@@ -2742,19 +2762,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
         $cached = gscReadJson($hostCacheFile, []);
         $fresh = (string) ($_GET['fresh'] ?? '') === '1';
         $cacheTtl = !empty($cached['partial']) ? GSC_PARTIAL_TTL : GSC_CACHE_TTL;
+        $fullAt = (int) ($cached['fullFetchedAt'] ?? $cached['fetchedAt'] ?? 0);
         if (
             !$fresh
-            && isset($cached['fetchedAt'])
+            && $fullAt > 0
             && empty($cached['error'])
-            && (time() - (int) $cached['fetchedAt']) < $cacheTtl
+            && (time() - $fullAt) < $cacheTtl
             && ($cached['pageSig'] ?? '') === $pageSig
+            && empty($cached['radarRefresh'])
         ) {
             $cached['cached'] = true;
+            $cached['fullFetchedAt'] = $fullAt;
             $cached['reportLang'] = gscReportLang((string) ($override['reportLang'] ?? 'es'));
             $cached['ga4Property'] = gscGa4Property((string) ($override['ga4Property'] ?? ''));
             $cached['placeId'] = gscPlaceId((string) ($override['placeId'] ?? ''));
             $cached['placeQuery'] = (string) ($override['placeQuery'] ?? '');
             // Señales locales desde caché GBP (sin red).
+            if (function_exists('gscMergeLocalSignals')) {
+                $cached['signals'] = gscMergeLocalSignals($dataDir, $host, is_array($cached['signals'] ?? null) ? $cached['signals'] : []);
+            }
+            gscJson($cached);
+        }
+        // Radar parcial: sirve la caché si el barrido completo aún está dentro del TTL.
+        if (
+            !$fresh
+            && $fullAt > 0
+            && empty($cached['error'])
+            && (time() - $fullAt) < $cacheTtl
+            && ($cached['pageSig'] ?? '') === $pageSig
+            && !empty($cached['radarRefresh'])
+        ) {
+            $cached['cached'] = true;
+            $cached['fullFetchedAt'] = $fullAt;
+            $cached['isPartialRadar'] = true;
+            $cached['reportLang'] = gscReportLang((string) ($override['reportLang'] ?? 'es'));
+            $cached['ga4Property'] = gscGa4Property((string) ($override['ga4Property'] ?? ''));
+            $cached['placeId'] = gscPlaceId((string) ($override['placeId'] ?? ''));
+            $cached['placeQuery'] = (string) ($override['placeQuery'] ?? '');
             if (function_exists('gscMergeLocalSignals')) {
                 $cached['signals'] = gscMergeLocalSignals($dataDir, $host, is_array($cached['signals'] ?? null) ? $cached['signals'] : []);
             }
@@ -3038,6 +3082,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
                 'previous' => $prev,
                 'delta' => $delta,
                 'queries' => $queries,
+                'lastmod' => (string) ($page['lastmod'] ?? ''),
                 'indexStatus' => is_array($reused) ? ($reused['indexStatus'] ?? null) : null,
                 'indexRequest' => is_array($reused) ? ($reused['indexRequest'] ?? null) : null,
                 'thermometer' => gscThermometer($now, $delta, (float) $totals['ctr']),
@@ -3180,10 +3225,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             ], 200);
         }
 
+        $nowStamp = time();
         $payload = [
             'connected' => true,
             'cached' => false,
-            'fetchedAt' => time(),
+            'fetchedAt' => $nowStamp,
+            'fullFetchedAt' => $nowStamp,
+            'radarRefresh' => false,
+            'radarRefreshedAt' => (int) ($cached['radarRefreshedAt'] ?? 0),
             'pageSig' => $pageSig,
             'host' => $host,
             'version' => GSC_VERSION,
