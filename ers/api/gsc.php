@@ -1188,6 +1188,7 @@ function gscTotalsFromDaily(array $rows): array
 function gscBuildPeriods(array $daily, DateTimeImmutable $end): array
 {
     $defs = [
+        ['id' => '7d', 'label' => '7 días', 'days' => 7],
         ['id' => '28d', 'label' => '28 días', 'days' => 28],
         ['id' => '90d', 'label' => '3 meses', 'days' => 90],
         ['id' => '180d', 'label' => '6 meses', 'days' => 180],

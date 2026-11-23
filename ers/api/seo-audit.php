@@ -6,6 +6,7 @@
  * POST action=dom-batch        → scrape HTML de un lote de URLs del inventario
  * POST action=repo-scan        → lee tree + archivos SEO de un repo GitHub privado
  * POST action=cursor-audit     → plan integral de crecimiento (hallazgos + keywords IA + prompt Cursor)
+ * POST action=radiografia      → radiografía forense 7d (métricas×device + git SEO + narrativa)
  * POST action=mark-applied     → check “Hecho” en un cambio del plan
  * POST action=unmark-applied   → quitar el check
  * POST action=verify-applied   → releer HTML y pasar a verified lo que ya no detecta el motor
@@ -25,6 +26,7 @@ require_once __DIR__ . '/gsc.php';
 require_once __DIR__ . '/lib.php';
 require_once __DIR__ . '/dossier.php';
 require_once __DIR__ . '/findings.php';
+require_once __DIR__ . '/radiografia.php';
 
 const SEO_AUDIT_DOM_BATCH = 18;
 const SEO_AUDIT_DOM_BUDGET = 42;
@@ -2293,6 +2295,32 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
             'isPartialRadar' => !empty($site['radarRefresh']),
             'fetchedAt' => (int) ($site['fetchedAt'] ?? 0),
         ],
+        'radiografia' => seoAuditRadiografiaStatus($dataDir, $host, $repoSha),
+    ];
+}
+
+/** Resumen de caché de radiografía 7d para el status del panel. */
+function seoAuditRadiografiaStatus(string $dataDir, string $host, string $repoSha = ''): array
+{
+    $siteLocal = gscReadJson(gscHostCacheFile($dataDir, $host), []);
+    $gscStamp = (int) ($siteLocal['fullFetchedAt'] ?? $siteLocal['fetchedAt'] ?? 0);
+    $rad = gscReadJson(radiografiaFile($dataDir, $host), []);
+    $ready = ($rad['host'] ?? '') === $host
+        && is_string($rad['markdown'] ?? null)
+        && $rad['markdown'] !== '';
+    $stale = $ready && (
+        (string) ($rad['version'] ?? '') !== RADIOGRAFIA_VERSION
+        || (int) ($rad['gscFetchedAt'] ?? 0) !== $gscStamp
+        || ($repoSha !== '' && (string) ($rad['commitSha'] ?? '') !== '' && (string) ($rad['commitSha'] ?? '') !== $repoSha)
+    );
+    return [
+        'ready' => $ready,
+        'stale' => $stale,
+        'generatedAt' => (int) ($rad['generatedAt'] ?? 0),
+        'narrative' => (string) ($rad['narrative'] ?? ''),
+        'model' => (string) ($rad['model'] ?? ''),
+        'windows' => is_array($rad['windows'] ?? null) ? $rad['windows'] : null,
+        'detectorCount' => is_array($rad['detectors'] ?? null) ? count($rad['detectors']) : 0,
     ];
 }
 
@@ -2385,6 +2413,31 @@ try {
         seoAuditJson(seoAuditRunCursor($dataDir, $host, $fresh));
     }
 
+    if ($action === 'radiografia') {
+        $input = $_SERVER['REQUEST_METHOD'] === 'POST' ? seoAuditInput() : $_GET;
+        $host = gscSanitizeHost((string) ($input['host'] ?? ''));
+        if ($host === '') {
+            seoAuditJson(['error' => 'Indica el dominio del cliente'], 400);
+        }
+        // GET: solo lectura de caché (sin Gemini ni GSC en vivo).
+        if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+            $rad = gscReadJson(radiografiaFile($dataDir, $host), []);
+            if (($rad['host'] ?? '') !== $host || !is_string($rad['markdown'] ?? null) || $rad['markdown'] === '') {
+                seoAuditJson(['ok' => false, 'ready' => false, 'host' => $host, 'markdown' => '']);
+            }
+            $rad['ok'] = true;
+            $rad['ready'] = true;
+            $rad['cached'] = true;
+            seoAuditJson($rad);
+        }
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            seoAuditJson(['error' => 'Método no permitido'], 405);
+        }
+        $repo = (string) ($input['repo'] ?? '');
+        $fresh = in_array((string) ($input['fresh'] ?? ''), ['1', 'true'], true) || ($input['fresh'] ?? null) === true;
+        seoAuditJson(radiografiaRun($dataDir, $host, $repo, $fresh));
+    }
+
     if ($action === 'mark-applied') {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
             seoAuditJson(['error' => 'Método no permitido'], 405);
@@ -2438,7 +2491,7 @@ try {
         seoAuditJson(seoAuditRefreshContext($dataDir, $host, $repo, $fresh));
     }
 
-    seoAuditJson(['error' => 'Acción no reconocida. Usá status, dom-batch, dom-touch, repo-scan, cursor-audit, mark-applied, unmark-applied, verify-applied o refresh-context.'], 400);
+    seoAuditJson(['error' => 'Acción no reconocida. Usá status, dom-batch, dom-touch, repo-scan, cursor-audit, radiografia, mark-applied, unmark-applied, verify-applied o refresh-context.'], 400);
 } catch (Throwable $e) {
     seoAuditJson(['error' => $e->getMessage()], 500);
 }

@@ -2801,6 +2801,55 @@ body {
   justify-content: flex-end;
 }
 
+.radiografia {
+  margin: 18px 0 8px;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(120, 200, 255, 0.22);
+  background: linear-gradient(165deg, rgba(120, 200, 255, 0.07), rgba(7, 8, 15, 0.35) 55%, transparent);
+}
+
+.radiografia.is-busy {
+  opacity: 0.72;
+}
+
+.radiografia__body {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.radiografia__table-wrap {
+  overflow-x: auto;
+}
+
+.radiografia__table {
+  width: 100%;
+  font-size: 12.5px;
+}
+
+.radiografia__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.radiografia__md {
+  margin: 0;
+  padding: 14px;
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.45;
+  border-radius: var(--radius-sm, 8px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.28);
+  color: rgba(255, 255, 255, 0.88);
+}
+
 .cursor-audit__progress {
   display: grid;
   gap: 8px;

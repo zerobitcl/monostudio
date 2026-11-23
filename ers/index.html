@@ -172,6 +172,7 @@
       </div>
 
       <div class="period-toggle" id="seoPeriodToggle" role="tablist" aria-label="Rango de métricas" hidden>
+        <button class="period-toggle__btn" type="button" data-period="7d">7 días</button>
         <button class="period-toggle__btn is-active" type="button" data-period="28d">28 días</button>
         <button class="period-toggle__btn" type="button" data-period="90d">3 meses</button>
         <button class="period-toggle__btn" type="button" data-period="180d">6 meses</button>
@@ -270,6 +271,25 @@
           </div>
         </header>
         <ul class="growth__list" id="growthList"></ul>
+      </section>
+
+      <section class="radiografia" id="radiografiaPanel" hidden aria-labelledby="radiografiaTitle">
+        <header class="kw__head">
+          <div>
+            <h3 id="radiografiaTitle">Radiografía 7 días</h3>
+            <p class="kw__meta" id="radiografiaMeta"></p>
+          </div>
+          <div class="cursor-audit__actions">
+            <button class="btn btn--ghost" id="btnRadiografiaCopy" type="button" disabled>Copiar</button>
+            <button class="btn btn--neon" id="btnRadiografiaGenerate" type="button">Generar radiografía</button>
+          </div>
+        </header>
+        <div class="radiografia__body" id="radiografiaBody" hidden>
+          <div class="radiografia__table-wrap" id="radiografiaTableWrap"></div>
+          <div class="radiografia__chips" id="radiografiaChips"></div>
+          <pre class="radiografia__md" id="radiografiaMarkdown"></pre>
+        </div>
+        <p class="signal-empty" id="radiografiaEmpty">Diagnóstico forense 7d vs 7d: CTR×dispositivo, commits de title/meta e indexación. No reemplaza el plan de Cursor.</p>
       </section>
 
       <section class="cursor-audit" id="cursorAuditPanel" hidden aria-labelledby="cursorAuditTitle">

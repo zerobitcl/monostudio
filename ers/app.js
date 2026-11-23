@@ -404,6 +404,7 @@ class GscModule {
   }
 
   static PERIODS = [
+    { id: "7d", label: "7 días", days: 7 },
     { id: "28d", label: "28 días", days: 28 },
     { id: "90d", label: "3 meses", days: 90 },
     { id: "180d", label: "6 meses", days: 180 },
@@ -511,6 +512,23 @@ class SeoAuditModule {
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ host, fresh }),
     }).then((res) => SeoAuditModule.#read(res, "plan"));
+  }
+
+  static radiografia(host, repo = "", fresh = false) {
+    return fetch(`${SeoAuditModule.API}?action=radiografia`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ host, repo, fresh }),
+    }).then((res) => SeoAuditModule.#read(res, "plan"));
+  }
+
+  static radiografiaCached(host) {
+    const qs = `action=radiografia&host=${encodeURIComponent(host)}&_=${Date.now()}`;
+    return fetch(`${SeoAuditModule.API}?${qs}`, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    }).then((res) => SeoAuditModule.#read(res));
   }
 
   static markApplied(host, cambio, commitSha = "") {
@@ -1231,6 +1249,9 @@ class AppController {
     this.gbpBusy = false;
     this.auditBusy = false;
     this.auditAutoLoop = false;
+    /** Radiografía 7d por host (caché API). */
+    this.radiografiaData = new Map();
+    this.radiografiaBusy = false;
     this.reportBusy = false;
     this.chatOpen = false;
     this.chatBusy = false;
@@ -1286,6 +1307,8 @@ class AppController {
       "cursorAuditPanel", "cursorAuditMeta", "cursorAuditProgress", "cursorAuditBar",
       "cursorAuditStatus", "cursorAuditCoverage", "cursorAuditCounts", "cursorAuditResult", "cursorAuditSummary", "cursorAuditChanges",
       "cursorAuditPrompt", "btnAuditBatch", "btnAuditGenerate", "btnAuditCopy", "btnAuditVerify",
+      "radiografiaPanel", "radiografiaMeta", "radiografiaBody", "radiografiaTableWrap", "radiografiaChips",
+      "radiografiaMarkdown", "radiografiaEmpty", "btnRadiografiaGenerate", "btnRadiografiaCopy",
       "briefTitle", "reportFrame",
       "clientModal", "requestModal", "taskModal", "notebookModal",
       "clientForm", "clientModalTitle", "clientSubmitBtn", "btnDeleteClient", "clientIdField",
@@ -1571,6 +1594,8 @@ class AppController {
     this.dom.btnAuditCopy.addEventListener("click", () => this.copyCursorPrompt());
     this.dom.btnAuditVerify?.addEventListener("click", () => this.verifyAppliedImprovements());
     this.dom.cursorAuditChanges?.addEventListener("change", (e) => this.handleCambioCheck(e));
+    this.dom.btnRadiografiaGenerate?.addEventListener("click", () => this.generateRadiografia());
+    this.dom.btnRadiografiaCopy?.addEventListener("click", () => this.copyRadiografia());
     this.dom.btnGbpSearch?.addEventListener("click", () => this.searchGbp());
     this.dom.gbpSearchInput?.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
@@ -3589,15 +3614,27 @@ class AppController {
     const host = this.seoHost;
     if (!host || this.auditBusy) {
       this.renderCursorAudit();
+      this.renderRadiografia();
       return;
     }
     try {
       const status = await SeoAuditModule.status(host, this.githubRepoForHost(host));
       this.auditData.set(host, status);
+      if (status?.radiografia?.ready && !this.radiografiaData.has(host)) {
+        try {
+          const cached = await SeoAuditModule.radiografiaCached(host);
+          if (cached?.markdown) this.radiografiaData.set(host, cached);
+        } catch {
+          /* sin caché aún */
+        }
+      }
     } catch (err) {
       this.auditData.set(host, { error: err.message, host });
     }
-    if (this.module === "seo" && host === this.seoHost) this.renderCursorAudit();
+    if (this.module === "seo" && host === this.seoHost) {
+      this.renderCursorAudit();
+      this.renderRadiografia();
+    }
   }
 
   renderCursorAudit() {
@@ -4252,6 +4289,152 @@ class AppController {
     }
   }
 
+  renderRadiografia() {
+    const host = this.seoHost;
+    const panel = this.dom.radiografiaPanel;
+    if (!panel) return;
+    const seo = host ? SeoStore.get(host) : null;
+    if (!host || !seo?.totals) {
+      panel.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+    panel.classList.toggle("is-busy", this.radiografiaBusy);
+
+    const status = this.auditData.get(host);
+    const meta = status?.radiografia || {};
+    const data = this.radiografiaData.get(host);
+    const win = data?.windows || meta.windows;
+    const bits = [];
+    if (win?.start && win?.end) {
+      bits.push(`${win.start} → ${win.end} vs semana previa`);
+    } else {
+      bits.push("7d vs 7d previos (lag GSC −3 días)");
+    }
+    if (meta.stale) bits.push("desactualizada");
+    if (data?.cached) bits.push("caché");
+    if (data?.narrative === "fallback") bits.push("redacción base");
+    else if (data?.model) bits.push(data.model);
+    if (meta.generatedAt) bits.push(SeoAuditModule.fmtStampShort(meta.generatedAt) || SeoAuditModule.fmtStamp(meta.generatedAt));
+    this.dom.radiografiaMeta.textContent = bits.filter(Boolean).join(" · ");
+
+    const btn = this.dom.btnRadiografiaGenerate;
+    if (btn) {
+      btn.disabled = this.radiografiaBusy || this.auditBusy || !status?.siteReady;
+      btn.textContent = this.radiografiaBusy
+        ? "Armando radiografía…"
+        : data?.markdown
+          ? (meta.stale ? "Actualizar radiografía" : "Regenerar radiografía")
+          : "Generar radiografía";
+    }
+
+    const hasMd = Boolean(data?.markdown);
+    if (this.dom.radiografiaEmpty) this.dom.radiografiaEmpty.hidden = hasMd;
+    if (this.dom.radiografiaBody) this.dom.radiografiaBody.hidden = !hasMd;
+    if (this.dom.btnRadiografiaCopy) this.dom.btnRadiografiaCopy.disabled = !hasMd || this.radiografiaBusy;
+
+    if (!hasMd) {
+      if (this.dom.radiografiaTableWrap) this.dom.radiografiaTableWrap.innerHTML = "";
+      if (this.dom.radiografiaChips) this.dom.radiografiaChips.innerHTML = "";
+      if (this.dom.radiografiaMarkdown) this.dom.radiografiaMarkdown.textContent = "";
+      return;
+    }
+
+    const tableWrap = this.dom.radiografiaTableWrap;
+    if (tableWrap) {
+      tableWrap.innerHTML = "";
+      const rows = Array.isArray(data.table) ? data.table : [];
+      if (rows.length) {
+        const table = document.createElement("table");
+        table.className = "seo-table radiografia__table";
+        table.innerHTML = "<thead><tr><th>Métrica</th><th>7d anteriores</th><th>Últimos 7d</th><th>Diferencia</th></tr></thead>";
+        const tbody = document.createElement("tbody");
+        rows.forEach((row) => {
+          const tr = document.createElement("tr");
+          ["metric", "prev", "now", "diff"].forEach((key) => {
+            const td = document.createElement("td");
+            td.textContent = String(row?.[key] ?? "—");
+            tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        tableWrap.appendChild(table);
+      }
+    }
+
+    const chips = this.dom.radiografiaChips;
+    if (chips) {
+      chips.innerHTML = "";
+      (data.detectors || []).forEach((d) => {
+        if (!d || d.id === "gscLag" || d.id === "positionTrend") return;
+        const span = document.createElement("span");
+        span.className = `seo-tag${d.severity === "alto" ? " is-up" : ""}`;
+        span.textContent = d.title || d.id;
+        span.title = d.line || "";
+        chips.appendChild(span);
+      });
+      if (data.deviceScope) {
+        const scope = document.createElement("span");
+        scope.className = "seo-tag";
+        scope.textContent = data.deviceScope === "home" ? "Device: home" : "Device: sitio";
+        chips.appendChild(scope);
+      }
+    }
+
+    this.dom.radiografiaMarkdown.textContent = data.markdown;
+  }
+
+  async generateRadiografia() {
+    const host = this.seoHost;
+    if (!host || this.radiografiaBusy || this.auditBusy) return;
+    this.radiografiaBusy = true;
+    this.renderRadiografia();
+    try {
+      const repo = this.githubRepoForHost(host);
+      const fresh = Boolean(this.radiografiaData.get(host)?.markdown);
+      const data = await SeoAuditModule.radiografia(host, repo, fresh);
+      this.radiografiaData.set(host, data);
+      const status = this.auditData.get(host) || { host };
+      status.radiografia = {
+        ready: true,
+        stale: false,
+        generatedAt: data.generatedAt || Math.floor(Date.now() / 1000),
+        narrative: data.narrative || "",
+        model: data.model || "",
+        windows: data.windows || null,
+        detectorCount: Array.isArray(data.detectors) ? data.detectors.length : 0,
+      };
+      this.auditData.set(host, status);
+      if (data.narrative === "fallback") {
+        this.showToast("Radiografía lista con redacción base (sin Gemini JSON)", 5200);
+      } else if (data.cached) {
+        this.showToast("Radiografía desde caché");
+      } else {
+        this.showToast("Radiografía 7 días lista");
+      }
+    } catch (err) {
+      this.showToast(err.message || "No se pudo armar la radiografía", 4500);
+    } finally {
+      this.radiografiaBusy = false;
+      if (this.module === "seo" && host === this.seoHost) this.renderRadiografia();
+    }
+  }
+
+  async copyRadiografia() {
+    const text = this.dom.radiografiaMarkdown?.textContent || "";
+    if (!text) {
+      this.showToast("Todavía no hay radiografía");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      this.showToast("Radiografía copiada");
+    } catch {
+      this.showToast("No se pudo copiar", 3500);
+    }
+  }
+
   async copyCursorPrompt() {
     const text = this.dom.cursorAuditPrompt.value;
     if (!text) {
@@ -4401,6 +4584,7 @@ class AppController {
     this.renderKeywords();
     this.renderGrowth();
     this.renderCursorAudit();
+    this.renderRadiografia();
     this.renderGaHint();
     this.renderSeoDiagnostics(data);
     this.syncSeoForm(data);
