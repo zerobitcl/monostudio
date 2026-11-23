@@ -149,6 +149,21 @@ function ersSanitizeClients($clients): array
         $client['notes'] = ersSanitizeNotes($client['notes'] ?? []);
         $client['watches'] = ersSanitizeWatches($client['watches'] ?? []);
         $client['siteUrl'] = ersClip(trim((string) ($client['siteUrl'] ?? '')), 300);
+        $primaryHost = ersHostOf((string) $client['siteUrl']);
+        $aliases = [];
+        $rawAliases = is_array($client['siteAliases'] ?? null) ? $client['siteAliases'] : [];
+        foreach (array_slice($rawAliases, 0, 12) as $alias) {
+            if (!is_string($alias)) {
+                continue;
+            }
+            $alias = trim($alias);
+            $host = ersHostOf(str_contains($alias, '://') ? $alias : 'https://' . $alias);
+            if ($host === '' || $host === $primaryHost || isset($aliases[$host])) {
+                continue;
+            }
+            $aliases[$host] = $host;
+        }
+        $client['siteAliases'] = array_values($aliases);
         // Normalizar a owner/repo si viene URL de GitHub (evita basura de paste).
         $gh = trim((string) ($client['githubRepo'] ?? ''));
         $gh = preg_replace('/[\x{200B}-\x{200D}\x{FEFF}\x{00A0}]/u', '', $gh) ?? $gh;
@@ -383,6 +398,29 @@ function ersHostOf(string $url): string
         return '';
     }
     return strtolower(preg_replace('/^www\./i', '', $host) ?? $host);
+}
+
+/** Dominio principal y alias (otro host que es el mismo cliente). */
+function ersClientHosts(array $client): array
+{
+    $hosts = [];
+    $push = static function (string $raw) use (&$hosts): void {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return;
+        }
+        $host = ersHostOf(str_contains($raw, '://') ? $raw : 'https://' . $raw);
+        if ($host !== '' && !in_array($host, $hosts, true)) {
+            $hosts[] = $host;
+        }
+    };
+    $push((string) ($client['siteUrl'] ?? ''));
+    foreach ($client['siteAliases'] ?? [] as $alias) {
+        if (is_string($alias)) {
+            $push($alias);
+        }
+    }
+    return $hosts;
 }
 
 function ersClientPublic(array $client): array
@@ -1936,18 +1974,21 @@ function ersSeoRadarHosts(array $store): array
         if (!is_array($client) || !empty($client['inDevelopment'])) {
             continue;
         }
-        $host = ersHostOf((string) ($client['siteUrl'] ?? ''));
-        if (function_exists('gscSanitizeHost')) {
-            $host = gscSanitizeHost($host);
+        foreach (ersClientHosts($client) as $index => $rawHost) {
+            $host = $rawHost;
+            if (function_exists('gscSanitizeHost')) {
+                $host = gscSanitizeHost($host);
+            }
+            if ($host === '' || isset($hosts[$host])) {
+                continue;
+            }
+            $hosts[$host] = [
+                'host' => $host,
+                'clientId' => (string) ($client['id'] ?? ''),
+                'name' => (string) ($client['name'] ?? $host),
+                'alias' => $index > 0,
+            ];
         }
-        if ($host === '' || isset($hosts[$host])) {
-            continue;
-        }
-        $hosts[$host] = [
-            'host' => $host,
-            'clientId' => (string) ($client['id'] ?? ''),
-            'name' => (string) ($client['name'] ?? $host),
-        ];
     }
     return array_values($hosts);
 }
@@ -2183,46 +2224,7 @@ function ersRunSeoRadar(array &$store, array &$existingRefs, string $today, int 
                     $ids[] = $id;
                 }
             }
-            $prev = $known[$host]['findingIds'] ?? null;
-            if (is_array($prev) && $made < 3) {
-                $prevSet = array_fill_keys($prev, true);
-                $dismissed = ersDismissedSeoIds($host);
-                foreach ($findings as $finding) {
-                    if ($made >= 3) {
-                        break;
-                    }
-                    $id = (string) ($finding['id'] ?? '');
-                    if ($id === '' || isset($prevSet[$id]) || !ersRadarWorthTask($finding)) {
-                        continue;
-                    }
-                    $signalId = (string) ($finding['kind'] ?? 'seo') . '|' . (((string) ($finding['url'] ?? '')) !== '' ? $finding['url'] : 'site');
-                    if (isset($dismissed['seo:' . $host . ':' . $id]) || isset($dismissed['seo:' . $host . ':' . $signalId])) {
-                        continue;
-                    }
-                    $ref = 'seo-radar:' . $host . ':' . (string) ($finding['kind'] ?? 'seo') . ':' . substr(md5($id), 0, 10);
-                    if (isset($existingRefs[$ref])) {
-                        continue;
-                    }
-                    $store['tasks'][] = [
-                        'id' => ersUuid(),
-                        'title' => ersClip(ersRadarTaskTitle($finding, $row['name']), 240),
-                        'clientId' => $row['clientId'],
-                        'parentId' => '',
-                        'area' => 'seo',
-                        'priority' => ((int) ($finding['severity'] ?? 0)) >= 3 ? 3 : 2,
-                        'status' => 'open',
-                        'notes' => ersClip((string) ($finding['techText'] ?? ''), 1000),
-                        'kind' => 'seo-radar',
-                        'ref' => ersClip($ref, 500),
-                        'dueDate' => $today,
-                        'createdAt' => (int) round(microtime(true) * 1000),
-                        'doneAt' => 0,
-                    ];
-                    $existingRefs[$ref] = true;
-                    $created++;
-                    $made++;
-                }
-            }
+            // El trabajo SEO vive en el plan del sitio, no en una agenda de tareas.
             $known[$host] = ['lastScannedAt' => time(), 'findingIds' => $ids];
             $scanned[] = $host;
         } catch (Throwable $e) {
@@ -2266,37 +2268,57 @@ function ersSeoOpportunityRank(): array
                 $critical++;
             }
         }
+        $totals = is_array($gsc['totals'] ?? null) ? $gsc['totals'] : [];
+        $totalsDelta = is_array($gsc['totalsDelta'] ?? null) ? $gsc['totalsDelta'] : [];
         $loss = 0;
+        $worstDelta = 0;
+        $worstPath = '';
+        $moveDelta = 0;
+        $movePath = '';
         foreach ($gsc['pages'] ?? [] as $page) {
             if (!is_array($page)) {
                 continue;
             }
             $delta = (int) ($page['delta']['clicks'] ?? 0);
+            $path = (string) (parse_url((string) ($page['url'] ?? ''), PHP_URL_PATH) ?: '/');
+            if ($path === '') {
+                $path = '/';
+            }
             if ($delta < 0) {
                 $loss += abs($delta);
+                if ($delta < $worstDelta) {
+                    $worstDelta = $delta;
+                    $worstPath = $path;
+                }
+            }
+            if (abs($delta) > abs($moveDelta)) {
+                $moveDelta = $delta;
+                $movePath = $path;
             }
         }
         $gbp = ersReadJsonCache($dataDir . '/gbp-cache-' . md5($host) . '.json');
+        $ga = ersReadJsonCache($dataDir . '/ga4-cache-' . md5($host) . '.json');
         $mapsNote = '';
         $maps = 0;
+        $reviewsDelta = (int) ($gbp['reviewsDelta'] ?? 0);
         $status = (string) ($gbp['place']['businessStatus'] ?? '');
         if ($status !== '' && $status !== 'OPERATIONAL') {
             $maps += 20;
             $mapsNote = 'ficha de Maps no operativa';
-        } elseif ((int) ($gbp['reviewsDelta'] ?? 0) < 0) {
+        } elseif ($reviewsDelta < 0) {
             $maps += 12;
             $mapsNote = 'reseñas a la baja';
         }
         $score = $potential + ($critical * 8) + min(40, $loss) + $maps;
         $reason = [];
         if ($potential > 0) {
-            $reason[] = $potential . ' clics en posición 4–20';
+            $reason[] = $potential . ' clics en puestos 4–20';
         }
         if ($critical > 0) {
             $reason[] = $critical . ($critical === 1 ? ' alerta crítica' : ' alertas críticas');
         }
-        if ($loss >= 5) {
-            $reason[] = $loss . ' clics perdidos';
+        if ($worstDelta <= -5 && $worstPath !== '') {
+            $reason[] = 'cayó ' . abs($worstDelta) . ' clics en ' . $worstPath;
         }
         if ($mapsNote !== '') {
             $reason[] = $mapsNote;
@@ -2313,13 +2335,107 @@ function ersSeoOpportunityRank(): array
             'potentialClicks' => $potential,
             'critical' => $critical,
             'clickLoss' => $loss,
+            'clicks' => (int) ($totals['clicks'] ?? 0),
+            'impressions' => (int) ($totals['impressions'] ?? 0),
+            'ctr' => (float) ($totals['ctr'] ?? 0),
+            'position' => (float) ($totals['position'] ?? 0),
+            'deltaClicks' => (int) ($totalsDelta['clicks'] ?? 0),
+            'notIndexed' => (int) ($gsc['inventory']['notIndexed'] ?? 0),
+            'worstPath' => $worstPath,
+            'worstDelta' => $worstDelta,
+            'movePath' => $movePath,
+            'moveDelta' => $moveDelta,
+            'reviewsDelta' => $reviewsDelta,
+            'rating' => (float) ($gbp['place']['rating'] ?? 0),
+            'mapsLinked' => !empty($gbp['linked']) || !empty($gbp['ok']),
+            'keyEvents' => (int) ($ga['current']['keyEvents'] ?? 0),
             'reason' => implode(' · ', $reason),
         ];
     }
     usort($rows, static function ($a, $b) {
         return ((int) $b['score'] <=> (int) $a['score']) ?: strcmp((string) $a['name'], (string) $b['name']);
     });
-    return ['ok' => true, 'sites' => array_slice($rows, 0, 12)];
+    return [
+        'ok' => true,
+        'sites' => array_slice($rows, 0, 12),
+        'kpis' => ersSeoBoard($rows),
+    ];
+}
+
+/** Tablero de cartera. Lee solo caché. Cada tarjeta abre un sitio. */
+function ersSeoBoard(array $rows): array
+{
+    $ready = array_values(array_filter($rows, static fn ($row) => !empty($row['available'])));
+    if ($ready === []) {
+        return [];
+    }
+    $fmt = static fn (int $n): string => number_format($n, 0, ',', '.');
+    $best = static function (array $list, callable $score): ?array {
+        $win = null;
+        foreach ($list as $row) {
+            $value = $score($row);
+            if ($value === null) {
+                continue;
+            }
+            if ($win === null || $value > $win['score']) {
+                $win = ['score' => $value, 'row' => $row];
+            }
+        }
+        return $win;
+    };
+    $card = static function (string $id, string $label, string $value, string $detail, array $row): array {
+        return [
+            'id' => $id,
+            'label' => $label,
+            'value' => $value,
+            'detail' => $detail,
+            'host' => (string) ($row['host'] ?? ''),
+            'name' => (string) ($row['name'] ?? ''),
+        ];
+    };
+    $out = [];
+    if ($hit = $best($ready, static fn ($r) => (int) $r['clicks'] > 0 ? (int) $r['clicks'] : null)) {
+        $out[] = $card('clicks', 'Más clics', $fmt((int) $hit['row']['clicks']), (string) $hit['row']['name'], $hit['row']);
+    }
+    if ($hit = $best($ready, static fn ($r) => (int) $r['deltaClicks'] > 0 ? (int) $r['deltaClicks'] : null)) {
+        $out[] = $card('rise', 'Mayor subida', '+' . $fmt((int) $hit['row']['deltaClicks']) . ' clics', (string) $hit['row']['name'], $hit['row']);
+    }
+    if ($hit = $best($ready, static fn ($r) => (int) $r['worstDelta'] < 0 ? abs((int) $r['worstDelta']) : null)) {
+        $path = (string) ($hit['row']['worstPath'] ?: '/');
+        $out[] = $card('drop', 'Mayor caída', '−' . $fmt(abs((int) $hit['row']['worstDelta'])) . ' clics', $hit['row']['name'] . ' · ' . $path, $hit['row']);
+    }
+    if ($hit = $best($ready, static fn ($r) => (int) $r['impressions'] > 0 ? (int) $r['impressions'] : null)) {
+        $out[] = $card('impressions', 'Más impresiones', $fmt((int) $hit['row']['impressions']), (string) $hit['row']['name'], $hit['row']);
+    }
+    if ($hit = $best($ready, static fn ($r) => (int) $r['impressions'] >= 20 ? (float) $r['ctr'] : null)) {
+        $out[] = $card('ctr', 'Mejor CTR', number_format(((float) $hit['row']['ctr']) * 100, 1, ',', '.') . '%', (string) $hit['row']['name'], $hit['row']);
+    }
+    if ($hit = $best($ready, static fn ($r) => (int) $r['impressions'] >= 20 && (float) $r['position'] > 0 ? (float) $r['position'] : null)) {
+        $out[] = $card('position', 'Peor posición', number_format((float) $hit['row']['position'], 1, ',', '.'), (string) $hit['row']['name'], $hit['row']);
+    }
+    if ($hit = $best($ready, static fn ($r) => (int) $r['potentialClicks'] > 0 ? (int) $r['potentialClicks'] : null)) {
+        $out[] = $card('recover', 'Puestos 4–20', $fmt((int) $hit['row']['potentialClicks']) . ' clics', 'Ya aparece, casi no se clickea · ' . $hit['row']['name'], $hit['row']);
+    }
+    $outside = 0;
+    foreach ($ready as $row) {
+        $outside += (int) ($row['notIndexed'] ?? 0);
+    }
+    if ($outside > 0 && ($hit = $best($ready, static fn ($r) => (int) $r['notIndexed'] > 0 ? (int) $r['notIndexed'] : null))) {
+        $out[] = $card('index', 'Fuera del índice', $fmt($outside), $hit['row']['name'] . ' tiene ' . (int) $hit['row']['notIndexed'], $hit['row']);
+    }
+    if ($hit = $best($ready, static fn ($r) => abs((int) $r['moveDelta']) > 0 ? abs((int) $r['moveDelta']) : null)) {
+        $sign = (int) $hit['row']['moveDelta'] > 0 ? '+' : '−';
+        $path = (string) ($hit['row']['movePath'] ?: '/');
+        $out[] = $card('page', 'Página que más cambió', $sign . $fmt(abs((int) $hit['row']['moveDelta'])) . ' clics', $hit['row']['name'] . ' · ' . $path, $hit['row']);
+    }
+    if ($hit = $best($ready, static fn ($r) => !empty($r['mapsLinked']) && (int) $r['reviewsDelta'] !== 0 ? abs((int) $r['reviewsDelta']) : null)) {
+        $delta = (int) $hit['row']['reviewsDelta'];
+        $out[] = $card('maps', 'Maps que más se movió', ($delta > 0 ? '+' : '−') . $fmt(abs($delta)) . ' reseñas', (string) $hit['row']['name'], $hit['row']);
+    }
+    if ($hit = $best($ready, static fn ($r) => (int) $r['keyEvents'] > 0 ? (int) $r['keyEvents'] : null)) {
+        $out[] = $card('contacts', 'Más contactos', $fmt((int) $hit['row']['keyEvents']), 'Analytics · ' . $hit['row']['name'], $hit['row']);
+    }
+    return $out;
 }
 
 /**

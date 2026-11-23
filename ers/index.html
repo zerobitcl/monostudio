@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,560;1,9..144,560&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=20261116b" />
+  <link rel="stylesheet" href="styles.css?v=20261122a" />
 </head>
 <body>
 
@@ -35,9 +35,8 @@
       </div>
 
       <nav class="module-nav" aria-label="Módulos">
-        <button class="module-nav__btn is-active" id="btnModuleToday" type="button">Hoy</button>
+        <button class="module-nav__btn is-active" id="btnModuleSeo" type="button">SEO</button>
         <button class="module-nav__btn" id="btnModuleClients" type="button">Clientes</button>
-        <button class="module-nav__btn" id="btnModuleSeo" type="button">SEO</button>
       </nav>
 
       <div class="topbar__stats" id="topStats">
@@ -62,47 +61,6 @@
       </div>
     </header>
 
-    <!-- ============ HOY ============ -->
-    <main class="panel" id="panelToday">
-      <div class="panel-head">
-        <h2>Tu día</h2>
-        <span class="panel-head__count" id="agendaCount">0 pendientes</span>
-        <div class="filter-group" id="agendaFilters" role="tablist" aria-label="Filtro de la agenda">
-          <button class="filter is-active" type="button" data-filter="all" role="tab">Todo</button>
-          <button class="filter" type="button" data-filter="money" role="tab">Dinero</button>
-          <button class="filter" type="button" data-filter="seo" role="tab">SEO</button>
-          <button class="filter" type="button" data-filter="task" role="tab">Tareas</button>
-        </div>
-        <button class="btn btn--ghost" id="btnOpenExport" type="button" title="Copiar el plan del día para Gemini">Plan para IA</button>
-        <button class="btn btn--ghost" id="btnOpenReview" type="button">Revisar</button>
-        <button class="btn btn--ghost" id="btnOpenTaskModal" type="button">+ Tarea</button>
-        <button class="btn btn--neon" id="btnOpenDump" type="button">Vaciar cabeza</button>
-      </div>
-
-      <div class="review-banner" id="reviewBanner" hidden>
-        <p id="reviewBannerText"></p>
-        <button class="chip-btn chip-btn--primary" id="btnReviewStart" type="button">Revisar ahora</button>
-        <button class="chip-btn chip-btn--subtle" id="btnReviewSnooze" type="button">Hoy no</button>
-      </div>
-
-      <ul class="agenda" id="agendaList"></ul>
-
-      <div class="empty-state" id="agendaEmpty" hidden>
-        <div class="empty-state__icon" aria-hidden="true">✓</div>
-        <p>Nada urgente. Buen momento para trabajar en lo importante.</p>
-      </div>
-
-      <div class="agenda-done" id="agendaDone" hidden>
-        <h3>Completado hoy</h3>
-        <ul class="agenda agenda--done" id="agendaDoneList"></ul>
-      </div>
-
-      <p class="agenda-dismissed" id="agendaDismissed" hidden>
-        <span id="agendaDismissedCount"></span>
-        <button class="chip-btn chip-btn--subtle" id="btnRestoreDismissed" type="button">Restaurar</button>
-      </p>
-    </main>
-
     <!-- ============ CLIENTES ============ -->
     <main class="panel panel--split" id="panelClients" hidden>
       <section class="swarm-panel" aria-label="Cartera de clientes">
@@ -112,6 +70,10 @@
             <button class="view-toggle__btn is-active" id="btnViewOrbit" type="button" role="tab">Órbita</button>
             <button class="view-toggle__btn" id="btnViewList" type="button" role="tab">Lista</button>
           </div>
+          <label class="client-search">
+            <span class="visually-hidden">Buscar cliente</span>
+            <input type="search" id="clientSearch" placeholder="Buscar cliente o dominio…" autocomplete="off" />
+          </label>
           <button class="icon-btn" id="btnOrbitExpand" type="button" aria-pressed="false" title="Expandir" aria-label="Expandir la órbita">⤢</button>
           <button class="btn btn--neon" id="btnOpenClientModal" type="button">+ Cliente</button>
         </div>
@@ -177,22 +139,22 @@
     </main>
 
     <!-- ============ SEO ============ -->
-    <main class="panel" id="panelSeo" hidden>
+    <main class="panel" id="panelSeo">
       <div class="panel-head">
         <h2>SEO</h2>
         <span class="panel-head__count" id="seoRange">Últimos 28 días</span>
         <button class="btn btn--ghost" id="btnStudioReport" type="button" hidden>Informe ERs</button>
         <button class="btn btn--neon" id="btnClientReport" type="button" hidden>Informe cliente</button>
-        <button class="btn btn--ghost" id="btnSeoIndex" type="button" hidden>Indexar pendientes</button>
+        <button class="btn btn--ghost" id="btnSeoIndex" type="button" hidden>Reenviar sitemap</button>
         <button class="btn btn--ghost" id="btnGscRefresh" type="button">Actualizar</button>
       </div>
 
-      <section class="seo-radar" id="seoRadar" hidden aria-label="Dónde dedicar media hora">
+      <section class="seo-board" id="seoRadar" hidden aria-label="Cartera SEO">
         <header class="seo-radar__head">
-          <h3>Media hora hoy</h3>
-          <p id="seoRadarMeta">Dónde se recuperan más clics en la cartera</p>
+          <h3>Cartera</h3>
+          <p id="seoRadarMeta">Movimiento de los últimos 28 días. Cada tarjeta abre el sitio.</p>
         </header>
-        <ol class="seo-radar__list" id="seoRadarList"></ol>
+        <div class="seo-board__grid" id="seoRadarList"></div>
       </section>
 
       <label class="seo-picker-search" id="seoPickerSearchWrap" hidden>
@@ -200,6 +162,14 @@
         <input type="search" id="seoPickerSearch" placeholder="Buscar por nombre o dominio…" autocomplete="off" />
       </label>
       <div class="site-picker" id="seoClients" role="tablist" aria-label="Sitios de clientes"></div>
+
+      <div class="seo-sticky" id="seoSticky" hidden>
+        <div class="seo-sticky__id">
+          <strong id="seoStickyName">Sitio</strong>
+          <span id="seoStickyHost"></span>
+        </div>
+        <button type="button" class="seo-ga" id="seoGaChip">Conectar Analytics</button>
+      </div>
 
       <div class="period-toggle" id="seoPeriodToggle" role="tablist" aria-label="Rango de métricas" hidden>
         <button class="period-toggle__btn is-active" type="button" data-period="28d">28 días</button>
@@ -234,7 +204,30 @@
         <div class="spark" id="seoSpark" role="img" aria-label="Clics por día"></div>
       </div>
 
-      <div class="inventory" id="seoInventory" hidden></div>
+      <section class="seo-coverage" id="seoPagesDrawer" hidden>
+        <header class="kw__head">
+          <div>
+            <h3>Todas las páginas</h3>
+            <p class="kw__meta" id="seoPagesCount"></p>
+          </div>
+        </header>
+        <div class="inventory" id="seoInventory" hidden></div>
+        <div class="seo-table-wrap">
+          <table class="seo-table">
+            <thead>
+              <tr>
+                <th>Página</th>
+                <th>Clics</th>
+                <th>Imp.</th>
+                <th>CTR</th>
+                <th>Pos.</th>
+                <th>Índice</th>
+              </tr>
+            </thead>
+            <tbody id="seoTableBody"></tbody>
+          </table>
+        </div>
+      </section>
 
       <section class="gbp-panel" id="gbpPanel" hidden aria-labelledby="gbpTitle">
         <header class="kw__head">
@@ -257,8 +250,15 @@
         </div>
       </section>
 
-      <section class="signals" aria-label="Acciones SEO">
-        <ul class="signal-list" id="seoSignals"></ul>
+      <section class="page-board" id="pageBoard" aria-label="Páginas que piden atención">
+        <header class="kw__head">
+          <div>
+            <h3>Qué página pide atención</h3>
+            <p class="kw__meta">Agrupado por URL. Lo del sitio entero va aparte.</p>
+          </div>
+        </header>
+        <div class="page-board__site" id="seoSitewide" hidden></div>
+        <ul class="page-board__list" id="seoSignals"></ul>
         <p class="signal-empty" id="seoSignalsEmpty" hidden>Sin alertas en este sitio.</p>
       </section>
 
@@ -280,6 +280,7 @@
           </div>
           <div class="cursor-audit__actions">
             <button class="btn btn--ghost" id="btnAuditBatch" type="button">Continuar lote</button>
+            <button class="btn btn--ghost" id="btnAuditNext" type="button" hidden>Buscar el siguiente nivel</button>
             <button class="btn btn--neon" id="btnAuditGenerate" type="button">Generar plan</button>
           </div>
         </header>
@@ -289,12 +290,13 @@
         </div>
         <div class="cursor-audit__sources" id="cursorAuditCoverage" hidden></div>
         <p class="cursor-audit__counts" id="cursorAuditCounts" hidden></p>
+        <p class="cursor-audit__score" id="cursorAuditScore" hidden></p>
         <div class="cursor-audit__result" id="cursorAuditResult" hidden>
           <h4 class="kw-ai__label">Qué nivel se gana</h4>
           <p class="kw-ai__summary" id="cursorAuditSummary"></p>
           <ol class="kw-ai__actions" id="cursorAuditChanges"></ol>
           <h4 class="kw-ai__label">Prompt para Cursor</h4>
-          <p class="kw__hint">Marcá Hecho en cada mejora aplicada. Verificá tras el deploy: el próximo plan no repite lo comprobado. El plan lee el commit de GitHub: sin push, no lo ve.</p>
+          <p class="kw__hint">Verificar lee el HTML de todas las mejoras, sin marcarlas. Al 100% el plan se cierra. Se reabre si cambia el código o caen los clics. El plan lee el commit de GitHub: sin push, no lo ve.</p>
           <textarea class="cursor-audit__prompt" id="cursorAuditPrompt" readonly rows="12" spellcheck="false"></textarea>
           <div class="cursor-audit__copy-row">
             <button class="btn btn--ghost" id="btnAuditVerify" type="button" hidden>Verificar mejoras</button>
@@ -309,7 +311,6 @@
             <h3 id="kwTitle">Keywords</h3>
             <p class="kw__meta" id="kwMeta"></p>
           </div>
-          <button class="btn btn--ghost" id="btnKwAi" type="button" title="Opcional: solo lectura de queries. El plan de crecimiento ya la incluye.">Solo keywords IA</button>
         </header>
 
         <div class="kw__stats" id="kwStats"></div>
@@ -333,27 +334,8 @@
         <p class="signal-empty" id="kwEmpty" hidden></p>
       </section>
 
-      <details class="drawer" id="seoPagesDrawer" hidden>
-        <summary>Todas las páginas <span id="seoPagesCount"></span></summary>
-        <div class="seo-table-wrap">
-          <table class="seo-table">
-            <thead>
-              <tr>
-                <th>Página</th>
-                <th>Clics</th>
-                <th>Imp.</th>
-                <th>CTR</th>
-                <th>Pos.</th>
-                <th>Índice</th>
-              </tr>
-            </thead>
-            <tbody id="seoTableBody"></tbody>
-          </table>
-        </div>
-      </details>
-
       <details class="drawer" id="seoDiagDrawer">
-        <summary>Diagnóstico y conexión</summary>
+        <summary>Soporte</summary>
         <div class="diag" id="seoDiag"></div>
         <form class="seo-form" id="gscConfigForm" autocomplete="off">
           <label class="field">
@@ -361,8 +343,9 @@
             <input type="url" name="sitemapUrl" id="gscSitemapUrl" placeholder="https://cliente.cl/sitemap_index.xml" />
           </label>
           <label class="field">
-            <span>URLs prioritarias <em class="field__optional">(una por línea · URL | etiqueta)</em></span>
+            <span>URLs prioritarias <em class="field__optional">(opcional)</em></span>
             <textarea name="pages" id="gscPages" rows="4" placeholder="https://cliente.cl/servicios | Servicios"></textarea>
+            <small class="field__hint">No cambian el ranking en Google. Sirven solo si el sitemap no trae una página que igual quieres analizar. Una por línea: URL | nombre interno.</small>
           </label>
           <label class="field">
             <span>Propiedad de Google Analytics <em class="field__optional">(ID numérico, opcional)</em></span>
@@ -478,123 +461,6 @@
 
       <button type="submit" class="btn btn--neon btn--block">Crear</button>
     </form>
-  </div>
-
-  <!-- ============ MODAL: TAREA ============ -->
-  <div class="modal-backdrop" id="taskModal" hidden>
-    <form class="modal glass" id="taskForm" autocomplete="off">
-      <header class="modal__head">
-        <h3>Nueva tarea</h3>
-        <button type="button" class="modal__close" data-close="taskModal" aria-label="Cerrar">✕</button>
-      </header>
-
-      <label class="field">
-        <span>¿Qué hay que hacer?</span>
-        <input type="text" name="title" id="taskTitle" required maxlength="240" placeholder="Ej: Reescribir title de /servicios" />
-      </label>
-
-      <label class="field">
-        <span>Cliente <em class="field__optional">(opcional)</em></span>
-        <select name="clientId" id="taskClientSelect">
-          <option value="">Sin cliente</option>
-        </select>
-      </label>
-
-      <label class="field">
-        <span>Área <em class="field__optional">(si no es de un cliente)</em></span>
-        <input type="text" name="area" id="taskArea" list="areaOptions" maxlength="40" placeholder="Personal, Mono Studio…" />
-      </label>
-
-      <div class="field-row">
-        <label class="field">
-          <span>Prioridad</span>
-          <select name="priority" id="taskPriority">
-            <option value="3">Alta</option>
-            <option value="2" selected>Media</option>
-            <option value="1">Baja</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>Para cuándo <em class="field__optional">(opcional)</em></span>
-          <input type="date" name="dueDate" id="taskDueDate" />
-        </label>
-      </div>
-
-      <button type="submit" class="btn btn--neon btn--block">Agregar al día</button>
-    </form>
-  </div>
-
-  <datalist id="areaOptions"></datalist>
-
-  <!-- ============ VACIAR CABEZA ============ -->
-  <div class="modal-backdrop" id="dumpModal" hidden>
-    <div class="modal modal--sheet modal--wide glass dump" role="dialog" aria-labelledby="dumpTitle">
-      <header class="modal__head">
-        <div>
-          <p class="notebook__kicker">Agenda</p>
-          <h3 id="dumpTitle">Vaciar cabeza</h3>
-        </div>
-        <button type="button" class="modal__close" data-close="dumpModal" aria-label="Cerrar">✕</button>
-      </header>
-
-      <form class="dump__input" id="dumpForm" autocomplete="off">
-        <label class="field">
-          <span>Contame todo lo que tenés pendiente</span>
-          <textarea id="dumpText" rows="9" maxlength="12000" placeholder="Ej: mañana llamar al contador por el IVA, terminar la propuesta de Clínica Andes antes del viernes, comprar regalo para la mamá, algún día armar un curso de SEO…"></textarea>
-        </label>
-        <p class="field__hint">Sin orden ni formato. La IA separa, prioriza y arma subtareas. Vos revisás antes de guardar. Ctrl+Enter para organizar.</p>
-        <div class="dump__actions">
-          <button type="button" class="btn btn--ghost" id="btnDumpMic" aria-pressed="false" hidden>Dictar</button>
-          <button type="submit" class="btn btn--neon" id="btnDumpPlan">Organizar</button>
-        </div>
-      </form>
-
-      <div class="dump__preview" id="dumpPreview" hidden>
-        <p class="dump__summary" id="dumpSummary"></p>
-        <p class="notice" id="dumpQuestion" hidden></p>
-        <ol class="dump__list" id="dumpList"></ol>
-        <div class="dump__actions">
-          <button type="button" class="btn btn--ghost" id="btnDumpBack">Volver al texto</button>
-          <button type="button" class="btn btn--neon" id="btnDumpSave">Guardar</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ============ PLAN PARA IA ============ -->
-  <div class="modal-backdrop" id="exportModal" hidden>
-    <div class="modal modal--sheet modal--wide glass export" role="dialog" aria-labelledby="exportTitle">
-      <header class="modal__head">
-        <div>
-          <p class="notebook__kicker">Hoy</p>
-          <h3 id="exportTitle">Plan para IA</h3>
-        </div>
-        <button type="button" class="modal__close" data-close="exportModal" aria-label="Cerrar">✕</button>
-      </header>
-      <p class="field__hint">Tu día ordenado por urgencia, con un prompt listo. Pegalo en Gemini y te guía paso a paso. Podés editarlo antes de copiar.</p>
-      <textarea class="export__text" id="exportText" spellcheck="false" aria-label="Plan del día"></textarea>
-      <div class="dump__actions">
-        <button type="button" class="btn btn--ghost" id="btnExportDownload">Descargar .md</button>
-        <button type="button" class="btn btn--ghost" id="btnExportCopy">Copiar</button>
-        <button type="button" class="btn btn--neon" id="btnExportGemini">Copiar y abrir Gemini</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ============ REVISIÓN SEMANAL ============ -->
-  <div class="modal-backdrop" id="reviewModal" hidden>
-    <div class="modal modal--sheet glass review" role="dialog" aria-labelledby="reviewTitle">
-      <header class="modal__head">
-        <div>
-          <p class="notebook__kicker">Semana</p>
-          <h3 id="reviewTitle">Revisión semanal</h3>
-        </div>
-        <button type="button" class="modal__close" data-close="reviewModal" aria-label="Cerrar">✕</button>
-      </header>
-      <p class="field__hint">Decidí cada cosa: hacer, reprogramar, dejar para algún día o soltar.</p>
-      <div class="review__body" id="reviewBody"></div>
-      <button type="button" class="btn btn--neon btn--block" id="btnReviewDone">Revisión lista</button>
-    </div>
   </div>
 
   <!-- ============ CUADERNO ============ -->
@@ -722,7 +588,7 @@
   </div>
   <div class="chat-backdrop" id="chatBackdrop" hidden></div>
 
-  <script src="app.js?v=20261116c"></script>
+  <script src="app.js?v=20261122a"></script>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </body>

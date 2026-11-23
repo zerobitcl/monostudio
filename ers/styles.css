@@ -1087,8 +1087,8 @@ body {
   flex-direction: column;
   gap: 0;
   padding: 4px 0;
-  overflow-y: auto;
-  max-height: 42vh;
+  overflow-y: visible;
+  max-height: none;
 }
 
 .timeline::-webkit-scrollbar {
@@ -1251,17 +1251,11 @@ body {
 
 .timeline-row__actions {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
-  opacity: 0;
-  transform: translateX(6px);
-  transition: opacity 0.2s ease, transform 0.2s ease;
-}
-
-.timeline-row:hover .timeline-row__actions,
-.timeline-row:focus-within .timeline-row__actions {
   opacity: 1;
-  transform: translateX(0);
 }
 
 @media (max-width: 900px) {
@@ -5387,4 +5381,191 @@ html.is-lite .cash-chart {
   .client-drawer {
     width: 100vw;
   }
+}
+
+.client-search input {
+  width: min(240px, 70vw);
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  font: inherit;
+}
+
+.timeline-row__domain {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--txt-dim);
+}
+
+.seo-board__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.seo-board__card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+  padding: 12px 12px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  cursor: pointer;
+}
+
+.seo-board__card:hover {
+  border-color: rgba(255, 176, 90, 0.45);
+}
+
+.seo-board__card span {
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--txt-dim);
+}
+
+.seo-board__card strong {
+  font-size: 1.15rem;
+  font-weight: 560;
+}
+
+.seo-board__card em {
+  font-style: normal;
+  font-size: 0.78rem;
+  color: var(--txt-secondary);
+}
+
+.seo-sticky {
+  position: sticky;
+  top: 8px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border);
+  background: color-mix(in srgb, var(--bg-panel) 92%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.seo-sticky__id {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.seo-sticky__id strong {
+  font-size: 1rem;
+}
+
+.seo-sticky__id span {
+  color: var(--txt-dim);
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.seo-ga {
+  font: inherit;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: transparent;
+  color: var(--txt-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.seo-ga.is-on {
+  color: var(--neon-green, #b6f5c8);
+  border-color: rgba(140, 220, 160, 0.4);
+}
+
+.seo-ga.is-warn {
+  color: var(--neon-amber, #ffb05a);
+}
+
+.seo-coverage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.page-board__list,
+.page-board__site {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.page-attn {
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.page-attn header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.page-attn header a {
+  color: inherit;
+  font-weight: 560;
+}
+
+.page-attn header strong,
+.page-attn__signal p {
+  color: var(--txt-secondary);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.page-attn ul {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.page-attn__signal {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.page-attn__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cursor-audit__score {
+  margin: 0;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
 }

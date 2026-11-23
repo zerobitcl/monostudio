@@ -620,17 +620,9 @@ function gscResolvePropertyCached(string $token, string $pageUrl, array &$sites,
 
 function gscResolveProperty(string $token, string $pageUrl, array &$sites): array
 {
+    // No registrar la propiedad en la cuenta del bot: eso fabricaba hosts
+    // huérfanos (un dominio del sitemap aparecía después como “sin vincular”).
     $host = gscHost($pageUrl);
-    $domainProp = $host !== '' ? 'sc-domain:' . $host : '';
-    if ($domainProp !== '') {
-        gscAddSite($token, $domainProp);
-        try {
-            $sites = gscListSites($token);
-        } catch (Throwable $e) {
-            // seguimos con la lista previa
-        }
-    }
-
     $lastError = '';
     $tried = [];
     foreach (gscPropertyCandidates($pageUrl, $sites) as $candidate) {
@@ -1018,14 +1010,29 @@ function gscSubmitSitemap(string $token, string $property, string $sitemapUrl): 
     return ['ok' => false, 'error' => (string) $msg];
 }
 
+/** Solo “descubierta, aún no rastreada”. noindex, canónica y 404 no se reenvían. */
+function gscPageCanResubmit(array $row): bool
+{
+    if (!empty($row['error'])) {
+        return false;
+    }
+    $status = is_array($row['indexStatus'] ?? null) ? $row['indexStatus'] : [];
+    if ((string) ($status['tone'] ?? '') === 'indexed') {
+        return false;
+    }
+    if (!empty($status['canResubmit'])) {
+        return true;
+    }
+    $reason = (string) ($status['reason'] ?? '');
+    $coverage = (string) ($status['coverage'] ?? '');
+    return str_starts_with($reason, 'Descubierta') || stripos($coverage, 'Discovered') !== false;
+}
+
 function gscPendingIndexUrls(array $cached): array
 {
     $urls = [];
     foreach ($cached['pages'] ?? [] as $row) {
-        if (!is_array($row) || !empty($row['error'])) {
-            continue;
-        }
-        if ((string) ($row['indexStatus']['tone'] ?? '') === 'indexed') {
+        if (!is_array($row) || !gscPageCanResubmit($row)) {
             continue;
         }
         $url = (string) ($row['url'] ?? '');
@@ -1394,6 +1401,7 @@ function gscIndexLabel(array $status): array
         'fetch' => $fetch,
         'indexing' => $indexing,
         'lastCrawl' => $lastCrawl,
+        'canResubmit' => !$isIndexed && str_starts_with($reason, 'Descubierta'),
     ];
 }
 

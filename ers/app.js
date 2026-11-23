@@ -184,6 +184,7 @@ class BillingModule {
     if (!Array.isArray(client.notes)) client.notes = [];
     if (!Array.isArray(client.watches)) client.watches = [];
     if (typeof client.siteUrl !== "string") client.siteUrl = "";
+    if (!Array.isArray(client.siteAliases)) client.siteAliases = [];
     if (typeof client.githubRepo !== "string") client.githubRepo = "";
     return client;
   }
@@ -334,6 +335,29 @@ class GscModule {
     } catch {
       return "";
     }
+  }
+
+  /** Dominio principal y alias guardados en el cliente. */
+  static hostsOf(client) {
+    const out = [];
+    const add = (raw) => {
+      const value = String(raw || "").trim();
+      if (!value) return;
+      const host = GscModule.hostOf(value.includes("://") ? value : `https://${value}`);
+      if (host && !out.includes(host)) out.push(host);
+    };
+    add(client?.siteUrl);
+    (client?.siteAliases || []).forEach(add);
+    return out;
+  }
+
+  static pageCanResubmit(row) {
+    const status = row?.indexStatus || {};
+    if (status.tone === "indexed") return false;
+    if (status.canResubmit) return true;
+    const reason = String(status.reason || "");
+    const coverage = String(status.coverage || "");
+    return reason.startsWith("Descubierta") || /discovered/i.test(coverage);
   }
 
   static parsePages(raw) {
@@ -1121,7 +1145,7 @@ class Agenda {
 
     SeoStore.data.forEach((cached, host) => {
       if (!cached?.signals?.length) return;
-      const client = clients.find((c) => GscModule.hostOf(c.siteUrl) === host);
+      const client = clients.find((c) => GscModule.hostsOf(c).includes(host));
       // Prioriza críticos (indexación, caídas fuertes) en la agenda del día.
       const ranked = cached.signals.filter((s) => !hidden.has(Agenda.seoKey(host, s.id))).sort((a, b) => {
         const aSite = a.kind === "site-noindex" ? 1 : 0;
@@ -1216,7 +1240,9 @@ class AppController {
     this.geminiConfigured = null;
 
     this.isLite = AppController.isLiteDevice();
-    this.module = localStorage.getItem(Store.KEYS.module) || "today";
+    const storedModule = localStorage.getItem(Store.KEYS.module) || "seo";
+    this.module = storedModule === "today" ? "seo" : storedModule;
+    this.clientQuery = "";
     this.view = this.isLite ? "list" : localStorage.getItem(Store.KEYS.view) || "orbit";
     this.expanded = !this.isLite && localStorage.getItem(Store.KEYS.expanded) === "1";
     this.chartDays = this.isLite ? 14 : CHART_WINDOW_DAYS;
@@ -1225,12 +1251,16 @@ class AppController {
     this.dom = AppController.#collectDom();
   }
 
-  static MODALS = ["clientModal", "requestModal", "taskModal", "notebookModal", "dumpModal", "reviewModal", "exportModal"];
+  static MODALS = ["clientModal", "requestModal", "notebookModal"];
 
   static #collectDom() {
     const ids = [
-      "panelToday", "panelClients", "panelSeo",
-      "btnModuleToday", "btnModuleClients", "btnModuleSeo",
+      "panelClients", "panelSeo",
+      "btnModuleClients", "btnModuleSeo",
+      "clientSearch",
+      "seoSticky", "seoStickyName", "seoStickyHost", "seoGaChip",
+      "seoSitewide", "pageBoard",
+      "cursorAuditScore", "btnAuditNext",
       "statBilling", "statBillingValue", "statBillingMeta",
       "statMrr", "statMrrValue", "statMrrMeta",
       "statAlerts", "statAlertsValue", "statAlertsMeta",
@@ -1360,42 +1390,27 @@ class AppController {
 
   /* ---------- Eventos ---------- */
   bindEvents() {
-    this.dom.btnModuleToday.addEventListener("click", () => this.setModule("today"));
     this.dom.btnModuleClients.addEventListener("click", () => this.setModule("clients"));
     this.dom.btnModuleSeo.addEventListener("click", () => this.setModule("seo"));
     this.dom.statBilling.addEventListener("click", () => this.setModule("clients"));
     this.dom.statMrr.addEventListener("click", () => this.setModule("clients"));
     this.dom.statAlerts.addEventListener("click", () => this.setModule("seo"));
 
-    this.dom.agendaFilters.addEventListener("click", (e) => {
-      const btn = e.target.closest("[data-filter]");
-      if (!btn) return;
-      this.agendaFilter = btn.dataset.filter;
-      this.dom.agendaFilters.querySelectorAll(".filter").forEach((el) => {
-        el.classList.toggle("is-active", el === btn);
-      });
-      this.renderAgenda();
-    });
-
-    this.dom.agendaList.addEventListener("click", (e) => this.handleAgendaClick(e));
-    this.dom.agendaDoneList.addEventListener("click", (e) => this.handleAgendaClick(e));
-
     document.getElementById("btnOpenClientModal").addEventListener("click", () => this.openCreateClient());
     document.getElementById("btnOpenRequestModal").addEventListener("click", () => this.openRequestModal());
-    this.dom.btnOpenTaskModal = document.getElementById("btnOpenTaskModal");
-    this.dom.btnOpenTaskModal.addEventListener("click", () => this.openTaskModal());
 
     document.querySelectorAll("[data-close]").forEach((btn) =>
       btn.addEventListener("click", () => this.closeModal(btn.dataset.close))
     );
     AppController.MODALS.forEach((id) => {
       const backdrop = this.dom[id];
+      if (!backdrop) return;
       backdrop.addEventListener("pointerdown", (e) => {
         this.backdropPress = e.target === backdrop;
       });
       backdrop.addEventListener("click", (e) => {
         // El dump puede tener mucho texto dictado: solo se cierra si el click empezó y terminó fuera.
-        if (e.target === backdrop && this.backdropPress && id !== "dumpModal") this.closeModal(id);
+        if (e.target === backdrop && this.backdropPress) this.closeModal(id);
       });
     });
     document.addEventListener("keydown", (e) => {
@@ -1405,32 +1420,6 @@ class AppController {
       this.closeClientProfile();
       AppController.MODALS.forEach((id) => this.closeModal(id));
     });
-
-    document.getElementById("btnOpenDump").addEventListener("click", () => this.openDump());
-    document.getElementById("btnOpenExport").addEventListener("click", () => this.openExport());
-    document.getElementById("btnExportCopy").addEventListener("click", () => this.copyExport());
-    document.getElementById("btnExportGemini").addEventListener("click", () => this.copyExport({ openGemini: true }));
-    document.getElementById("btnExportDownload").addEventListener("click", () => this.downloadExport());
-    document.getElementById("btnRestoreDismissed").addEventListener("click", () => this.restoreDismissed());
-    document.getElementById("btnOpenReview").addEventListener("click", () => this.openReview());
-    document.getElementById("btnReviewStart").addEventListener("click", () => this.openReview());
-    document.getElementById("btnReviewSnooze").addEventListener("click", () => this.snoozeReview());
-    this.dom.btnReviewDone.addEventListener("click", () => this.finishReview());
-    this.dom.reviewBody.addEventListener("click", (e) => this.handleAgendaClick(e));
-    this.dom.dumpForm.addEventListener("submit", (e) => this.handleDumpSubmit(e));
-    this.dom.dumpText.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) this.dom.dumpForm.requestSubmit();
-    });
-    this.dom.btnDumpMic.addEventListener("click", () => this.toggleDictation());
-    this.dom.btnDumpBack.addEventListener("click", () => {
-      this.dom.dumpPreview.hidden = true;
-      this.dom.dumpForm.hidden = false;
-      this.dom.dumpText.focus();
-    });
-    this.dom.btnDumpSave.addEventListener("click", () => this.saveDumpPlan());
-    this.dom.dumpList.addEventListener("input", (e) => this.handleDumpEdit(e));
-    this.dom.dumpList.addEventListener("change", (e) => this.handleDumpEdit(e));
-    this.dom.dumpList.addEventListener("click", (e) => this.handleDumpRemove(e));
 
     if (this.dom.btnChatOpen) {
       this.dom.btnChatOpen.addEventListener("click", () => this.toggleChat());
@@ -1455,8 +1444,11 @@ class AppController {
     this.dom.btnDeleteClient.addEventListener("click", () => this.deleteClient(this.editingClientId));
     this.dom.clientPhone.addEventListener("input", () => this.refreshContactLinks());
     this.dom.requestForm.addEventListener("submit", (e) => this.handleAddRequest(e));
-    this.dom.taskForm.addEventListener("submit", (e) => this.handleAddTask(e));
     this.dom.notebookForm.addEventListener("submit", (e) => this.handleAddNote(e));
+    this.dom.clientSearch?.addEventListener("input", () => {
+      this.clientQuery = this.dom.clientSearch.value.trim().toLowerCase();
+      this.renderSwarm();
+    });
     if (this.dom.btnNotebookChat) {
       this.dom.btnNotebookChat.addEventListener("click", () => {
         const id = this.notebookClientId;
@@ -1532,7 +1524,7 @@ class AppController {
       const chip = e.target.closest("[data-host]");
       if (chip) this.selectSeoHost(chip.dataset.host);
     });
-    this.dom.seoSignals.addEventListener("click", (e) => this.handleAgendaClick(e));
+    (this.dom.pageBoard || this.dom.seoSignals).addEventListener("click", (e) => this.handleAgendaClick(e));
     this.dom.seoTableBody.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-index-url]");
       if (btn) this.requestIndex(this.seoHost, btn.dataset.indexUrl);
@@ -1563,7 +1555,13 @@ class AppController {
       this.kwTab = btn.dataset.kwTab;
       this.renderKeywords();
     });
-    this.dom.btnKwAi.addEventListener("click", () => this.analyzeKeywords());
+    this.dom.btnKwAi?.addEventListener("click", () => this.analyzeKeywords());
+    this.dom.btnAuditNext?.addEventListener("click", () => this.generateCursorAudit());
+    this.dom.seoGaChip?.addEventListener("click", () => {
+      if (this.dom.seoDiagDrawer) this.dom.seoDiagDrawer.open = true;
+      this.dom.gscGa4Property?.focus();
+      this.dom.seoDiagDrawer?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
     this.dom.kwAi.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-kw-task]");
       if (btn) this.taskFromKeywordAction(Number(btn.dataset.kwTask));
@@ -1707,16 +1705,16 @@ class AppController {
 
   /* ---------- Navegación ---------- */
   setModule(module, { persist = true, silent = false } = {}) {
-    const valid = ["today", "clients", "seo"];
-    this.module = valid.includes(module) ? module : "today";
+    const valid = ["clients", "seo"];
+    this.module = valid.includes(module) ? module : "seo";
     if (persist) localStorage.setItem(Store.KEYS.module, this.module);
 
     const map = {
-      today: [this.dom.btnModuleToday, this.dom.panelToday],
       clients: [this.dom.btnModuleClients, this.dom.panelClients],
       seo: [this.dom.btnModuleSeo, this.dom.panelSeo],
     };
     Object.entries(map).forEach(([key, [btn, panel]]) => {
+      if (!btn || !panel) return;
       btn.classList.toggle("is-active", key === this.module);
       panel.hidden = key !== this.module;
     });
@@ -1803,7 +1801,7 @@ class AppController {
     const client = this.chatFocusClientId
       ? this.clients.find((c) => c.id === this.chatFocusClientId)
       : this.module === "seo"
-        ? this.clients.find((c) => GscModule.hostOf(c.siteUrl) === this.seoHost)
+        ? this.clientForHost(this.seoHost)
         : null;
     const parts = [];
     if (this.module === "today") parts.push("Hoy");
@@ -1818,14 +1816,14 @@ class AppController {
     const client = this.chatFocusClientId
       ? this.clients.find((c) => c.id === this.chatFocusClientId)
       : this.module === "seo"
-        ? this.clients.find((c) => GscModule.hostOf(c.siteUrl) === this.seoHost)
+        ? this.clientForHost(this.seoHost)
         : this.notebookClientId
           ? this.clients.find((c) => c.id === this.notebookClientId)
           : null;
     const seoHosts = [
       ...new Set(
         this.clients
-          .map((c) => GscModule.hostOf(c.siteUrl))
+          .flatMap((c) => GscModule.hostsOf(c))
           .filter(Boolean)
       ),
     ];
@@ -2118,8 +2116,9 @@ class AppController {
   }
 
   closeModal(id) {
-    if (id === "dumpModal") this.stopDictation();
-    this.dom[id].hidden = true;
+    const el = this.dom[id];
+    if (!el) return;
+    el.hidden = true;
   }
 
   /* ---------- Render raíz ---------- */
@@ -2210,6 +2209,7 @@ class AppController {
 
   /* ---------- Hoy ---------- */
   renderAgenda() {
+    if (!this.dom.agendaList) return;
     const items = this.agendaItems();
     this.dom.agendaDismissed.hidden = this.dismissed.length === 0;
     this.dom.agendaDismissedCount.textContent =
@@ -2467,7 +2467,7 @@ class AppController {
       return;
     }
 
-    const client = this.clients.find((c) => GscModule.hostOf(c.siteUrl) === host);
+    const client = this.clientForHost(host);
     await this.addTask({
       title: signal.title,
       clientId: client?.id || "",
@@ -2488,7 +2488,7 @@ class AppController {
   initDictation() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     this.SpeechRecognition = SR || null;
-    this.dom.btnDumpMic.hidden = !SR;
+    if (this.dom.btnDumpMic) this.dom.btnDumpMic.hidden = !SR;
   }
 
   toggleDictation() {
@@ -3001,14 +3001,21 @@ class AppController {
    * el bot ya ve en Search Console (aunque aún no estén vinculadas a un cliente).
    * Los ignorados se ocultan en ambas pestañas.
    */
+  clientForHost(host) {
+    const key = String(host || "").toLowerCase();
+    if (!key) return null;
+    return this.clients.find((client) => GscModule.hostsOf(client).includes(key)) || null;
+  }
+
   seoHosts() {
     const seen = new Map();
     const ignored = this.ignoredHostSet();
 
     this.clients.forEach((client) => {
-      const host = GscModule.hostOf(client.siteUrl);
-      if (!host || seen.has(host)) return;
-      seen.set(host, { host, label: client.name, clientId: client.id });
+      GscModule.hostsOf(client).forEach((host, index) => {
+        if (!host || seen.has(host)) return;
+        seen.set(host, { host, label: client.name, clientId: client.id, alias: index > 0 });
+      });
     });
 
     [...this.seoProperties.map((p) => p.host), ...(this.seoConnection?.hosts || [])].forEach(
@@ -3091,7 +3098,7 @@ class AppController {
   selectSeoHost(host) {
     this.seoHost = host;
     localStorage.setItem(Store.KEYS.seoHost, host);
-    const client = this.clients.find((c) => GscModule.hostOf(c.siteUrl) === host);
+    const client = this.clientForHost(host);
     if (client) this.chatFocusClientId = client.id;
     this.updateChatContextLabel();
     this.renderSeo();
@@ -3225,7 +3232,7 @@ class AppController {
     this.dom.kwTabs.hidden = !ready;
     this.dom.kwHint.hidden = !ready;
     this.dom.kwHead.closest(".seo-table-wrap").hidden = !ready;
-    this.dom.btnKwAi.hidden = !ready;
+    if (this.dom.btnKwAi) this.dom.btnKwAi.hidden = !ready;
     this.dom.kwStats.innerHTML = "";
 
     if (!ready) {
@@ -3432,14 +3439,16 @@ class AppController {
     const ai = kw?.ai;
     const insights = ai?.insights;
     const btn = this.dom.btnKwAi;
-    btn.disabled = this.kwAnalyzing || !(kw?.summary?.queries > 0);
-    btn.textContent = this.kwAnalyzing
-      ? "Analizando…"
-      : !insights
-        ? "Solo keywords IA"
-        : ai.stale
-          ? "Actualizar keywords IA"
-          : "Rehacer keywords IA";
+    if (btn) {
+      btn.disabled = this.kwAnalyzing || !(kw?.summary?.queries > 0);
+      btn.textContent = this.kwAnalyzing
+        ? "Analizando…"
+        : !insights
+          ? "Solo keywords IA"
+          : ai.stale
+            ? "Actualizar keywords IA"
+            : "Rehacer keywords IA";
+    }
 
     const box = this.dom.kwAi;
     box.innerHTML = "";
@@ -3566,7 +3575,7 @@ class AppController {
   }
 
   githubRepoForHost(host) {
-    const client = this.clients.find((c) => GscModule.hostOf(c.siteUrl) === host);
+    const client = this.clientForHost(host);
     const raw = String(client?.githubRepo || "").trim();
     if (!raw) return "";
     // Mandar siempre owner/repo: evita líos de encoding con URLs en query/POST.
@@ -3742,14 +3751,32 @@ class AppController {
         : done > 0
           ? "Continuar lote"
           : "Empezar lotes";
+    const closure = this.planClosure(this.seoHost);
+    this.dom.btnAuditGenerate.hidden = closure.closed;
     this.dom.btnAuditGenerate.disabled = !canGenerate && !(audit.ready && audit.stale);
     this.dom.btnAuditGenerate.textContent = this.auditBusy
       ? "Generando plan…"
-      : audit.ready && !audit.stale
-        ? "Rehacer plan"
-        : audit.ready && audit.stale
-          ? "Actualizar plan"
+      : audit.ready && (audit.stale || closure.drop)
+        ? "Actualizar plan"
+        : audit.ready
+          ? "Rehacer plan"
           : "Generar plan";
+    if (this.dom.btnAuditNext) {
+      this.dom.btnAuditNext.hidden = !closure.closed;
+      this.dom.btnAuditNext.disabled = this.auditBusy;
+    }
+    if (this.dom.cursorAuditScore) {
+      this.dom.cursorAuditScore.hidden = !audit.ready;
+      if (closure.closed) {
+        this.dom.cursorAuditScore.textContent = "Sitio al 100% de este plan";
+      } else if (closure.checkable > 0) {
+        const reopen = closure.drop ? " · se reabre: cayeron los clics" : closure.stale ? " · se reabre: cambió el sitio" : "";
+        this.dom.cursorAuditScore.textContent = `${closure.verified} de ${closure.checkable} comprobadas · ${closure.pct}%${reopen}`;
+      } else {
+        this.dom.cursorAuditScore.textContent = "";
+        this.dom.cursorAuditScore.hidden = true;
+      }
+    }
 
     const insights = audit.insights;
     const result = this.dom.cursorAuditResult;
@@ -3759,6 +3786,8 @@ class AppController {
       this.dom.cursorAuditChanges.innerHTML = "";
       this.dom.cursorAuditPrompt.value = "";
       if (this.dom.btnAuditVerify) this.dom.btnAuditVerify.hidden = true;
+      if (this.dom.btnAuditNext) this.dom.btnAuditNext.hidden = true;
+      if (this.dom.cursorAuditScore) this.dom.cursorAuditScore.hidden = true;
       return;
     }
 
@@ -3802,9 +3831,7 @@ class AppController {
           : appliedCount > 0
             ? "Verificar de nuevo"
             : "Verificar mejoras";
-      this.dom.btnAuditVerify.title = appliedCount > 0
-        ? "Relee el HTML de las mejoras marcadas Hecho y comprueba si el hallazgo desapareció"
-        : "Marcá Hecho en al menos una mejora y después verificá";
+      this.dom.btnAuditVerify.title = "Relee el HTML de todas las mejoras del plan y marca las que ya no están";
     }
 
     const list = this.dom.cursorAuditChanges;
@@ -3816,17 +3843,28 @@ class AppController {
       li.className = `kw-action is-${c.impacto || "medio"}${done ? ` is-${statusKey}` : ""}`;
       li.dataset.cambioIndex = String(idx);
 
+      const manual = this.cambioIsManual(c);
       const checkLabel = document.createElement("label");
       checkLabel.className = "kw-action__check";
-      const check = document.createElement("input");
-      check.type = "checkbox";
-      check.checked = done;
-      check.disabled = this.auditBusy;
-      check.dataset.act = "cambio-check";
-      check.setAttribute("aria-label", "Marcar mejora como hecha");
-      const checkText = document.createElement("span");
-      checkText.textContent = statusKey === "verified" ? "Verificado" : "Hecho";
-      checkLabel.append(check, checkText);
+      if (manual) {
+        const check = document.createElement("input");
+        check.type = "checkbox";
+        check.checked = done;
+        check.disabled = this.auditBusy;
+        check.dataset.act = "cambio-check";
+        check.setAttribute("aria-label", "Marcar mejora manual como hecha");
+        const checkText = document.createElement("span");
+        checkText.textContent = statusKey === "verified" ? "Verificado" : "Hecho";
+        checkLabel.append(check, checkText);
+      } else {
+        const state = document.createElement("span");
+        state.textContent = statusKey === "verified"
+          ? "Comprobado"
+          : statusKey === "applied"
+            ? "Sigue en el HTML"
+            : "Sin comprobar";
+        checkLabel.appendChild(state);
+      }
 
       const top = document.createElement("div");
       top.className = "kw-action__top";
@@ -3964,27 +4002,48 @@ class AppController {
     }
   }
 
+  cambioIsManual(cambio) {
+    const blob = `${cambio?.titulo || ""} ${cambio?.archivo || ""} ${cambio?.url || ""} ${cambio?.findingId || ""}`.toLowerCase();
+    if (/google business|business profile|google maps|\bgbp\b|ficha de google|fotograf|photo|reseñ|review|maps\.google/.test(blob)) {
+      return true;
+    }
+    return !cambio?.url && !cambio?.archivo;
+  }
+
+  planClosure(host) {
+    const status = host ? this.auditData.get(host) : null;
+    const cambios = status?.audit?.insights?.cambios || [];
+    const checkable = cambios.filter((cambio) => !this.cambioIsManual(cambio));
+    const verified = checkable.filter((cambio) => cambio.status === "verified").length;
+    const pct = checkable.length ? Math.round((verified / checkable.length) * 100) : 0;
+    const seo = host ? SeoStore.get(host) : null;
+    const period = GscModule.periodOf(seo, "28d");
+    const drop = Number(period?.delta?.clicks || 0) <= -5;
+    const stale = Boolean(status?.audit?.stale) || drop;
+    return {
+      pct,
+      verified,
+      checkable: checkable.length,
+      closed: Boolean(status?.audit?.ready) && checkable.length > 0 && pct === 100 && !stale,
+      stale,
+      drop,
+    };
+  }
+
   async verifyAppliedImprovements() {
     const host = this.seoHost;
     if (!host || this.auditBusy) return;
     const current = this.auditData.get(host);
     const cambios = current?.audit?.insights?.cambios || [];
-    const pendingLocal = [
-      ...(current?.applied || []),
-      ...cambios.filter((c) => c.status === "applied"),
-    ];
-    const hasPending = pendingLocal.some((x) => x.status === "applied")
-      || cambios.some((c) => c.status === "applied");
-    if (!hasPending && !(current?.applied || []).some((x) => x.status === "applied" || x.status === "verified")) {
-      this.showToast("Marcá Hecho en una mejora antes de verificar", 4200);
+    if (!cambios.length) {
+      this.showToast("No hay un plan para verificar", 4200);
       return;
     }
-    // Si hay checks locales Hecho sin haber llegado al store, los empuja antes de verificar.
     this.auditBusy = true;
     this.renderCursorAudit();
     try {
       for (const c of cambios) {
-        if (c.status !== "applied") continue;
+        if (this.cambioIsManual(c) || c.status === "verified") continue;
         const already = (current?.applied || []).some(
           (x) => x.id === (c.key || c.findingId) || (c.findingId && x.findingId === c.findingId)
         );
@@ -4021,6 +4080,11 @@ class AppController {
         });
       }
       this.auditData.set(host, status);
+      const closure = this.planClosure(host);
+      if (closure.closed) {
+        this.showToast("Sitio al 100% de este plan");
+        return;
+      }
       const verified = Number(data.autoVerified || 0);
       const pending = Number(data.pending || 0);
       const manual = Number(data.manual || 0);
@@ -4211,7 +4275,7 @@ class AppController {
       this.showToast("Ya está en tu lista");
       return;
     }
-    const client = this.clients.find((c) => GscModule.hostOf(c.siteUrl) === host);
+    const client = this.clientForHost(host);
     const queries = action.queries?.length ? `\nQueries: ${action.queries.join(", ")}` : "";
     await this.addTask({
       title: action.titulo,
@@ -4232,8 +4296,10 @@ class AppController {
       });
       const data = await res.json().catch(() => ({}));
       this.seoRadar = Array.isArray(data.sites) ? data.sites : [];
+      this.seoKpiBoard = Array.isArray(data.kpis) ? data.kpis : [];
     } catch {
       this.seoRadar = [];
+      this.seoKpiBoard = [];
     } finally {
       this.seoRadarLoading = false;
       this.seoRadarLoaded = true;
@@ -4245,18 +4311,17 @@ class AppController {
     const root = this.dom.seoRadar;
     const list = this.dom.seoRadarList;
     if (!root || !list) return;
-    const available = (this.seoRadar || []).filter((site) => site.available);
-    const hot = available.filter((site) => Number(site.score) > 0);
-    const sites = (hot.length ? hot : available).slice(0, 5);
-    root.hidden = sites.length === 0;
+    const kpis = Array.isArray(this.seoKpiBoard) ? this.seoKpiBoard : [];
+    root.hidden = kpis.length === 0;
     const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
     }[ch]));
-    list.innerHTML = sites.map((site, index) => (
-      `<li><button type="button" data-radar-host="${esc(site.host)}">`
-      + `<span class="seo-radar__rank">${index + 1}</span>`
-      + `<span><strong>${esc(site.name)}</strong><em>${esc(site.reason)}</em></span>`
-      + `</button></li>`
+    list.innerHTML = kpis.map((kpi) => (
+      `<button type="button" class="seo-board__card" data-radar-host="${esc(kpi.host)}">`
+      + `<span>${esc(kpi.label)}</span>`
+      + `<strong>${esc(kpi.value)}</strong>`
+      + `<em>${esc(kpi.detail)}</em>`
+      + `</button>`
     )).join("");
   }
 
@@ -4280,10 +4345,11 @@ class AppController {
     this.dom.btnClientReport.hidden = !hasMetrics;
     if (this.dom.btnStudioReport) this.dom.btnStudioReport.hidden = !hasMetrics;
     this.dom.seoPeriodToggle.hidden = !hasMetrics;
-    const pending = notIndexed + Number(data?.inventory?.unchecked || 0);
-    this.dom.btnSeoIndex.hidden = pending === 0;
+    const resubmitCount = (data?.pages || []).filter((page) => GscModule.pageCanResubmit(page)).length;
+    this.dom.btnSeoIndex.hidden = resubmitCount === 0;
     this.dom.btnSeoIndex.disabled = this.indexing;
-    this.dom.btnSeoIndex.textContent = this.indexing ? "Pidiendo rastreo…" : "Indexar pendientes";
+    this.dom.btnSeoIndex.textContent = this.indexing ? "Reenviando sitemap…" : "Reenviar sitemap";
+    this.renderSeoSticky();
 
     if (this.seoConnection && !this.seoConnection.connected) {
       this.#seoNotice(
@@ -4299,6 +4365,8 @@ class AppController {
       this.#seoCritical(null);
       this.dom.seoSignals.innerHTML = "";
       this.dom.seoSignalsEmpty.hidden = true;
+      if (this.dom.pageBoard) this.dom.pageBoard.hidden = true;
+      if (this.dom.seoSticky) this.dom.seoSticky.hidden = true;
       this.dom.btnClientReport.hidden = true;
       if (this.dom.btnStudioReport) this.dom.btnStudioReport.hidden = true;
       this.dom.growthPanel.hidden = true;
@@ -4344,6 +4412,39 @@ class AppController {
     }
   }
 
+  renderSeoSticky() {
+    const bar = this.dom.seoSticky;
+    if (!bar) return;
+    const host = this.seoHost;
+    if (!host) {
+      bar.hidden = true;
+      return;
+    }
+    bar.hidden = false;
+    const client = this.clientForHost(host);
+    if (this.dom.seoStickyName) this.dom.seoStickyName.textContent = client?.name || host;
+    if (this.dom.seoStickyHost) this.dom.seoStickyHost.textContent = host;
+    this.renderGaChip();
+  }
+
+  renderGaChip() {
+    const chip = this.dom.seoGaChip;
+    if (!chip || !this.seoHost) return;
+    const data = SeoStore.get(this.seoHost);
+    const manual = String(this.dom.gscGa4Property?.value || data?.ga4Property || "").trim();
+    const match = (this.gaCatalog?.properties || []).filter((property) => property.host === this.seoHost);
+    if (manual || match.length === 1) {
+      chip.textContent = "Analytics conectado";
+      chip.className = "seo-ga is-on";
+    } else if (match.length > 1) {
+      chip.textContent = "Elegir Analytics";
+      chip.className = "seo-ga is-warn";
+    } else {
+      chip.textContent = "Conectar Analytics";
+      chip.className = "seo-ga";
+    }
+  }
+
   renderGbpPanel() {
     const panel = this.dom.gbpPanel;
     if (!panel) return;
@@ -4378,7 +4479,7 @@ class AppController {
         : "Sin ficha vinculada. Buscá el negocio en Google Maps.";
       searchWrap.hidden = false;
       if (!this.dom.gbpSearchInput.value) {
-        const client = this.clients.find((c) => GscModule.hostOf(c.siteUrl) === host);
+        const client = this.clientForHost(host);
         this.dom.gbpSearchInput.value = client?.name ? `${client.name}` : host.replace(/\.(cl|com|net|org)$/i, "").replace(/[-_.]/g, " ");
       }
       const suggestBtn = document.createElement("button");
@@ -4658,7 +4759,7 @@ class AppController {
     this.dom.seoClients.appendChild(fragment);
   }
 
-  #seoChip({ host, label, clientId }) {
+  #seoChip({ host, label, clientId, alias }) {
     const data = SeoStore.get(host);
     const critical = this.visibleSignals(host).filter((s) => s.severity >= 3).length;
     const notIndexed = Number(data?.inventory?.notIndexed || 0);
@@ -4683,6 +4784,11 @@ class AppController {
       const tag = document.createElement("em");
       tag.className = "site-chip__tag";
       tag.textContent = "Sin cliente";
+      btn.appendChild(tag);
+    } else if (alias) {
+      const tag = document.createElement("em");
+      tag.className = "site-chip__tag";
+      tag.textContent = "Alias";
       btn.appendChild(tag);
     }
 
@@ -4854,36 +4960,101 @@ class AppController {
   renderSeoSignals(data) {
     const signals = this.visibleSignals(this.seoHost, data?.signals || []);
     this.dom.seoSignals.innerHTML = "";
-    this.dom.seoSignalsEmpty.hidden = signals.length > 0 || !data?.totals;
+    if (this.dom.seoSitewide) this.dom.seoSitewide.innerHTML = "";
+    const hasSite = Boolean(data?.totals);
+    this.dom.seoSignalsEmpty.hidden = signals.length > 0 || !hasSite;
+    if (this.dom.pageBoard) this.dom.pageBoard.hidden = !hasSite && signals.length === 0;
+
+    const sitewide = [];
+    const groups = new Map();
+    signals.forEach((signal) => {
+      if (!signal.url) {
+        sitewide.push(signal);
+        return;
+      }
+      if (!groups.has(signal.url)) groups.set(signal.url, []);
+      groups.get(signal.url).push(signal);
+    });
+
+    const ranked = [...groups.entries()].sort((a, b) => {
+      const score = (list) => list.reduce((sum, signal) => sum + (Number(signal.severity) || 1), 0);
+      return score(b[1]) - score(a[1]);
+    });
+
+    if (this.dom.seoSitewide) {
+      this.dom.seoSitewide.hidden = sitewide.length === 0;
+      sitewide.forEach((signal) => {
+        this.dom.seoSitewide.appendChild(this.#signalRow(signal));
+      });
+    }
 
     const fragment = document.createDocumentFragment();
-    signals.forEach((signal) => {
-      fragment.appendChild(
-        this.#agendaItem({
-          id: signal.id,
-          group: "seo",
-          severity: Number(signal.severity) || 1,
-          title: signal.title,
-          detail: signal.detail,
-          clientName: signal.metric,
-          actions: [
-            ...(signal.kind === "noindex" && signal.url
-              ? [{ label: this.indexing ? "Pidiendo…" : "Indexar", act: "index-url", value: `${this.seoHost}|${signal.url}`, primary: true }]
-              : signal.kind === "site-noindex"
-                ? [{ label: this.indexing ? "Pidiendo…" : "Indexar pendientes", act: "index-pending", value: this.seoHost, primary: true }]
-                : [{ label: "Anotar tarea", act: "signal-task", value: `${this.seoHost}|${signal.id}`, primary: true }]),
-            ...(signal.url ? [{ label: "Abrir", act: "link", value: signal.url }] : []),
-            { label: "Descartar", act: "dismiss", value: Agenda.seoKey(this.seoHost, signal.id), subtle: true },
-          ],
-        })
-      );
+    ranked.forEach(([url, list]) => {
+      const li = document.createElement("li");
+      li.className = "page-attn";
+      const head = document.createElement("header");
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = GscModule.pagePath(url);
+      const score = document.createElement("strong");
+      score.textContent = `${list.length} señal${list.length === 1 ? "" : "es"}`;
+      head.append(link, score);
+      const body = document.createElement("ul");
+      list.forEach((signal) => body.appendChild(this.#signalRow(signal)));
+      li.append(head, body);
+      fragment.appendChild(li);
     });
     this.dom.seoSignals.appendChild(fragment);
   }
 
+  #signalRow(signal) {
+    const li = document.createElement("li");
+    li.className = "page-attn__signal";
+    const title = document.createElement("strong");
+    title.textContent = signal.title || "";
+    const detail = document.createElement("p");
+    detail.textContent = [signal.detail, signal.metric].filter(Boolean).join(" · ");
+    const actions = document.createElement("div");
+    actions.className = "page-attn__actions";
+    const page = (SeoStore.get(this.seoHost)?.pages || []).find((row) => row.url === signal.url);
+    if (signal.url && page && GscModule.pageCanResubmit(page)) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "chip-btn";
+      btn.dataset.act = "index-url";
+      btn.dataset.value = `${this.seoHost}|${signal.url}`;
+      btn.textContent = "Reenviar sitemap";
+      actions.appendChild(btn);
+    }
+    if (signal.url) {
+      const open = document.createElement("a");
+      open.className = "chip-btn";
+      open.href = signal.url;
+      open.target = "_blank";
+      open.rel = "noopener";
+      open.textContent = "Abrir";
+      actions.appendChild(open);
+    }
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.className = "chip-btn chip-btn--subtle";
+    dismiss.dataset.act = "dismiss";
+    dismiss.dataset.value = Agenda.seoKey(this.seoHost, signal.id);
+    dismiss.textContent = "Descartar";
+    actions.appendChild(dismiss);
+    li.append(title, detail, actions);
+    return li;
+  }
+
   renderSeoPages(data) {
     const pages = data?.pages || [];
-    this.dom.seoPagesCount.textContent = pages.length ? `(${pages.length})` : "";
+    const indexed = Number(data?.inventory?.indexed || 0);
+    const checked = Number(data?.inventory?.checked || data?.inventory?.total || pages.length || 0);
+    this.dom.seoPagesCount.textContent = checked
+      ? `${indexed} de ${checked} indexadas`
+      : "";
     this.dom.seoTableBody.innerHTML = "";
     if (!pages.length) return;
 
@@ -4947,30 +5118,26 @@ class AppController {
         badge.textContent = row.indexStatus.label;
         state.appendChild(badge);
         const reason = row.indexStatus.reason || row.indexStatus.coverage;
-        if (reason && row.indexStatus.tone === "issue") {
+        if (reason && row.indexStatus.tone !== "indexed") {
           const tip = document.createElement("small");
           tip.className = "seo-index-reason";
           tip.textContent = reason;
           state.appendChild(tip);
         }
-        if (row.indexStatus.tone !== "indexed") {
+        if (GscModule.pageCanResubmit(row)) {
           const btn = document.createElement("button");
           btn.type = "button";
           btn.className = "chip-btn chip-btn--index";
           btn.dataset.indexUrl = row.url;
           btn.disabled = this.indexing;
-          const recent = Number(row.indexRequest?.at || 0) > Date.now() / 1000 - 86400;
-          btn.textContent = this.indexing ? "…" : recent ? "Reenviar" : "Indexar";
+          btn.textContent = this.indexing ? "…" : "Reenviar sitemap";
           state.appendChild(btn);
         }
-      } else {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "chip-btn chip-btn--index";
-        btn.dataset.indexUrl = row.url;
-        btn.disabled = this.indexing;
-        btn.textContent = this.indexing ? "…" : "Indexar";
-        state.appendChild(btn);
+      } else if (!row.indexStatus?.label) {
+        const pending = document.createElement("small");
+        pending.className = "seo-index-reason";
+        pending.textContent = "Sin inspección todavía. Actualizá el sitio.";
+        state.appendChild(pending);
       }
 
       tr.append(
@@ -5128,6 +5295,7 @@ class AppController {
     } else {
       this.dom.ga4Hint.textContent = "Pegá el ID numérico de GA4 (Admin → Detalles de la propiedad).";
     }
+    this.renderGaChip();
   }
 
   renderGrowth() {
@@ -5203,14 +5371,6 @@ class AppController {
       tag.className = "growth__tag";
       tag.textContent = item.title;
       actions.appendChild(tag);
-      if (item.action !== "hold") {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "chip-btn";
-        btn.dataset.growthTask = String(index);
-        btn.textContent = "A la agenda";
-        actions.appendChild(btn);
-      }
       li.append(main, metric, actions);
       this.dom.growthList.appendChild(li);
     });
@@ -5224,7 +5384,7 @@ class AppController {
       this.showToast("Ya está en tu lista");
       return;
     }
-    const client = this.clients.find((c) => GscModule.hostOf(c.siteUrl) === this.seoHost);
+    const client = this.clientForHost(this.seoHost);
     await this.addTask({
       title,
       clientId: client?.id || "",
@@ -5429,10 +5589,14 @@ class AppController {
       const prevHost = GscModule.hostOf(this.clients[idx].siteUrl);
       this.clients[idx] = { ...this.clients[idx], ...payload };
       const nextHost = GscModule.hostOf(payload.siteUrl);
+      this.clients[idx].siteAliases = (this.clients[idx].siteAliases || []).filter((alias) => {
+        const raw = String(alias);
+        return GscModule.hostOf(raw.includes("://") ? raw : `https://${raw}`) !== nextHost;
+      });
       if (prevHost) this.auditData.delete(prevHost);
       if (nextHost && nextHost !== prevHost) this.auditData.delete(nextHost);
     } else {
-      this.clients.push({ id: crypto.randomUUID(), notes: [], watches: [], ...payload });
+      this.clients.push({ id: crypto.randomUUID(), notes: [], watches: [], siteAliases: [], ...payload });
     }
 
     const savedHost = GscModule.hostOf(payload.siteUrl);
@@ -5657,7 +5821,6 @@ class AppController {
 
     this.dom.unlinkedCount.textContent = String(orphans.length);
     this.dom.unlinkedList.innerHTML = "";
-    const linkable = this.clients.filter((c) => !GscModule.hostOf(c.siteUrl));
     const fragment = document.createDocumentFragment();
 
     orphans.forEach(({ host }) => {
@@ -5670,6 +5833,9 @@ class AppController {
       main.className = "unlinked__main";
       const name = document.createElement("strong");
       name.textContent = host;
+      const origin = document.createElement("span");
+      origin.className = "unlinked__stats";
+      origin.textContent = this.hostOrigin(host);
       const meta = document.createElement("span");
       meta.className = "unlinked__stats";
       if (snap.clicks != null) {
@@ -5678,7 +5844,7 @@ class AppController {
       } else {
         meta.textContent = snap.label;
       }
-      main.append(name, meta);
+      main.append(name, origin, meta);
 
       const actions = document.createElement("div");
       actions.className = "unlinked__actions";
@@ -5689,18 +5855,19 @@ class AppController {
       create.dataset.createHost = host;
       create.textContent = "Crear cliente";
 
-      if (linkable.length) {
+      if (this.clients.length) {
         const select = document.createElement("select");
         select.className = "unlinked__link";
         select.dataset.linkHost = host;
         const blank = document.createElement("option");
         blank.value = "";
-        blank.textContent = "Vincular…";
+        blank.textContent = "Es el mismo cliente que…";
         select.appendChild(blank);
-        linkable.forEach((c) => {
+        this.clients.forEach((c) => {
           const opt = document.createElement("option");
           opt.value = c.id;
-          opt.textContent = c.name;
+          const primary = GscModule.hostOf(c.siteUrl);
+          opt.textContent = primary ? `${c.name} · alias` : c.name;
           select.appendChild(opt);
         });
         actions.appendChild(select);
@@ -5773,20 +5940,45 @@ class AppController {
     }
   }
 
+  hostOrigin(host) {
+    let via = "";
+    SeoStore.data.forEach((cached, other) => {
+      if (via || other === host) return;
+      const pages = cached?.pages || [];
+      if (pages.some((page) => GscModule.hostOf(page.url) === host)) {
+        via = this.clientForHost(other)?.name || other;
+      }
+    });
+    if (via) return `URL encontrada en el sitemap de ${via}`;
+    if ((this.seoProperties || []).some((property) => property.host === host)) {
+      return "Search Console lista esta propiedad";
+    }
+    return "Quedó en la configuración y no está en ningún cliente";
+  }
+
   async linkHostToClient(host, clientId) {
     const client = this.clients.find((c) => c.id === clientId);
     if (!client || !host) return;
     const prevUrl = client.siteUrl;
-    client.siteUrl = `https://${host}`;
+    const prevAliases = [...(client.siteAliases || [])];
+    const primary = GscModule.hostOf(client.siteUrl);
+    let asAlias = false;
+    if (!primary) {
+      client.siteUrl = `https://${host}`;
+    } else if (primary !== host && !GscModule.hostsOf(client).includes(host)) {
+      client.siteAliases = [...prevAliases, host];
+      asAlias = true;
+    }
     this.ignoredHosts = (this.ignoredHosts || []).filter((item) => item.host !== host);
     try {
       await this.persistState();
       this.renderAll();
       if (this.module === "seo") this.renderSeo();
-      this.showToast(`${host} → ${client.name}`);
+      this.showToast(asAlias ? `${host} es alias de ${client.name}` : `${host} → ${client.name}`);
       this.loadSeoHost(host);
     } catch {
       client.siteUrl = prevUrl;
+      client.siteAliases = prevAliases;
     }
   }
 
@@ -5914,11 +6106,10 @@ class AppController {
     if (!list) return;
     list.innerHTML = "";
     const requests = (this.requests || []).filter((r) => r.clientId === client.id && r.status === "activa");
-    const tasks = (this.tasks || []).filter((t) => t.clientId === client.id && !t.doneAt && t.status !== "someday");
-    if (!requests.length && !tasks.length) {
+    if (!requests.length) {
       const empty = document.createElement("li");
       empty.className = "client-drawer__muted";
-      empty.textContent = "Sin solicitudes ni tareas abiertas.";
+      empty.textContent = "Sin solicitudes abiertas.";
       list.appendChild(empty);
       return;
     }
@@ -5931,19 +6122,6 @@ class AppController {
       btn.className = "chip-btn chip-btn--subtle";
       btn.dataset.act = "request-done";
       btn.dataset.value = r.id;
-      btn.textContent = "Hecha";
-      li.append(strong, btn);
-      list.appendChild(li);
-    });
-    tasks.forEach((t) => {
-      const li = document.createElement("li");
-      const strong = document.createElement("strong");
-      strong.textContent = t.title;
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "chip-btn chip-btn--subtle";
-      btn.dataset.act = "task-done";
-      btn.dataset.value = t.id;
       btn.textContent = "Hecha";
       li.append(strong, btn);
       list.appendChild(li);
@@ -6193,14 +6371,26 @@ class AppController {
     `;
   }
 
+  visibleClients() {
+    const query = String(this.clientQuery || "").trim().toLowerCase();
+    if (!query) return this.clients;
+    return this.clients.filter((client) => {
+      const blob = `${client.name} ${GscModule.hostsOf(client).join(" ")}`.toLowerCase();
+      return blob.includes(query);
+    });
+  }
+
   renderSwarm() {
     const hasClients = this.clients.length > 0;
-    this.dom.swarmEmpty.hidden = hasClients;
-    const showOrbit = this.view === "orbit" && hasClients;
+    const visible = this.visibleClients();
+    const empty = this.dom.swarmEmpty?.querySelector("p");
+    if (empty) empty.textContent = hasClients && !visible.length ? "Ningún cliente coincide." : "Sin clientes todavía.";
+    this.dom.swarmEmpty.hidden = hasClients && visible.length > 0;
+    const showOrbit = this.view === "orbit" && visible.length > 0;
     this.dom.orbitView.hidden = !showOrbit;
-    this.dom.swarmGrid.hidden = !(this.view === "list" && hasClients);
+    this.dom.swarmGrid.hidden = !(this.view === "list" && visible.length > 0);
 
-    if (!hasClients) return;
+    if (!visible.length) return;
     if (showOrbit) this.renderOrbit();
     else this.renderList();
   }
@@ -6219,7 +6409,7 @@ class AppController {
     );
 
     const maxValue = Math.max(...this.clients.map((c) => Number(c.valueCLP) || 0), 1);
-    const sorted = BillingModule.sortByBilling(this.clients);
+    const sorted = BillingModule.sortByBilling(this.visibleClients());
     const fragment = document.createDocumentFragment();
     const GOLDEN_ANGLE = 137.5;
 
@@ -6284,7 +6474,7 @@ class AppController {
     grid.innerHTML = "";
     const fragment = document.createDocumentFragment();
 
-    BillingModule.sortByBilling(this.clients).forEach((client, i) => {
+    BillingModule.sortByBilling(this.visibleClients()).forEach((client, i) => {
       const isDev = Boolean(client.inDevelopment);
       const days = BillingModule.daysUntil(client.nextBillingDate);
       const urgency = isDev ? "dev" : BillingModule.urgency(days);
@@ -6323,6 +6513,13 @@ class AppController {
       const nameEl = document.createElement("strong");
       nameEl.className = "timeline-row__name";
       nameEl.textContent = client.name;
+      const hostName = GscModule.hostOf(client.siteUrl);
+      if (hostName) {
+        const domain = document.createElement("span");
+        domain.className = "timeline-row__domain";
+        domain.textContent = hostName;
+        nameEl.appendChild(domain);
+      }
       if (isDev) {
         const tag = document.createElement("span");
         tag.className = "tag-dev";
