@@ -9,7 +9,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,560;1,9..144,560&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=20261122a" />
+  <link rel="stylesheet" href="styles.css?v=20261125a" />
+  <link rel="stylesheet" href="shell.css?v=20261125c" />
 </head>
 <body>
 
@@ -27,17 +28,41 @@
     <button type="button" class="btn btn--neon" onclick="location.reload()">Reintentar</button>
   </div>
 
-  <div class="app-shell">
-
-    <header class="topbar">
-      <div class="brand">
-        <h1 class="brand__mark">ER<em>s</em></h1>
+  <div class="shell" id="appShell">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar__brand">
+        <div class="brand">
+          <h1 class="brand__mark">ER<em>s</em></h1>
+        </div>
+        <button type="button" class="sidebar__close" id="btnSidebarClose" aria-label="Cerrar menú">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
       </div>
 
       <nav class="module-nav" aria-label="Módulos">
-        <button class="module-nav__btn is-active" id="btnModuleSeo" type="button">SEO</button>
-        <button class="module-nav__btn" id="btnModuleClients" type="button">Clientes</button>
+        <button class="module-nav__btn is-active" id="btnModuleSeo" type="button">
+          <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16"/><path d="M8 16l3.2-4.2 2.6 2.2L19 7"/></svg>
+          SEO
+        </button>
+        <button class="module-nav__btn" id="btnModuleClients" type="button">
+          <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 20v-1.2a3.2 3.2 0 0 0-3.2-3.2H7.2A3.2 3.2 0 0 0 4 18.8V20"/><circle cx="10" cy="8" r="3"/><path d="M20 20v-1.2a3.2 3.2 0 0 0-2.4-3.1M16 5.1a3 3 0 0 1 0 5.8"/></svg>
+          Clientes
+        </button>
       </nav>
+
+      <div class="sidebar__foot">
+        <span class="sidebar__dot" aria-hidden="true"></span>
+        <span>Mono Studio</span>
+      </div>
+    </aside>
+    <div class="sidebar-backdrop" id="sidebarBackdrop" hidden></div>
+
+    <div class="canvas">
+    <header class="topbar">
+      <button type="button" class="sidebar-toggle" id="btnSidebarOpen" aria-label="Abrir menú" aria-expanded="false" aria-controls="sidebar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <p class="topbar__kicker">Operación</p>
 
       <div class="topbar__stats" id="topStats">
         <button class="stat" id="statBilling" type="button">
@@ -56,10 +81,11 @@
           <em class="stat__meta" id="statAlertsMeta">Sin revisar</em>
         </button>
         <button class="icon-btn chat-launch" id="btnChatOpen" type="button" title="Copiloto" aria-label="Abrir copiloto" aria-expanded="false" aria-controls="chatDrawer">
-          ◈
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6.5h14v9H8l-3 2.5z"/></svg>
         </button>
       </div>
     </header>
+    <div class="canvas__scroll">
 
     <!-- ============ CLIENTES ============ -->
     <main class="panel panel--split" id="panelClients" hidden>
@@ -292,6 +318,70 @@
         <p class="signal-empty" id="radiografiaEmpty">Diagnóstico forense 7d vs 7d: CTR×dispositivo, commits de title/meta e indexación. No reemplaza el plan de Cursor.</p>
       </section>
 
+      <section class="motor" id="motorPanel" hidden aria-labelledby="motorTitle">
+        <header class="kw__head">
+          <div>
+            <h3 id="motorTitle">Motor de Mejora Continua</h3>
+            <p class="kw__meta" id="motorMeta"></p>
+          </div>
+          <p class="motor__cost" id="motorCost">Última consulta — · Acumulado —</p>
+        </header>
+        <form class="motor__form" id="motorForm" autocomplete="off">
+          <label class="field">
+            <span>URL del proyecto</span>
+            <select id="motorUrl" required></select>
+          </label>
+          <label class="field">
+            <span>Keyword principal</span>
+            <input type="text" id="motorKeyword" maxlength="120" placeholder="servicio + ciudad" required />
+          </label>
+          <label class="field motor__city">
+            <span>Ciudad o comuna</span>
+            <input type="text" id="motorCity" placeholder="Escribí para buscar en Chile" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="motorCityList" aria-expanded="false" />
+            <ul class="motor__suggest" id="motorCityList" role="listbox" hidden></ul>
+          </label>
+          <div class="motor__actions">
+            <button class="btn btn--neon" id="btnMotorRun" type="submit">Ejecutar Diagnóstico</button>
+            <button class="btn btn--ghost" id="btnMotorForce" type="button">Forzar actualización</button>
+          </div>
+        </form>
+        <p class="notice" id="motorNotice" hidden></p>
+        <div class="motor__kpis" id="motorKpis" hidden>
+          <article class="seo-kpi">
+            <span>Posición local</span>
+            <strong id="motorPos">—</strong>
+            <em id="motorPosMeta"></em>
+          </article>
+          <article class="seo-kpi">
+            <span>Clics / Leads (28d)</span>
+            <strong id="motorLeads">—</strong>
+            <em id="motorLeadsMeta"></em>
+          </article>
+          <article class="seo-kpi">
+            <span>On-Page propio vs top 3</span>
+            <strong id="motorScore">—</strong>
+            <em id="motorScoreMeta"></em>
+          </article>
+        </div>
+        <div class="seo-table-wrap" id="motorTableWrap" hidden>
+          <table class="seo-table">
+            <thead>
+              <tr>
+                <th>Sitio</th>
+                <th>Score</th>
+                <th>Title</th>
+                <th>H1</th>
+                <th>Palabras</th>
+                <th>Schema</th>
+                <th>Errores</th>
+              </tr>
+            </thead>
+            <tbody id="motorTableBody"></tbody>
+          </table>
+        </div>
+        <div id="motorTasks"></div>
+      </section>
+
       <section class="cursor-audit" id="cursorAuditPanel" hidden aria-labelledby="cursorAuditTitle">
         <header class="kw__head">
           <div>
@@ -377,6 +467,8 @@
         </form>
       </details>
     </main>
+    </div>
+    </div>
   </div>
 
   <div class="node-tooltip" id="nodeTooltip" role="tooltip" hidden>
@@ -608,7 +700,8 @@
   </div>
   <div class="chat-backdrop" id="chatBackdrop" hidden></div>
 
-  <script src="app.js?v=20261122a"></script>
+  <script src="app.js?v=20261125a"></script>
+  <script src="shell.js?v=20261125b"></script>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </body>

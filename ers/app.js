@@ -1228,6 +1228,21 @@ class AppController {
     this.isSaving = false;
     this.agendaFilter = "all";
     this.seoHost = localStorage.getItem(Store.KEYS.seoHost) || "";
+    this.motorFor = "";
+    this.motorLoadedFor = "";
+    this.motorPlan = null;
+    this.motorCosts = null;
+    this.motorBusy = false;
+    this.motorConfigured = null;
+    this.motorUrlTouched = false;
+    this.motorSeq = 0;
+    this.motorCitySeq = 0;
+    this.motorCityTimer = null;
+    this.motorLocationCode = 0;
+    this.motorLocationName = "";
+    this.motorTaskSig = "";
+    this.motorTableSig = "";
+    this.motorUrlSig = "";
     this.seoPeriod = localStorage.getItem(Store.KEYS.seoPeriod) || "28d";
     this.seoProperties = [];
     this.seoConnection = null;
@@ -1309,6 +1324,9 @@ class AppController {
       "cursorAuditPrompt", "btnAuditBatch", "btnAuditGenerate", "btnAuditCopy", "btnAuditVerify",
       "radiografiaPanel", "radiografiaMeta", "radiografiaBody", "radiografiaTableWrap", "radiografiaChips",
       "radiografiaMarkdown", "radiografiaEmpty", "btnRadiografiaGenerate", "btnRadiografiaCopy",
+      "motorPanel", "motorMeta", "motorCost", "motorForm", "motorUrl", "motorKeyword", "motorCity", "motorCityList",
+      "btnMotorRun", "btnMotorForce", "motorNotice", "motorKpis", "motorPos", "motorPosMeta",
+      "motorLeads", "motorLeadsMeta", "motorScore", "motorScoreMeta", "motorTableWrap", "motorTableBody", "motorTasks",
       "briefTitle", "reportFrame",
       "clientModal", "requestModal", "taskModal", "notebookModal",
       "clientForm", "clientModalTitle", "clientSubmitBtn", "btnDeleteClient", "clientIdField",
@@ -1553,6 +1571,27 @@ class AppController {
       if (btn) this.requestIndex(this.seoHost, btn.dataset.indexUrl);
     });
     this.dom.btnGscRefresh.addEventListener("click", () => this.loadSeoHost(this.seoHost, true));
+    this.dom.motorForm?.addEventListener("submit", (e) => {
+      e.preventDefault();
+      this.runMotor(false);
+    });
+    this.dom.btnMotorForce?.addEventListener("click", () => this.runMotor(true));
+    this.dom.motorUrl?.addEventListener("change", () => { this.motorUrlTouched = true; });
+    this.dom.motorCity?.addEventListener("input", () => {
+      if (this.dom.motorCity.value.trim() !== this.motorLocationName) this.motorLocationCode = 0;
+      this.queueCitySearch();
+    });
+    this.dom.motorCity?.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        this.dom.motorCityList.hidden = true;
+        this.dom.motorCity.setAttribute("aria-expanded", "false");
+      }
+    });
+    this.dom.motorTasks?.addEventListener("change", (e) => {
+      const box = e.target.closest("[data-task-id]");
+      if (!box) return;
+      this.motorSetTask(box.dataset.taskId, box.checked);
+    });
     this.dom.btnSeoIndex.addEventListener("click", () => this.requestIndex(this.seoHost));
     this.dom.btnClientReport.addEventListener("click", () => this.openClientReport({ variant: "client" }));
     this.dom.btnStudioReport?.addEventListener("click", () => this.openClientReport({ variant: "studio" }));
@@ -3637,6 +3676,467 @@ class AppController {
     }
   }
 
+  motorMoney(value) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return "—";
+    return `US$${amount.toFixed(4)}`;
+  }
+
+  motorFmt(value) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return "—";
+    return new Intl.NumberFormat("es-CL").format(amount);
+  }
+
+  async motorRequest(path, options) {
+    const res = await fetch(path, options);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.error) throw new Error(data.error || `Error ${res.status}`);
+    return data;
+  }
+
+  renderMotor() {
+    const panel = this.dom.motorPanel;
+    if (!panel) return;
+    const host = this.seoHost;
+    const client = host ? this.clientForHost(host) : null;
+    if (!host) {
+      panel.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+    const key = `${client?.id || ""}|${host}`;
+    if (this.motorFor !== key) {
+      this.motorFor = key;
+      this.motorLoadedFor = "";
+      this.motorPlan = null;
+      this.motorCosts = null;
+      this.motorUrlTouched = false;
+      this.motorConfigured = null;
+      this.motorLocationCode = 0;
+      this.motorLocationName = "";
+      this.motorTaskSig = "";
+      this.motorTableSig = "";
+      this.motorUrlSig = "";
+      if (this.dom.motorKeyword) this.dom.motorKeyword.value = "";
+      if (this.dom.motorCity) this.dom.motorCity.value = "";
+      if (this.dom.motorCityList) {
+        this.dom.motorCityList.hidden = true;
+        this.dom.motorCityList.replaceChildren();
+        this.dom.motorCity?.setAttribute("aria-expanded", "false");
+      }
+      if (this.dom.motorNotice) this.dom.motorNotice.hidden = true;
+    }
+    if (!client?.id) {
+      this.paintMotorLocked("Este sitio no está vinculado a un cliente. El motor no mezcla datos entre proyectos.");
+      return;
+    }
+    this.paintMotor();
+    if (this.motorLoadedFor !== key) {
+      this.motorLoadedFor = key;
+      this.loadMotorStatus(key);
+    }
+  }
+
+  paintMotorLocked(message) {
+    if (this.dom.motorNotice) {
+      this.dom.motorNotice.hidden = false;
+      this.dom.motorNotice.textContent = message;
+    }
+    if (this.dom.btnMotorRun) this.dom.btnMotorRun.disabled = true;
+    if (this.dom.btnMotorForce) this.dom.btnMotorForce.disabled = true;
+    if (this.dom.motorKpis) this.dom.motorKpis.hidden = true;
+    if (this.dom.motorTableWrap) this.dom.motorTableWrap.hidden = true;
+    if (this.dom.motorTasks) this.dom.motorTasks.replaceChildren();
+    if (this.dom.motorCost) this.dom.motorCost.textContent = "Última consulta — · Acumulado —";
+  }
+
+  paintMotor() {
+    const plan = this.motorPlan;
+    const costs = this.motorCosts || { lastRunUsd: 0, totalUsd: 0 };
+    if (this.dom.motorCost) {
+      this.dom.motorCost.textContent = `Última consulta ${this.motorMoney(costs.lastRunUsd)} · Acumulado ${this.motorMoney(costs.totalUsd)}`;
+    }
+    const busy = this.motorBusy;
+    if (this.dom.btnMotorRun) {
+      this.dom.btnMotorRun.disabled = busy;
+      this.dom.btnMotorRun.textContent = busy ? "Diagnosticando…" : "Ejecutar Diagnóstico";
+    }
+    if (this.dom.btnMotorForce) this.dom.btnMotorForce.disabled = busy;
+    this.dom.motorPanel?.classList.toggle("is-busy", busy);
+    this.fillMotorUrls();
+    this.paintMotorKpis(plan);
+    this.paintMotorTable(plan);
+    this.paintMotorTasks(plan);
+    const bits = [];
+    if (plan?.location_label) bits.push(plan.location_label);
+    if (plan?.fetchedAt) {
+      bits.push(new Date(plan.fetchedAt * 1000).toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" }));
+    }
+    if (plan?.expiresAt) bits.push(`caché hasta ${new Date(plan.expiresAt * 1000).toLocaleDateString("es-CL")}`);
+    if (plan?.fromCache) bits.push("sin cargo nuevo");
+    if (this.dom.motorMeta) this.dom.motorMeta.textContent = bits.join(" · ");
+    this.prefillMotor(plan);
+  }
+
+  fillMotorUrls() {
+    const select = this.dom.motorUrl;
+    const host = this.seoHost;
+    if (!select || !host) return;
+    const previous = select.value;
+    const data = SeoStore.get(host);
+    const signature = [
+      host,
+      ...(data?.pages || []).map((page) => page.url),
+      this.motorPlan?.url || "",
+    ].join("\n");
+    if (signature === this.motorUrlSig && select.options.length) return;
+    this.motorUrlSig = signature;
+    const urls = [];
+    const push = (url, label) => {
+      if (!url || urls.some((item) => item.url === url)) return;
+      urls.push({ url, label: label || url });
+    };
+    push(`https://${host}/`, "Home");
+    (data?.pages || []).forEach((page) => push(page.url, page.label && page.label !== page.url ? page.label : page.url));
+    if (this.motorPlan?.url) push(this.motorPlan.url, this.motorPlan.url);
+    select.replaceChildren();
+    urls.forEach((item) => {
+      const opt = document.createElement("option");
+      opt.value = item.url;
+      opt.textContent = item.label;
+      select.appendChild(opt);
+    });
+    if (urls.some((item) => item.url === previous)) select.value = previous;
+  }
+
+  prefillMotor(plan) {
+    if (!plan) return;
+    if (!this.motorUrlTouched && this.dom.motorUrl && plan.url) {
+      if ([...this.dom.motorUrl.options].some((opt) => opt.value === plan.url)) this.dom.motorUrl.value = plan.url;
+    }
+    if (this.dom.motorKeyword && !this.dom.motorKeyword.value && plan.keyword) {
+      this.dom.motorKeyword.value = plan.keyword;
+    }
+    const label = plan.location_label || plan.location_name || "";
+    if (this.dom.motorCity && !this.dom.motorCity.value && label) {
+      this.dom.motorCity.value = label;
+      this.motorLocationName = label;
+      this.motorLocationCode = Number(plan.location_code) || 0;
+    }
+  }
+
+  paintMotorKpis(plan) {
+    const box = this.dom.motorKpis;
+    if (!box) return;
+    if (!plan?.serp_local_data) {
+      box.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    const pos = plan.serp_local_data.position;
+    if (this.dom.motorPos) this.dom.motorPos.textContent = pos == null ? "Fuera del top 10" : String(pos);
+    if (this.dom.motorPosMeta) {
+      const pack = plan.serp_local_data.local_pack ? "Local Pack" : "Sin Local Pack";
+      const ai = plan.serp_local_data.ai_overview?.present ? " · AI Overview" : "";
+      this.dom.motorPosMeta.textContent = pack + ai;
+    }
+    if (this.dom.motorLeads) {
+      this.dom.motorLeads.textContent = `${this.motorFmt(plan.gsc_data?.clicks)} clics · ${this.motorFmt(plan.ga4_data?.page?.key_events)} leads`;
+    }
+    if (this.dom.motorLeadsMeta) {
+      const page = plan.ga4_data?.page || {};
+      this.dom.motorLeadsMeta.textContent = `Móvil ${this.motorFmt(page.sessions_mobile)} · Desktop ${this.motorFmt(page.sessions_desktop)}`;
+    }
+    if (this.dom.motorScore) {
+      const mine = plan.onpage_comparison?.own_score;
+      const avg = plan.onpage_comparison?.top3_avg_score;
+      this.dom.motorScore.textContent = `${mine == null ? "—" : mine} vs ${avg == null ? "—" : avg}`;
+    }
+    if (this.dom.motorScoreMeta) this.dom.motorScoreMeta.textContent = "Score propio vs promedio top 3";
+  }
+
+  paintMotorTable(plan) {
+    const wrap = this.dom.motorTableWrap;
+    const body = this.dom.motorTableBody;
+    if (!wrap || !body) return;
+    const rows = plan?.onpage_comparison?.rows;
+    if (!rows?.length) {
+      wrap.hidden = true;
+      body.replaceChildren();
+      this.motorTableSig = "";
+      return;
+    }
+    wrap.hidden = false;
+    const sig = JSON.stringify(rows);
+    if (sig === this.motorTableSig) return;
+    this.motorTableSig = sig;
+    body.replaceChildren();
+    rows.forEach((row) => {
+      const tr = document.createElement("tr");
+      if (row.role === "ours") tr.className = "is-ours";
+      const cells = [
+        row.role === "ours" ? "Mi Web" : `Rival #${row.rank || "—"}`,
+        row.onpage_score == null ? "—" : String(row.onpage_score),
+        row.title || "—",
+        row.h1 || "—",
+        row.words == null ? "—" : String(row.words),
+        (row.schema || []).join(", ") || "—",
+        (row.errors || []).join(" · ") || "—",
+      ];
+      cells.forEach((text) => {
+        const td = document.createElement("td");
+        td.textContent = text;
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    });
+  }
+
+  paintMotorTasks(plan) {
+    const root = this.dom.motorTasks;
+    if (!root) return;
+    const tasks = Array.isArray(plan?.tasks) ? plan.tasks : [];
+    const sig = JSON.stringify(tasks);
+    if (sig === this.motorTaskSig && root.childElementCount) return;
+    this.motorTaskSig = sig;
+    root.replaceChildren();
+    if (!tasks.length) {
+      const empty = document.createElement("p");
+      empty.className = "signal-empty";
+      empty.textContent = plan
+        ? "Gemini no dejó tareas con la evidencia de este diagnóstico."
+        : "Ejecutá un diagnóstico para generar tareas. No corre solo.";
+      root.appendChild(empty);
+      return;
+    }
+    const levels = [
+      ["alta", "Prioridad alta"],
+      ["media", "Prioridad media"],
+      ["baja", "Prioridad baja"],
+    ];
+    const cats = {
+      quick_wins_seo: "Quick win SEO",
+      alertas_cro: "CRO",
+      brecha_tecnica_vs_top1: "Brecha vs #1",
+      oportunidades_locales: "Oportunidad local",
+    };
+    const impact = { trafico: "Tráfico", ctr: "CTR", leads: "Leads" };
+    levels.forEach(([level, label]) => {
+      const group = tasks.filter((task) => task.prioridad === level);
+      if (!group.length) return;
+      const section = document.createElement("section");
+      section.className = "motor-group";
+      const heading = document.createElement("h4");
+      heading.textContent = label;
+      section.appendChild(heading);
+      group.forEach((task) => {
+        const row = document.createElement("label");
+        row.className = `motor-task${task.estado === "aplicado" ? " is-done" : ""}`;
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = task.estado === "aplicado";
+        box.dataset.taskId = task.id;
+        const copy = document.createElement("span");
+        const kicker = document.createElement("small");
+        kicker.textContent = `${cats[task.categoria] || task.categoria} · ${impact[task.impacto] || task.impacto}`;
+        const action = document.createElement("span");
+        action.className = "motor-task__action";
+        action.textContent = task.accion_exacta;
+        copy.append(kicker, action);
+        if (task.estado === "aplicado" && task.appliedOn) {
+          const when = document.createElement("em");
+          when.textContent = `Aplicado el ${task.appliedOn}`;
+          copy.appendChild(when);
+        }
+        row.append(box, copy);
+        section.appendChild(row);
+      });
+      root.appendChild(section);
+    });
+  }
+
+  async loadMotorStatus(key) {
+    const host = this.seoHost;
+    const client = this.clientForHost(host);
+    const seq = ++this.motorSeq;
+    if (!client?.id) return;
+    try {
+      const qs = new URLSearchParams({ action: "status", proyecto_id: client.id, host });
+      const data = await this.motorRequest(`./api/compile_growth_plan.php?${qs}`, {
+        headers: { Accept: "application/json" },
+      });
+      if (seq !== this.motorSeq || this.motorFor !== key) return;
+      this.motorConfigured = !!data.configured;
+      this.motorCosts = data.costs || { lastRunUsd: 0, totalUsd: 0 };
+      this.motorPlan = data.plan || null;
+      this.motorTaskSig = "";
+      this.motorTableSig = "";
+      this.paintMotor();
+      if (!data.configured && this.dom.motorNotice) {
+        this.dom.motorNotice.hidden = false;
+        this.dom.motorNotice.textContent = "Falta ers/data/dataforseo.json con DATAFORSEO_LOGIN y DATAFORSEO_PASSWORD.";
+      } else if (data.plan?.warnings?.length && this.dom.motorNotice) {
+        this.dom.motorNotice.hidden = false;
+        this.dom.motorNotice.textContent = data.plan.warnings.join(" ");
+      }
+    } catch (err) {
+      if (seq !== this.motorSeq || this.motorFor !== key) return;
+      if (this.dom.motorNotice) {
+        this.dom.motorNotice.hidden = false;
+        this.dom.motorNotice.textContent = err.message || "No se pudo leer el motor.";
+      }
+    }
+  }
+
+  queueCitySearch() {
+    clearTimeout(this.motorCityTimer);
+    const query = this.dom.motorCity?.value.trim() || "";
+    if (query.length < 2) {
+      if (this.dom.motorCityList) {
+        this.dom.motorCityList.hidden = true;
+        this.dom.motorCityList.replaceChildren();
+      }
+      this.dom.motorCity?.setAttribute("aria-expanded", "false");
+      return;
+    }
+    this.motorCityTimer = setTimeout(() => this.searchCities(query), 220);
+  }
+
+  async searchCities(query) {
+    const client = this.clientForHost(this.seoHost);
+    if (!client?.id) return;
+    const seq = ++this.motorCitySeq;
+    try {
+      const qs = new URLSearchParams({ action: "locations", proyecto_id: client.id, q: query });
+      const data = await this.motorRequest(`./api/compile_growth_plan.php?${qs}`, {
+        headers: { Accept: "application/json" },
+      });
+      if (seq !== this.motorCitySeq) return;
+      this.renderCityMatches(data.matches || []);
+    } catch (err) {
+      if (seq !== this.motorCitySeq) return;
+      if (this.dom.motorCityList) this.dom.motorCityList.hidden = true;
+      this.showToast(err.message || "No se pudieron leer las ciudades");
+    }
+  }
+
+  renderCityMatches(matches) {
+    const list = this.dom.motorCityList;
+    if (!list) return;
+    list.replaceChildren();
+    if (!matches.length) {
+      list.hidden = true;
+      this.dom.motorCity?.setAttribute("aria-expanded", "false");
+      return;
+    }
+    matches.forEach((match) => {
+      const item = document.createElement("li");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = match.label || match.location_name;
+      btn.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        this.motorLocationCode = Number(match.location_code) || 0;
+        this.motorLocationName = btn.textContent;
+        this.dom.motorCity.value = this.motorLocationName;
+        list.hidden = true;
+        this.dom.motorCity.setAttribute("aria-expanded", "false");
+      });
+      item.appendChild(btn);
+      list.appendChild(item);
+    });
+    list.hidden = false;
+    this.dom.motorCity?.setAttribute("aria-expanded", "true");
+  }
+
+  async runMotor(force) {
+    if (this.motorBusy) return;
+    const client = this.clientForHost(this.seoHost);
+    if (!client?.id) return;
+    const url = this.dom.motorUrl?.value || "";
+    const keyword = this.dom.motorKeyword?.value.trim() || "";
+    if (!url || keyword.length < 2 || !this.motorLocationCode) {
+      this.showToast("Completá URL, keyword y una ciudad del listado.");
+      return;
+    }
+    this.motorBusy = true;
+    this.paintMotor();
+    if (this.dom.motorNotice) {
+      this.dom.motorNotice.hidden = false;
+      this.dom.motorNotice.textContent = force
+        ? "Actualizando contra DataForSEO. Puede tardar cerca de un minuto."
+        : "Ejecutando diagnóstico. Si la caché de 7 días sigue vigente, no se vuelve a cobrar.";
+    }
+    try {
+      const data = await this.motorRequest("./api/compile_growth_plan.php", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          action: "run",
+          proyecto_id: client.id,
+          url_objetivo: url,
+          keyword,
+          location_code: this.motorLocationCode,
+          force: !!force,
+        }),
+      });
+      this.motorPlan = data.plan || null;
+      this.motorCosts = data.costs || this.motorCosts;
+      this.motorTaskSig = "";
+      this.motorTableSig = "";
+      this.motorBusy = false;
+      this.paintMotor();
+      if (this.dom.motorNotice) {
+        const warnings = data.plan?.warnings || [];
+        if (warnings.length) {
+          this.dom.motorNotice.hidden = false;
+          this.dom.motorNotice.textContent = warnings.join(" ");
+        } else {
+          this.dom.motorNotice.hidden = true;
+        }
+      }
+      this.showToast(data.fromCache || Number(data.chargedUsd) === 0
+        ? "Diagnóstico en caché, sin cargo nuevo."
+        : "Diagnóstico listo.");
+    } catch (err) {
+      this.motorBusy = false;
+      this.paintMotor();
+      if (this.dom.motorNotice) {
+        this.dom.motorNotice.hidden = false;
+        this.dom.motorNotice.textContent = err.message || "El diagnóstico no se pudo completar.";
+      }
+      this.showToast(err.message || "El diagnóstico no se pudo completar.");
+    }
+  }
+
+  async motorSetTask(taskId, applied) {
+    const client = this.clientForHost(this.seoHost);
+    if (!client?.id || !this.motorPlan) return;
+    const previous = this.motorPlan.tasks.map((task) => ({ ...task }));
+    try {
+      const data = await this.motorRequest("./api/compile_growth_plan.php", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          action: "task",
+          proyecto_id: client.id,
+          host: this.seoHost,
+          task_id: taskId,
+          estado: applied ? "aplicado" : "pendiente",
+        }),
+      });
+      this.motorPlan = data.plan;
+      this.motorTaskSig = "";
+      this.paintMotorTasks(this.motorPlan);
+    } catch (err) {
+      this.motorPlan = { ...this.motorPlan, tasks: previous };
+      this.motorTaskSig = "";
+      this.paintMotorTasks(this.motorPlan);
+      this.showToast(err.message || "No se guardó el estado");
+    }
+  }
+
   renderCursorAudit() {
     const host = this.seoHost;
     const seo = host ? SeoStore.get(host) : null;
@@ -4558,6 +5058,7 @@ class AppController {
       this.dom.seoPeriodToggle.hidden = true;
       this.dom.btnSeoIndex.hidden = true;
       this.dom.kwPanel.hidden = true;
+      if (this.dom.motorPanel) this.dom.motorPanel.hidden = true;
       return;
     } else if (data?.error) {
       this.#seoNotice(data.error, "warn");
@@ -4585,6 +5086,7 @@ class AppController {
     this.renderGrowth();
     this.renderCursorAudit();
     this.renderRadiografia();
+    this.renderMotor();
     this.renderGaHint();
     this.renderSeoDiagnostics(data);
     this.syncSeoForm(data);

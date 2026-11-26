@@ -5618,3 +5618,137 @@ html.is-lite .cash-chart {
   font-size: 0.95rem;
   letter-spacing: 0.02em;
 }
+
+/* Motor de mejora continua: mismo marco ámbar que el plan, disparo manual. */
+.motor {
+  display: grid;
+  gap: 14px;
+  margin: 18px 0 8px;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 206, 150, 0.28);
+  background: linear-gradient(165deg, rgba(255, 206, 150, 0.08), rgba(7, 8, 15, 0.35) 55%, transparent);
+}
+
+.motor__cost {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--neon-blue);
+  font-size: 0.82rem;
+}
+
+.motor__form {
+  display: grid;
+  gap: 12px;
+}
+
+.motor__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.motor__city {
+  position: relative;
+}
+
+.motor__suggest {
+  position: absolute;
+  z-index: 6;
+  top: calc(100% - 2px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: var(--bg-elevated);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.motor__suggest button {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--txt-primary);
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.motor__suggest button:hover,
+.motor__suggest button:focus-visible {
+  background: rgba(255, 206, 150, 0.12);
+}
+
+.motor__kpis {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.motor .seo-table tr.is-ours td:first-child {
+  color: var(--neon-blue);
+}
+
+.motor-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.motor-group h4 {
+  margin: 12px 0 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--txt-secondary);
+}
+
+.motor-task {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--glass-border);
+  cursor: pointer;
+}
+
+.motor-task small,
+.motor-task em {
+  display: block;
+  color: var(--txt-dim);
+  font-style: normal;
+  font-size: 0.75rem;
+}
+
+.motor-task__action {
+  display: block;
+  margin-top: 3px;
+}
+
+.motor-task.is-done .motor-task__action {
+  color: var(--txt-dim);
+}
+
+@media (min-width: 720px) {
+  .motor__kpis {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (min-width: 960px) {
+  .motor__form {
+    grid-template-columns: 1.4fr 1fr 1fr;
+  }
+
+  .motor__actions {
+    grid-column: 1 / -1;
+  }
+}

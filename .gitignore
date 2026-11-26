@@ -8,6 +8,10 @@ ers/data/audit.jsonl
 
 # Copiloto Gemini
 ers/data/gemini.json
+
+# DataForSEO: credenciales, caché por proyecto y listado de Chile
+ers/data/dataforseo.json
+ers/data/dfs/
 ers/data/daily.json
 ers/data/daily-state.json
 
@@ -33,6 +37,7 @@ ers/data/*-*.json
 !ers/data/store.example.json
 !ers/data/gsc.example.json
 !ers/data/gemini.example.json
+!ers/data/dataforseo.example.json
 !ers/data/github.example.json
 !ers/data/places.example.json
 !ers/data/psi.example.json
