@@ -3724,46 +3724,8 @@ class AppController {
   }
 
   renderMotor() {
-    const panel = this.dom.motorPanel;
-    if (!panel) return;
-    const host = this.seoHost;
-    const client = host ? this.clientForHost(host) : null;
-    if (!host) {
-      panel.hidden = true;
-      return;
-    }
-    panel.hidden = false;
-    const key = `${client?.id || ""}|${host}`;
-    if (this.motorFor !== key) {
-      this.motorFor = key;
-      this.motorLoadedFor = "";
-      this.motorPlan = null;
-      this.motorCosts = null;
-      this.motorUrlTouched = false;
-      this.motorConfigured = null;
-      this.motorLocationCode = 0;
-      this.motorLocationName = "";
-      this.motorTaskSig = "";
-      this.motorTableSig = "";
-      this.motorUrlSig = "";
-      if (this.dom.motorKeyword) this.dom.motorKeyword.value = "";
-      if (this.dom.motorCity) this.dom.motorCity.value = "";
-      if (this.dom.motorCityList) {
-        this.dom.motorCityList.hidden = true;
-        this.dom.motorCityList.replaceChildren();
-        this.dom.motorCity?.setAttribute("aria-expanded", "false");
-      }
-      if (this.dom.motorNotice) this.dom.motorNotice.hidden = true;
-    }
-    if (!client?.id) {
-      this.paintMotorLocked("Este sitio no está vinculado a un cliente. El motor no mezcla datos entre proyectos.");
-      return;
-    }
-    this.paintMotor();
-    if (this.motorLoadedFor !== key) {
-      this.motorLoadedFor = key;
-      this.loadMotorStatus(key);
-    }
+    // La keyword de la SERP la elige el plan desde Search Console.
+    if (this.dom.motorPanel) this.dom.motorPanel.hidden = true;
   }
 
   paintMotorLocked(message) {
@@ -5976,7 +5938,7 @@ class AppController {
     if (!packs.length) {
       const empty = document.createElement("p");
       empty.className = "signal-empty";
-      empty.textContent = "El puente de ciudad se llena al generar el dossier. La consulta manual sigue debajo.";
+      empty.textContent = "La keyword sale de Search Console al actualizar el plan: primero la oportunidad, si no la query no-marca con más impresiones.";
       root.appendChild(empty);
       return;
     }
@@ -6707,7 +6669,6 @@ class AppController {
         sitemapUrl: this.dom.gscSitemapUrl.value.trim(),
         pages: GscModule.parsePages(this.dom.gscPages.value),
         ga4Property: this.dom.gscGa4Property.value.trim(),
-        seoKeyword: this.dom.gscSeoKeyword?.value.trim() || "",
         locationCode: Number(this.dom.gscLocationCode?.value || 0),
       });
       this.showToast("Configuración guardada");

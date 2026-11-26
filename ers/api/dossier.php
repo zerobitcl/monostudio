@@ -2582,58 +2582,54 @@ function dossierEnsureGeo(string $dataDir, string $host, bool $allowFetch): void
 }
 
 /**
- * Hasta 3 URLs. Con una sola keyword de proyecto, todas comparten la misma pareja SERP.
+ * Hasta 3 URLs. La keyword sale de Search Console: oportunidad primero, si no la query no-marca con más impresiones.
+ * No se copia una keyword escrita a mano sobre la home.
  *
  * @return array{fromGsc: bool, targets: list<array{url: string, keyword: string, score: int}>}
  */
 function dossierSelectSerpTargets(string $host, array $kw, array $prefs, array $urls): array
 {
     $best = [];
-    foreach (['striking', 'lowCtr'] as $bucket) {
-        foreach ($kw['buckets'][$bucket] ?? [] as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-            $pos = (float) ($row['position'] ?? 0);
-            if ($bucket === 'striking' && ($pos < 4 || $pos > 15)) {
-                continue;
-            }
-            $url = trim((string) ($row['page'] ?? ''));
-            $query = trim((string) ($row['q'] ?? ''));
-            if ($url === '' || $query === '' || !gscUrlBelongsToHost($url, $host)) {
-                continue;
-            }
-            $score = max((int) ($row['gain'] ?? 0), (int) ($row['ctrGain'] ?? 0));
-            $path = dossierNormPath($url);
-            if (!isset($best[$path]) || $score > $best[$path]['score']) {
-                $best[$path] = ['url' => $url, 'keyword' => $query, 'score' => $score];
-            }
+    $consider = static function (array $row, int $score) use (&$best, $host): void {
+        if (!empty($row['brand'])) {
+            return;
         }
-    }
-    if ($best !== []) {
-        uasort($best, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
-        return ['fromGsc' => true, 'targets' => array_slice(array_values($best), 0, 3)];
-    }
-
-    $keyword = trim((string) ($prefs['seoKeyword'] ?? ''));
-    $len = function_exists('mb_strlen') ? mb_strlen($keyword) : strlen($keyword);
-    if ($len < 2) {
-        return ['fromGsc' => false, 'targets' => []];
-    }
-    $targets = [['url' => 'https://' . $host . '/', 'keyword' => $keyword, 'score' => 0]];
-    $extra = 0;
-    foreach ($urls as $url) {
-        if ($extra >= 2) {
-            break;
+        $url = trim((string) ($row['page'] ?? ''));
+        $query = trim((string) ($row['q'] ?? ''));
+        $len = function_exists('mb_strlen') ? mb_strlen($query) : strlen($query);
+        if ($url === '' || $len < 2 || !gscUrlBelongsToHost($url, $host)) {
+            return;
         }
         $path = dossierNormPath($url);
-        if ($path === '/' || !dossierIsCommercialPath($path)) {
+        if (!isset($best[$path]) || $score > $best[$path]['score']) {
+            $best[$path] = ['url' => $url, 'keyword' => $query, 'score' => $score];
+        }
+    };
+
+    foreach ($kw['buckets']['striking'] ?? [] as $row) {
+        if (!is_array($row)) {
             continue;
         }
-        $targets[] = ['url' => $url, 'keyword' => $keyword, 'score' => 0];
-        $extra++;
+        $consider($row, 1000000 + max((int) ($row['gain'] ?? 0), (int) ($row['impressions'] ?? 0)));
     }
-    return ['fromGsc' => false, 'targets' => $targets];
+    foreach ($kw['buckets']['lowCtr'] ?? [] as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $consider($row, 500000 + max((int) ($row['ctrGain'] ?? 0), (int) ($row['impressions'] ?? 0)));
+    }
+    foreach ($kw['buckets']['top'] ?? [] as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $consider($row, (int) ($row['impressions'] ?? 0));
+    }
+
+    if ($best === []) {
+        return ['fromGsc' => false, 'targets' => []];
+    }
+    uasort($best, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
+    return ['fromGsc' => true, 'targets' => array_slice(array_values($best), 0, 3)];
 }
 
 function dossierEnsureSerp(string $dataDir, string $host, bool $allowFetch): void

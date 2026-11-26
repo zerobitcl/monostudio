@@ -302,30 +302,11 @@
           <section class="motor" id="motorPanel" hidden aria-labelledby="motorTitle">
             <header class="kw__head">
               <div>
-                <h3 id="motorTitle">Consulta manual</h3>
-                <p class="kw__meta" id="motorMeta"></p>
+                <h3 id="motorTitle">Comparativa</h3>
+                <p class="kw__meta" id="motorMeta">La keyword sale de Search Console al actualizar el plan.</p>
               </div>
               <p class="motor__cost" id="motorCost">Última consulta — · Acumulado —</p>
             </header>
-            <form class="motor__form" id="motorForm" autocomplete="off">
-              <label class="field">
-                <span>URL del proyecto</span>
-                <select id="motorUrl" required></select>
-              </label>
-              <label class="field">
-                <span>Keyword principal</span>
-                <input type="text" id="motorKeyword" maxlength="120" placeholder="servicio + ciudad" required />
-              </label>
-              <label class="field motor__city">
-                <span>Ciudad o comuna</span>
-                <input type="text" id="motorCity" placeholder="Escribí para buscar en Chile" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="motorCityList" aria-expanded="false" />
-                <ul class="motor__suggest" id="motorCityList" role="listbox" hidden></ul>
-              </label>
-              <div class="motor__actions">
-                <button class="btn btn--neon" id="btnMotorRun" type="submit">Ejecutar Diagnóstico</button>
-                <button class="btn btn--ghost" id="btnMotorForce" type="button">Forzar actualización</button>
-              </div>
-            </form>
             <p class="notice" id="motorNotice" hidden></p>
             <div class="motor__kpis" id="motorKpis" hidden>
               <article class="seo-kpi">
@@ -497,16 +478,12 @@
             <datalist id="ga4Properties"></datalist>
             <small class="field__hint" id="ga4Hint">Si lo dejás vacío, usamos la propiedad cuyo sitio es este dominio.</small>
           </label>
-          <label class="field">
-            <span>Keyword comercial</span>
-            <input type="text" name="seoKeyword" id="gscSeoKeyword" maxlength="120" placeholder="servicio principal" autocomplete="off" />
-          </label>
           <label class="field motor__city">
             <span>Ciudad de la SERP</span>
             <input type="text" id="gscLocationQuery" placeholder="Santiago o el código 2152" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="gscLocationList" aria-expanded="false" />
             <input type="hidden" name="locationCode" id="gscLocationCode" value="" />
             <ul class="motor__suggest" id="gscLocationList" role="listbox" hidden></ul>
-            <small class="field__hint">Se guarda el código numérico. Chile entero es 2152.</small>
+            <small class="field__hint">La keyword la elige Search Console al actualizar el plan. Acá solo va la ciudad. Chile entero es 2152.</small>
           </label>
           <button type="submit" class="btn btn--neon">Guardar y recargar</button>
         </form>
