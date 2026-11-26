@@ -12,7 +12,7 @@ if (!defined('ERS_LIBRARY')) {
     define('ERS_LIBRARY', true);
 }
 
-const RADIOGRAFIA_VERSION = '2026.11.23';
+const RADIOGRAFIA_VERSION = '2026.11.26-live';
 const RADIOGRAFIA_TTL = 21600; // 6 h
 const RADIOGRAFIA_AI_TIMEOUT = 70;
 const RADIOGRAFIA_TITLE_COOLDOWN_DAYS = 14;
@@ -405,6 +405,157 @@ function radiografiaDomSnapshot(string $dataDir, string $host): array
     ];
 }
 
+/** Home + las 5 URLs con más clics en la ventana de 7 días. Máximo 6. */
+function radiografiaPickLiveUrls(string $host, string $homeUrl, array $pagesNow): array
+{
+    $homeUrl = $homeUrl !== '' ? $homeUrl : ('https://' . $host . '/');
+    $out = [$homeUrl];
+    $seen = [radiografiaPathKey($homeUrl) => true];
+    $ranked = $pagesNow;
+    usort($ranked, static fn ($a, $b) => ((int) ($b['clicks'] ?? 0) <=> (int) ($a['clicks'] ?? 0))
+        ?: ((int) ($b['impressions'] ?? 0) <=> (int) ($a['impressions'] ?? 0)));
+    foreach ($ranked as $row) {
+        if (count($out) >= 6 || !is_array($row)) {
+            break;
+        }
+        if ((int) ($row['clicks'] ?? 0) <= 0) {
+            continue;
+        }
+        $url = trim((string) ($row['url'] ?? ''));
+        if ($url === '' || !gscUrlBelongsToHost($url, $host)) {
+            continue;
+        }
+        $path = radiografiaPathKey($url);
+        if (isset($seen[$path])) {
+            continue;
+        }
+        $seen[$path] = true;
+        $out[] = $url;
+    }
+    return $out;
+}
+
+/** Captura corta: código, noindex, canonical, title y si hay teléfono, WhatsApp o formulario. */
+function radiografiaFetchLivePage(string $url): array
+{
+    $empty = [
+        'url' => $url,
+        'path' => radiografiaPathKey($url),
+        'http' => 0,
+        'finalUrl' => $url,
+        'noindex' => false,
+        'canonical' => '',
+        'canonicalPath' => '',
+        'title' => '',
+        'hasTel' => false,
+        'hasWhatsapp' => false,
+        'hasForm' => false,
+        'hasCta' => false,
+        'error' => '',
+    ];
+    if (!function_exists('curl_init')) {
+        $empty['error'] = 'sin curl';
+        return $empty;
+    }
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_TIMEOUT => 4,
+        CURLOPT_CONNECTTIMEOUT => 2,
+        CURLOPT_USERAGENT => 'MonoStudio-Radiografia/1.0',
+        CURLOPT_MAXREDIRS => 3,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_HEADER => true,
+    ]);
+    $raw = curl_exec($ch);
+    $errno = curl_errno($ch);
+    $http = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $headerSize = (int) curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+    $final = (string) curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
+    $error = $errno !== 0 ? (string) curl_error($ch) : '';
+    curl_close($ch);
+    if (!is_string($raw) || $errno !== 0) {
+        $empty['error'] = ersClip($error !== '' ? $error : 'sin respuesta', 120);
+        return $empty;
+    }
+    $headerBlob = substr($raw, 0, $headerSize);
+    $html = substr($raw, $headerSize, 120000);
+    $blocks = preg_split("/\r\n\r\n|\n\n/", $headerBlob) ?: [];
+    $lastHeaders = trim((string) ($blocks === [] ? '' : $blocks[count($blocks) - 1]));
+    $xrobots = '';
+    if (preg_match('/^x-robots-tag:\s*(.+)$/im', $lastHeaders, $m)) {
+        $xrobots = strtolower(trim($m[1]));
+    }
+    $noindex = str_contains($xrobots, 'noindex');
+    if (preg_match_all('#<meta\b[^>]*>#i', $html, $tags)) {
+        foreach ($tags[0] as $tag) {
+            if (!preg_match('#(?:name|http-equiv)\s*=\s*["\']robots["\']#i', $tag)) {
+                continue;
+            }
+            if (preg_match('#content\s*=\s*["\']([^"\']+)#i', $tag, $c) && str_contains(strtolower($c[1]), 'noindex')) {
+                $noindex = true;
+            }
+        }
+    }
+    $canonical = '';
+    if (preg_match('#<link\b[^>]*rel\s*=\s*["\']canonical["\'][^>]*>#i', $html, $link)
+        || preg_match('#<link\b[^>]*href\s*=\s*["\'][^"\']+["\'][^>]*rel\s*=\s*["\']canonical["\'][^>]*>#i', $html, $link)
+    ) {
+        if (preg_match('#href\s*=\s*["\']([^"\']+)#i', $link[0], $href)) {
+            $canonical = trim(html_entity_decode($href[1], ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        }
+    }
+    $title = '';
+    if (preg_match('#<title[^>]*>(.*?)</title>#is', $html, $m)) {
+        $title = trim(html_entity_decode(strip_tags($m[1]), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    }
+    $hasTel = (bool) preg_match('#href\s*=\s*["\']tel:#i', $html);
+    $hasWa = (bool) preg_match('#wa\.me|api\.whatsapp\.com|whatsapp\.com/send#i', $html);
+    $hasForm = (bool) preg_match('#<form\b#i', $html);
+    return [
+        'url' => $url,
+        'path' => radiografiaPathKey($final !== '' ? $final : $url),
+        'http' => $http,
+        'finalUrl' => $final !== '' ? $final : $url,
+        'noindex' => $noindex,
+        'canonical' => ersClip($canonical, 300),
+        'canonicalPath' => $canonical !== '' ? radiografiaPathKey($canonical) : '',
+        'title' => ersClip($title, 180),
+        'hasTel' => $hasTel,
+        'hasWhatsapp' => $hasWa,
+        'hasForm' => $hasForm,
+        'hasCta' => $hasTel || $hasWa || $hasForm,
+        'error' => '',
+    ];
+}
+
+function radiografiaProbeLive(string $host, string $homeUrl, array $pagesNow, array $previousPages): array
+{
+    $prevByPath = [];
+    foreach ($previousPages as $page) {
+        if (!is_array($page)) {
+            continue;
+        }
+        $path = (string) ($page['path'] ?? '');
+        if ($path !== '') {
+            $prevByPath[$path] = $page;
+        }
+    }
+    $pages = [];
+    foreach (radiografiaPickLiveUrls($host, $homeUrl, $pagesNow) as $url) {
+        $page = radiografiaFetchLivePage($url);
+        $path = radiografiaPathKey($url);
+        $page['path'] = $path;
+        $prev = $prevByPath[$path] ?? null;
+        $prevOk = is_array($prev) && (int) ($prev['http'] ?? 0) > 0;
+        $page['prevHasCta'] = $prevOk ? !empty($prev['hasCta']) : null;
+        $page['prevHasForm'] = $prevOk ? !empty($prev['hasForm']) : null;
+        $pages[] = $page;
+    }
+    return ['probedAt' => time(), 'pages' => $pages];
+}
+
 /**
  * Detectores deterministas. Gemini no inventa umbrales: solo narra estos ids.
  */
@@ -707,6 +858,71 @@ function radiografiaDetect(array $facts): array
         ];
     }
 
+    $liveBreaks = 0;
+    foreach ($facts['live']['pages'] ?? [] as $page) {
+        if (!is_array($page)) {
+            continue;
+        }
+        if ($liveBreaks >= 8) {
+            break;
+        }
+        $http = (int) ($page['http'] ?? 0);
+        if ($http === 0) {
+            continue;
+        }
+        $path = (string) ($page['path'] ?? '/');
+        if ($http !== 200) {
+            $liveBreaks++;
+            $out[] = [
+                'id' => 'liveHttp',
+                'severity' => 'alto',
+                'title' => 'La URL ya no responde 200',
+                'evidence' => ['path' => $path, 'http' => $http],
+                'line' => $path . ' respondió HTTP ' . $http . ' en la captura en vivo.',
+            ];
+        }
+        if (!empty($page['noindex'])) {
+            $liveBreaks++;
+            $out[] = [
+                'id' => 'liveNoindex',
+                'severity' => 'alto',
+                'title' => 'noindex activo en una URL con clics',
+                'evidence' => ['path' => $path],
+                'line' => $path . ' trae noindex en el meta robots o en X-Robots-Tag.',
+            ];
+        }
+        $canonicalPath = (string) ($page['canonicalPath'] ?? '');
+        if ($canonicalPath !== '' && $canonicalPath !== $path) {
+            $liveBreaks++;
+            $out[] = [
+                'id' => 'liveCanonical',
+                'severity' => 'alto',
+                'title' => 'Canonical apunta a otra URL',
+                'evidence' => ['path' => $path, 'canonical' => (string) ($page['canonical'] ?? '')],
+                'line' => $path . ' declara canonical ' . (string) ($page['canonical'] ?? $canonicalPath) . '.',
+            ];
+        }
+        $lostCta = $page['prevHasCta'] === true && empty($page['hasCta']);
+        $lostForm = $page['prevHasForm'] === true && empty($page['hasForm']);
+        if ($lostCta || $lostForm) {
+            $liveBreaks++;
+            $out[] = [
+                'id' => 'liveCta',
+                'severity' => 'alto',
+                'title' => $lostForm && !$lostCta ? 'El formulario desapareció' : 'El CTA desapareció',
+                'evidence' => [
+                    'path' => $path,
+                    'hasTel' => !empty($page['hasTel']),
+                    'hasWhatsapp' => !empty($page['hasWhatsapp']),
+                    'hasForm' => !empty($page['hasForm']),
+                ],
+                'line' => $path . ($lostCta
+                    ? ' ya no muestra teléfono, WhatsApp ni formulario.'
+                    : ' ya no muestra el formulario.'),
+            ];
+        }
+    }
+
     return $out;
 }
 
@@ -818,6 +1034,20 @@ function radiografiaFallbackMarkdown(array $facts, array $detectors): string
         $lines[] = 'Sin anomalías fuertes en 7d; revisá CONSULTAS en Search Console por si hay variación de demanda.';
         $lines[] = '';
     }
+    $liveLines = [];
+    foreach ($detectors as $d) {
+        if (in_array($d['id'] ?? '', ['liveHttp', 'liveNoindex', 'liveCanonical', 'liveCta'], true)) {
+            $liveLines[] = '- ' . (string) ($d['line'] ?? '');
+        }
+    }
+    if ($liveLines !== []) {
+        $lines[] = '## HTML en vivo (home y top de clics)';
+        $lines[] = '';
+        foreach ($liveLines as $liveLine) {
+            $lines[] = $liveLine;
+        }
+        $lines[] = '';
+    }
 
     $git = $facts['gitSeo']['changes'] ?? [];
     if ($git !== []) {
@@ -908,6 +1138,10 @@ function radiografiaNarrate(array $facts, array $detectors): array
             'newestChangeAt' => $facts['gitSeo']['newestChangeAt'] ?? '',
         ],
         'domHome' => $facts['dom']['home'] ?? null,
+        'live' => [
+            'probedAt' => (int) ($facts['live']['probedAt'] ?? 0),
+            'pages' => $facts['live']['pages'] ?? [],
+        ],
         'detectors' => $detectors,
     ];
 
@@ -918,7 +1152,8 @@ Si un detector no está, no lo afirmes. Citá SHAs cortos y números exactos del
 Estructura obligatoria en markdown:
 1) Intro de 2–4 frases (qué revelan los números; si aplica, descartá canibalización con evidencia).
 2) Sección "Lo que revelan los números" con tabla markdown (Métrica | 7 días anteriores | Últimos 7 días | Diferencia | Diagnóstico).
-3) "Las 3 conclusiones clave" (A/B/C) ligadas a detectors (sameImpDropCtr, impDownPosUp, zeroImpLandings, indexBottleneck, metaSnippetShift, titleCooldown…).
+3) "Las 3 conclusiones clave" (A/B/C) ligadas a detectors (sameImpDropCtr, impDownPosUp, zeroImpLandings, indexBottleneck, metaSnippetShift, titleCooldown, liveHttp, liveNoindex, liveCanonical, liveCta…).
+Si hay liveHttp, liveNoindex, liveCanonical o liveCta, son roturas del HTML en vivo (home y top de clics) y van en las conclusiones.
 4) "Qué hacer ahora" ordenado por impacto: incluir NO tocar title/H1 si hay titleCooldown; acciones GSC (Consultas, Indexación); ajustes quirúrgicos de código sin tocar title si aplica.
 Mencioná el desfase 24–48 h de GSC si hay cambios recientes.
 Salida JSON: { "markdown": "..." } nada más.
@@ -1119,6 +1354,7 @@ function radiografiaBuildFacts(string $dataDir, string $host, string $repoRaw): 
 
     $git = radiografiaGitSeoDiff($dataDir, $host, $repoRaw);
     $dom = radiografiaDomSnapshot($dataDir, $host);
+    $prevLive = gscReadJson(radiografiaFile($dataDir, $host), [])['live'] ?? [];
 
     return [
         'host' => $host,
@@ -1145,6 +1381,12 @@ function radiografiaBuildFacts(string $dataDir, string $host, string $repoRaw): 
         ],
         'gitSeo' => $git,
         'dom' => $dom,
+        'live' => radiografiaProbeLive(
+            $host,
+            $homeUrl,
+            $pagesNow,
+            is_array($prevLive['pages'] ?? null) ? $prevLive['pages'] : []
+        ),
         'gscFetchedAt' => (int) ($site['fullFetchedAt'] ?? $site['fetchedAt'] ?? 0),
         'fetchError' => (string) ($sliceNow['fetchError'] ?? ''),
     ];
@@ -1173,7 +1415,7 @@ function radiografiaRun(string $dataDir, string $host, string $repoRaw = '', boo
         return $cached;
     }
 
-    @set_time_limit(90);
+    @set_time_limit(120);
     $facts = radiografiaBuildFacts($dataDir, $host, $repoRaw);
     $detectors = radiografiaDetect($facts);
     $narration = radiografiaNarrate($facts, $detectors);
@@ -1199,6 +1441,10 @@ function radiografiaRun(string $dataDir, string $host, string $repoRaw = '', boo
         'site' => $facts['site'],
         'devices' => $facts['devices'],
         'deviceScope' => $facts['deviceScope'] ?? 'site',
+        'live' => [
+            'probedAt' => (int) ($facts['live']['probedAt'] ?? 0),
+            'pages' => $facts['live']['pages'] ?? [],
+        ],
         'markdown' => $narration['markdown'],
         'narrative' => $narration['narrative'],
         'model' => $narration['model'] ?? '',

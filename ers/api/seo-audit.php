@@ -35,6 +35,7 @@ const SEO_AUDIT_REPO_TTL = 21600; // 6 h
 const SEO_AUDIT_REPO_BYTES = 110000;
 const SEO_AUDIT_AI_TIMEOUT = 75;
 const SEO_AUDIT_VERSION = '2026.11.21-tuning';
+const SEO_AUDIT_PLAN_SCHEMA = '2026.11.26-decant';
 
 if ($seoAuditStandalone) {
     header('X-Content-Type-Options: nosniff');
@@ -639,15 +640,7 @@ function seoAuditResolveRepo(string $host, string $repoRaw): string
 
 function seoAuditInventoryUrls(array $siteCache, string $host): array
 {
-    $urls = [];
-    foreach ($siteCache['pages'] ?? [] as $row) {
-        $url = trim((string) ($row['url'] ?? ''));
-        if ($url === '' || !gscUrlBelongsToHost($url, $host)) {
-            continue;
-        }
-        $urls[$url] = true;
-    }
-    return array_keys($urls);
+    return dossierInventoryUrls(ersDataDir(), $host, $siteCache);
 }
 
 /** El scrape vive en el dossier: una sola lectura para informe y auditoría. */
@@ -685,6 +678,8 @@ function seoAuditDomProgress(array $domCache, array $urls): array
         $fresh = is_array($row)
             && array_key_exists('h1Count', $row)
             && array_key_exists('mainWordCount', $row)
+            && array_key_exists('schemaGraph', $row)
+            && array_key_exists('leadParagraph', $row)
             && (($row['fetchedAt'] ?? 0) > 0)
             && ($now - (int) $row['fetchedAt']) < SEO_AUDIT_DOM_TTL;
         if ($fresh) {
@@ -711,11 +706,7 @@ function seoAuditDomProgress(array $domCache, array $urls): array
 function seoAuditRunDomBatch(string $dataDir, string $host, int $limit = SEO_AUDIT_DOM_BATCH, bool $fresh = false): array
 {
     $site = gscReadJson(gscHostCacheFile($dataDir, $host), []);
-    if (($site['host'] ?? '') !== $host || !is_array($site['pages'] ?? null)) {
-        throw new RuntimeException('Primero actualizá el SEO del sitio (botón Actualizar) para armar el inventario de URLs.');
-    }
-
-    $urls = seoAuditInventoryUrls($site, $host);
+    $urls = seoAuditInventoryUrls(($site['host'] ?? '') === $host ? $site : [], $host);
     if ($urls === []) {
         throw new RuntimeException('El inventario del sitio no tiene URLs para scrapear.');
     }
@@ -1255,20 +1246,26 @@ function seoAuditCursorSchema(): array
     ];
 
     return $obj([
-        'resumenSimple' => $str,
-        'cambios' => [
+        'diagnostico_ejecutivo' => $str,
+        'top_acciones' => [
             'type' => 'array',
             'items' => $obj([
+                'id' => $str,
                 'titulo' => $str,
-                'porque' => $str,
-                'impacto' => $enum(['alto', 'medio', 'bajo']),
-                'esfuerzo' => $enum(['bajo', 'medio', 'alto']),
-                'url' => $str,
-                'archivo' => $str,
-                'findingId' => $str,
+                'categoria' => $enum(['conversion', 'seo', 'geo', 'tecnico']),
+                'impacto' => $enum(['alto', 'medio']),
+                'evidencia' => $str,
+                'accion' => $str,
             ]),
         ],
-        'cursorPrompt' => $str,
+        'cambios_cursor' => [
+            'type' => 'array',
+            'items' => $obj([
+                'archivo' => $str,
+                'cambio' => $str,
+                'url' => $str,
+            ]),
+        ],
     ]);
 }
 
@@ -1364,33 +1361,484 @@ function seoAuditSanitizeCursor(array $raw, string $host, array $knownUrls, arra
     ];
 }
 
-function seoAuditFallbackRaw(array $findings): array
+function seoAuditFallbackPlan(array $sprint): array
 {
-    $cambios = [];
-    foreach (array_slice($findings, 0, 12) as $f) {
-        $sev = (int) ($f['severity'] ?? 1);
-        $row = [
-            'titulo' => (string) ($f['lines']['es']['title'] ?? $f['kind']),
-            'porque' => (string) ($f['techText'] ?? ''),
-            'impacto' => $sev >= 3 ? 'alto' : ($sev === 2 ? 'medio' : 'bajo'),
-            'esfuerzo' => in_array($f['kind'], ['gap', 'titleMissing', 'metaMissing', 'schema', 'og', 'measure', 'alts'], true) ? 'bajo' : 'medio',
-            'url' => (string) ($f['url'] ?? ''),
-            'archivo' => (string) ($f['file'] ?? ''),
-            'findingId' => (string) ($f['id'] ?? ''),
+    $acciones = [];
+    $cursor = [];
+    foreach (array_slice($sprint, 0, 5) as $finding) {
+        if (!is_array($finding)) {
+            continue;
+        }
+        $category = (string) ($finding['category'] ?? '');
+        $cat = match ($category) {
+            'conversion' => 'conversion',
+            'geo' => 'geo',
+            'index', 'speed' => 'tecnico',
+            default => 'seo',
+        };
+        $sev = (int) ($finding['severity'] ?? 1);
+        $acciones[] = [
+            'id' => (string) ($finding['id'] ?? ''),
+            'titulo' => (string) ($finding['lines']['es']['title'] ?? $finding['kind'] ?? 'Hallazgo'),
+            'categoria' => $cat,
+            'impacto' => $sev >= 3 ? 'alto' : 'medio',
+            'evidencia' => ersClip((string) ($finding['techText'] ?? ''), 240),
+            'accion' => ersClip((string) ($finding['techText'] ?? ''), 400),
         ];
-        $row['key'] = seoAuditCambioKey($row);
-        $cambios[] = $row;
+        $file = trim((string) ($finding['file'] ?? ''));
+        if ($file !== '') {
+            $cursor[] = [
+                'archivo' => $file,
+                'cambio' => ersClip((string) ($finding['techText'] ?? ''), 400),
+                'url' => (string) ($finding['url'] ?? ''),
+            ];
+        }
     }
     return [
-        'resumenSimple' => 'La redacción automática no llegó. Los cambios salen directo de los datos del sitio, en orden de prioridad.',
-        'cambios' => $cambios,
-        'cursorPrompt' => '',
+        'diagnostico_ejecutivo' => 'La redacción automática no llegó. El orden sale de los hallazgos medidos, no de una opinión.',
+        'top_acciones' => $acciones,
+        'cambios_cursor' => $cursor,
     ];
 }
 
-function seoAuditFingerprint(array $dossier, string $kwAiSig = ''): string
+function seoAuditFingerprint(array $dossier, string $serpStamp = ''): string
 {
-    return md5((string) ($dossier['fingerprint'] ?? '') . '|' . SEO_AUDIT_VERSION . '|kwai:' . $kwAiSig);
+    return md5(
+        (string) ($dossier['fingerprint'] ?? '')
+        . '|' . SEO_AUDIT_VERSION
+        . '|' . DOSSIER_VERSION
+        . '|serp:' . $serpStamp
+        . '|plan:' . SEO_AUDIT_PLAN_SCHEMA
+    );
+}
+
+function seoAuditSerpStamp(string $dataDir, string $host): string
+{
+    $raw = gscReadJson(dossierSerpFile($dataDir, $host), []);
+    $fetched = (int) ($raw['fetchedAt'] ?? 0);
+    $signature = (string) ($raw['signature'] ?? '');
+    if ($fetched === 0 && $signature === '') {
+        return 'none';
+    }
+    return $fetched . ':' . $signature;
+}
+
+/** Una ficha SERP por keyword+ciudad. El pack ya viene deduplicado en la sonda. */
+function seoAuditSerpPacks(array $dossier): array
+{
+    $out = [];
+    $seen = [];
+    foreach ($dossier['pages'] ?? [] as $page) {
+        if (!is_array($page) || !is_array($page['serp'] ?? null)) {
+            continue;
+        }
+        $serp = $page['serp'];
+        $keyword = trim((string) ($serp['keyword'] ?? ''));
+        if ($keyword === '') {
+            continue;
+        }
+        $key = strtolower($keyword) . '|' . (int) ($serp['locationCode'] ?? 0);
+        if (isset($seen[$key])) {
+            continue;
+        }
+        $seen[$key] = true;
+        $serp['path'] = (string) ($page['path'] ?? '/');
+        $out[] = $serp;
+    }
+    return $out;
+}
+
+function seoAuditPaaQuestions(array $dossier): array
+{
+    $out = [];
+    foreach (seoAuditSerpPacks($dossier) as $serp) {
+        foreach ($serp['peopleAlsoAsk'] ?? [] as $question) {
+            $text = trim(is_array($question) ? (string) ($question['question'] ?? $question['title'] ?? '') : (string) $question);
+            if ($text === '' || in_array($text, $out, true)) {
+                continue;
+            }
+            $out[] = $text;
+            if (count($out) >= 8) {
+                return $out;
+            }
+        }
+    }
+    return $out;
+}
+
+function seoAuditSerpCited(array $dossier, array $serp): bool
+{
+    $excerpt = gscAscii((string) ($serp['aiOverview']['excerpt'] ?? ''));
+    if ($excerpt === '') {
+        return false;
+    }
+    $host = gscAscii((string) ($dossier['host'] ?? ''));
+    if ($host !== '' && str_contains($excerpt, $host)) {
+        return true;
+    }
+    $name = trim((string) ($dossier['client']['name'] ?? ''));
+    if ($name !== '' && $name !== (string) ($dossier['host'] ?? '')) {
+        $ascii = gscAscii($name);
+        if (strlen($ascii) >= 4 && str_contains($excerpt, $ascii)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function seoAuditSerpBrief(array $dossier): string
+{
+    $packs = seoAuditSerpPacks($dossier);
+    if ($packs === []) {
+        return 'Sin puente DataForSEO en esta pasada. No inventes posición, Local Pack ni AI Overview.';
+    }
+    $lines = [];
+    foreach (array_slice($packs, 0, 3) as $serp) {
+        $position = $serp['position'] ?? null;
+        $pos = $position === null || $position === '' ? 'fuera del top 10' : (string) $position;
+        $aio = is_array($serp['aiOverview'] ?? null) ? $serp['aiOverview'] : [];
+        $present = !empty($aio['present']);
+        $paa = [];
+        foreach ($serp['peopleAlsoAsk'] ?? [] as $question) {
+            $text = trim(is_array($question) ? (string) ($question['question'] ?? $question['title'] ?? '') : (string) $question);
+            if ($text !== '') {
+                $paa[] = $text;
+            }
+        }
+        $lines[] = 'Keyword «' . (string) ($serp['keyword'] ?? '') . '»'
+            . ' · ' . (string) (($serp['locationLabel'] ?? '') !== '' ? $serp['locationLabel'] : ($serp['locationName'] ?? ''))
+            . ' · posición ' . $pos
+            . ' · Local Pack ' . (!empty($serp['localPack']) ? 'sí' : 'no')
+            . ' · AI Overview ' . ($present ? 'sí' : 'no')
+            . ($present ? ' · cita al cliente ' . (seoAuditSerpCited($dossier, $serp) ? 'sí' : 'no') : '');
+        if ($present && trim((string) ($aio['excerpt'] ?? '')) !== '') {
+            $lines[] = '  extracto: ' . ersClip((string) $aio['excerpt'], 220);
+        }
+        if ($paa !== []) {
+            $lines[] = '  PAA: ' . implode(' | ', array_slice($paa, 0, 8));
+        }
+        $rows = is_array($serp['comparison']['rows'] ?? null) ? $serp['comparison']['rows'] : [];
+        $ours = null;
+        $rivals = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            if (($row['role'] ?? '') === 'ours' && $ours === null) {
+                $ours = $row;
+            } elseif (($row['role'] ?? '') === 'rival' && count($rivals) < 3) {
+                $rivals[] = $row;
+            }
+        }
+        if ($ours !== null) {
+            $lines[] = '  nosotros: h1 «' . ersClip((string) ($ours['h1'] ?? ''), 80) . '» · '
+                . (int) ($ours['words'] ?? 0) . ' palabras';
+        }
+        foreach ($rivals as $rival) {
+            $score = $rival['onpage_score'] ?? null;
+            $lines[] = '  top: pos ' . (int) ($rival['rank'] ?? 0)
+                . ' · score ' . ($score === null ? '—' : (string) $score)
+                . ' · ' . ersClip((string) ($rival['title'] ?? ''), 90)
+                . ' · ' . (int) ($rival['words'] ?? 0) . ' palabras';
+        }
+    }
+    return implode("\n", $lines);
+}
+
+function seoAuditPaaBlock(array $dossier): string
+{
+    $questions = seoAuditPaaQuestions($dossier);
+    if ($questions === []) {
+        return 'Sin preguntas People Also Ask en el puente SERP.';
+    }
+    $lines = ['Preguntas textuales (no las reformules):'];
+    foreach ($questions as $question) {
+        $lines[] = '- ' . $question;
+    }
+    return implode("\n", $lines);
+}
+
+function seoAuditGapBlock(array $dossier): string
+{
+    $packs = seoAuditSerpPacks($dossier);
+    if ($packs === []) {
+        return 'Sin comparativa Top 3.';
+    }
+    $lines = [];
+    foreach (array_slice($packs, 0, 3) as $serp) {
+        $rows = is_array($serp['comparison']['rows'] ?? null) ? $serp['comparison']['rows'] : [];
+        if ($rows === []) {
+            continue;
+        }
+        $lines[] = '«' . (string) ($serp['keyword'] ?? '') . '»';
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $role = (string) ($row['role'] ?? '');
+            if ($role !== 'ours' && $role !== 'rival') {
+                continue;
+            }
+            $score = $row['onpage_score'] ?? null;
+            $lines[] = '- ' . ($role === 'ours' ? 'nosotros' : 'rival ' . (int) ($row['rank'] ?? 0))
+                . ' · score ' . ($score === null ? '—' : (string) $score)
+                . ' · palabras ' . (int) ($row['words'] ?? 0)
+                . ' · h1 «' . ersClip((string) ($row['h1'] ?? ''), 80) . '»'
+                . ' · title «' . ersClip((string) ($row['title'] ?? ''), 90) . '»';
+        }
+    }
+    return $lines === [] ? 'Sin filas de comparativa Top 3.' : implode("\n", $lines);
+}
+
+function seoAuditRelevantPaths(array $repo, array $sprint, array $cards): array
+{
+    $picked = [];
+    foreach ($repo['changedFiles'] ?? [] as $path) {
+        $path = trim((string) $path);
+        if ($path !== '') {
+            $picked[$path] = true;
+        }
+    }
+    foreach ($sprint as $finding) {
+        $file = trim((string) ($finding['file'] ?? ''));
+        if ($file !== '') {
+            $picked[$file] = true;
+        }
+    }
+    foreach ($cards as $card) {
+        $file = trim((string) ($card['targetFile'] ?? ''));
+        if ($file !== '') {
+            $picked[$file] = true;
+        }
+    }
+    $out = array_keys($picked);
+    foreach ($repo['paths'] ?? [] as $path) {
+        if (count($out) >= 40) {
+            break;
+        }
+        $path = (string) $path;
+        if ($path !== '' && !isset($picked[$path])) {
+            $picked[$path] = true;
+            $out[] = $path;
+        }
+    }
+    return $out;
+}
+
+function seoAuditResolveKnownUrl(string $url, string $host, array $knownUrls): string
+{
+    $url = trim($url);
+    if ($url === '') {
+        return '';
+    }
+    $urlByPath = [];
+    foreach ($knownUrls as $known) {
+        $path = parse_url((string) $known, PHP_URL_PATH) ?: '/';
+        $urlByPath[strtolower($path)] = (string) $known;
+        $urlByPath[strtolower(rtrim($path, '/') ?: '/')] = (string) $known;
+    }
+    if (gscUrlBelongsToHost($url, $host)) {
+        return $url;
+    }
+    if ($url[0] === '/') {
+        return $urlByPath[strtolower(rtrim($url, '/') ?: '/')] ?? '';
+    }
+    return '';
+}
+
+function seoAuditResolveKnownFile(string $file, array $knownPaths): string
+{
+    $file = trim(str_replace('\\', '/', $file));
+    if ($file === '') {
+        return '';
+    }
+    $pathSet = [];
+    foreach ($knownPaths as $path) {
+        $pathSet[strtolower(str_replace('\\', '/', (string) $path))] = (string) $path;
+    }
+    $key = strtolower(ltrim($file, '/'));
+    if (isset($pathSet[$key])) {
+        return $pathSet[$key];
+    }
+    foreach ($pathSet as $known => $orig) {
+        if (str_ends_with($known, '/' . $key) || $known === $key) {
+            return $orig;
+        }
+    }
+    return '';
+}
+
+function seoAuditSanitizePlan(array $raw, array $sprint, string $host, array $knownUrls, array $knownPaths): array
+{
+    $clip = static fn ($value, int $limit): string => ersClip(trim((string) $value), $limit);
+    $sprintById = [];
+    foreach ($sprint as $finding) {
+        if (is_array($finding) && (string) ($finding['id'] ?? '') !== '') {
+            $sprintById[(string) $finding['id']] = $finding;
+        }
+    }
+
+    $diag = [];
+    foreach (preg_split('/\R/', (string) ($raw['diagnostico_ejecutivo'] ?? '')) ?: [] as $line) {
+        $line = trim($line);
+        if ($line === '') {
+            continue;
+        }
+        $diag[] = $clip($line, 280);
+        if (count($diag) >= 3) {
+            break;
+        }
+    }
+
+    $used = [];
+    $acciones = [];
+    foreach (array_slice(is_array($raw['top_acciones'] ?? null) ? $raw['top_acciones'] : [], 0, 8) as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $titulo = $clip($row['titulo'] ?? '', 160);
+        if ($titulo === '') {
+            continue;
+        }
+        $id = trim((string) ($row['id'] ?? ''));
+        if (!isset($sprintById[$id])) {
+            $id = '';
+            $needle = strtolower($titulo);
+            foreach ($sprintById as $sid => $finding) {
+                if (isset($used[$sid])) {
+                    continue;
+                }
+                $known = strtolower((string) ($finding['lines']['es']['title'] ?? ''));
+                if ($known !== '' && (str_contains($needle, $known) || str_contains($known, $needle))) {
+                    $id = $sid;
+                    break;
+                }
+            }
+        }
+        if ($id === '' || isset($used[$id]) || !isset($sprintById[$id])) {
+            $id = '';
+            foreach ($sprintById as $sid => $_) {
+                if (!isset($used[$sid])) {
+                    $id = $sid;
+                    break;
+                }
+            }
+        }
+        if ($id === '' || isset($used[$id])) {
+            $id = 'accion|' . substr(md5($titulo), 0, 12);
+        }
+        $used[$id] = true;
+        $categoria = (string) ($row['categoria'] ?? '');
+        $impacto = (string) ($row['impacto'] ?? '');
+        $acciones[] = [
+            'id' => $clip($id, 200),
+            'titulo' => $titulo,
+            'categoria' => in_array($categoria, ['conversion', 'seo', 'geo', 'tecnico'], true) ? $categoria : 'seo',
+            'impacto' => in_array($impacto, ['alto', 'medio'], true) ? $impacto : 'medio',
+            'evidencia' => $clip($row['evidencia'] ?? '', 240),
+            'accion' => $clip($row['accion'] ?? '', 400),
+        ];
+        if (count($acciones) >= 5) {
+            break;
+        }
+    }
+
+    $cursor = [];
+    foreach (array_slice(is_array($raw['cambios_cursor'] ?? null) ? $raw['cambios_cursor'] : [], 0, 16) as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $cambio = $clip($row['cambio'] ?? '', 400);
+        $archivo = seoAuditResolveKnownFile((string) ($row['archivo'] ?? ''), $knownPaths);
+        if ($cambio === '' || $archivo === '') {
+            continue;
+        }
+        $cursor[] = [
+            'archivo' => $archivo,
+            'cambio' => $cambio,
+            'url' => seoAuditResolveKnownUrl((string) ($row['url'] ?? ''), $host, $knownUrls),
+        ];
+        if (count($cursor) >= 12) {
+            break;
+        }
+    }
+
+    return [
+        'diagnostico_ejecutivo' => implode("\n", $diag),
+        'top_acciones' => $acciones,
+        'cambios_cursor' => $cursor,
+    ];
+}
+
+function seoAuditEnsurePaaAction(array $acciones, array $paa): array
+{
+    if ($paa === []) {
+        return $acciones;
+    }
+    foreach ($acciones as $accion) {
+        $blob = strtolower((string) ($accion['accion'] ?? '') . ' ' . (string) ($accion['titulo'] ?? '') . ' ' . (string) ($accion['evidencia'] ?? ''));
+        if (str_contains($blob, 'faq') || str_contains($blob, 'answer-first') || str_contains($blob, 'answer first') || str_contains($blob, 'people also')) {
+            return $acciones;
+        }
+    }
+    $question = $paa[0];
+    $extra = 'Convertí la pregunta «' . $question . '» en un bloque answer-first (párrafo corto al inicio) y en Schema FAQ o Service.';
+    if ($acciones === []) {
+        return [[
+            'id' => 'accion|paa',
+            'titulo' => 'Responder la pregunta que ya muestra Google',
+            'categoria' => 'geo',
+            'impacto' => 'alto',
+            'evidencia' => 'People Also Ask: ' . ersClip($question, 160),
+            'accion' => ersClip($extra, 400),
+        ]];
+    }
+    $idx = count($acciones) - 1;
+    foreach ($acciones as $i => $accion) {
+        if (($accion['categoria'] ?? '') === 'geo') {
+            $idx = $i;
+            break;
+        }
+    }
+    $acciones[$idx]['accion'] = ersClip(trim((string) ($acciones[$idx]['accion'] ?? '') . ' ' . $extra), 400);
+    return $acciones;
+}
+
+/** Lo que el panel actual pinta como checklist. El id de la acción es el findingId. */
+function seoAuditLegacyCambios(array $acciones, array $sprint): array
+{
+    $byId = [];
+    foreach ($sprint as $finding) {
+        if (is_array($finding)) {
+            $byId[(string) ($finding['id'] ?? '')] = $finding;
+        }
+    }
+    $out = [];
+    foreach ($acciones as $accion) {
+        if (!is_array($accion)) {
+            continue;
+        }
+        $finding = $byId[(string) ($accion['id'] ?? '')] ?? null;
+        $url = is_array($finding) ? (string) ($finding['url'] ?? '') : '';
+        if ($url === '' && is_array($finding) && is_array($finding['evidence']['sampleUrls'] ?? null)) {
+            $url = (string) ($finding['evidence']['sampleUrls'][0] ?? '');
+        }
+        $archivo = is_array($finding) ? (string) ($finding['file'] ?? '') : '';
+        $evidencia = trim((string) ($accion['evidencia'] ?? ''));
+        $texto = trim((string) ($accion['accion'] ?? ''));
+        $row = [
+            'titulo' => (string) ($accion['titulo'] ?? ''),
+            'porque' => ersClip(trim($evidencia . ($evidencia !== '' && $texto !== '' ? ' ' : '') . $texto), 420),
+            'impacto' => (string) ($accion['impacto'] ?? 'medio'),
+            'esfuerzo' => 'medio',
+            'url' => $url,
+            'archivo' => $archivo,
+            'findingId' => (string) ($accion['id'] ?? ''),
+        ];
+        $row['key'] = seoAuditCambioKey($row);
+        $out[] = $row;
+    }
+    return $out;
 }
 
 function seoAuditKwAiSig(?array $ai): string
@@ -1587,7 +2035,7 @@ function seoAuditDomBrief(array $dossier, array $findings): string
 }
 
 /**
- * Prompt Cursor único: estrategia Gemini + appendix cerrado una sola vez (sin duplicar bloques).
+ * Prompt Cursor: primero el juicio de Gemini, después los datos medidos sin parafrasear.
  */
 function seoAuditAssembleCursorPrompt(
     string $host,
@@ -1599,66 +2047,72 @@ function seoAuditAssembleCursorPrompt(
     bool $codeChanged
 ): string {
     $parts = [];
-    $geminiPrompt = trim((string) ($insights['cursorPrompt'] ?? ''));
-    $resumen = trim((string) ($insights['resumenSimple'] ?? ''));
-    if ($geminiPrompt !== '') {
-        $parts[] = $geminiPrompt;
-    } else {
-        $parts[] = "Sos un agente de Cursor trabajando en el sitio {$host}.";
-        if ($resumen !== '') {
-            $parts[] = "Objetivo de esta pasada:\n" . $resumen;
-        }
-        $parts[] = "Implementá los cambios listados abajo en orden, sin inventar archivos.";
+    $parts[] = "Sos un agente de Cursor trabajando en el sitio {$host}. Ejecutá solo este sprint. No inventes archivos, URLs, keywords ni NAP.";
+    $diag = trim((string) ($insights['diagnostico_ejecutivo'] ?? $insights['resumenSimple'] ?? ''));
+    if ($diag !== '') {
+        $parts[] = "## Diagnóstico\n" . $diag;
     }
 
-    $cambios = is_array($insights['cambios'] ?? null) ? $insights['cambios'] : [];
-    if ($cambios !== []) {
-        $parts[] = "## Cambios a ejecutar (orden estricto)";
-        foreach ($cambios as $i => $c) {
-            if (!is_array($c)) {
+    $acciones = is_array($insights['top_acciones'] ?? null) ? $insights['top_acciones'] : [];
+    if ($acciones !== []) {
+        $parts[] = '## Acciones (orden de impacto)';
+        foreach ($acciones as $i => $accion) {
+            if (!is_array($accion)) {
                 continue;
             }
             $n = $i + 1;
-            $line = "{$n}. " . (string) ($c['titulo'] ?? '');
-            if (($c['porque'] ?? '') !== '') {
-                $line .= "\n   Por qué: " . $c['porque'];
+            $parts[] = $n . '. [' . (string) ($accion['id'] ?? '') . '] '
+                . (string) ($accion['titulo'] ?? '')
+                . ' · ' . (string) ($accion['categoria'] ?? '')
+                . ' · impacto ' . (string) ($accion['impacto'] ?? '')
+                . "\n   Evidencia: " . (string) ($accion['evidencia'] ?? '')
+                . "\n   Acción: " . (string) ($accion['accion'] ?? '');
+        }
+    }
+
+    $cursor = is_array($insights['cambios_cursor'] ?? null) ? $insights['cambios_cursor'] : [];
+    if ($cursor !== []) {
+        $parts[] = '## Cambios de código';
+        foreach ($cursor as $i => $row) {
+            if (!is_array($row)) {
+                continue;
             }
-            if (($c['archivo'] ?? '') !== '') {
-                $line .= "\n   Archivo: " . $c['archivo'];
-            }
-            if (($c['url'] ?? '') !== '') {
-                $line .= "\n   URL: " . $c['url'];
-            }
-            if (($c['findingId'] ?? '') !== '') {
-                $line .= "\n   findingId: " . $c['findingId'];
+            $line = ($i + 1) . '. ' . (string) ($row['archivo'] ?? '') . ' — ' . (string) ($row['cambio'] ?? '');
+            if (($row['url'] ?? '') !== '') {
+                $line .= "\n   URL: " . $row['url'];
             }
             $parts[] = $line;
         }
     }
 
-    $parts[] = "## Page SEO Cards (contexto real — anti-regresión)";
+    $parts[] = '## Page SEO Cards (datos medidos)';
     $parts[] = dossierPageCardsBlock($cards);
 
-    $parts[] = "## Hallazgos pendientes (lista cerrada, no inventar otros)";
-    $parts[] = findingsCursorBlock($findings);
-
-    $parts[] = "## NAP oficial Google Business Profile (no inventar)";
+    $parts[] = '## NAP oficial Google Business Profile';
     $parts[] = seoAuditGbpBlock($dossier);
 
+    $parts[] = '## People Also Ask (texto real del SERP)';
+    $parts[] = seoAuditPaaBlock($dossier);
+
+    $parts[] = '## Brecha contra el Top 3';
+    $parts[] = seoAuditGapBlock($dossier);
+
+    $parts[] = '## Hallazgos de este sprint (lista cerrada)';
+    $parts[] = findingsSprintBlock($findings);
+
     if ($codeChanged && $delta !== '') {
-        $parts[] = "## Código ya avanzado (no reimplementar)";
-        $parts[] = $delta;
+        $parts[] = "## Código ya avanzado (no reimplementar)\n" . $delta;
     }
 
     if (empty($dossier['sources']['keyEvents'])) {
         $parts[] = trim(seoAuditMeasurementNote());
     }
 
-    $parts[] = "## Reglas finales";
-    $parts[] = "- Conservá las queries de PROTEGER en cada Card al reescribir title/H1/meta.\n"
-        . "- No inventes archivos, URLs, keywords ni NAP.\n"
-        . "- Un cambio por URL cuando haya bloque CORREGIR AHORA.\n"
-        . "- Criterios de aceptación: qué debe verse en la URL / Search Console / JSON-LD después.";
+    $parts[] = "## Reglas finales\n"
+        . "- Conservá las queries de PROTEGER en cada Card al reescribir title/H1/meta.\n"
+        . "- No inventes archivos, URLs, keywords ni NAP. Si un dato no está arriba, no lo uses.\n"
+        . "- Las preguntas People Also Ask se responden con un párrafo inicial y Schema FAQ o Service.\n"
+        . "- Criterios de aceptación: qué debe verse en la URL, en Search Console y en el JSON-LD.";
 
     return ersClip(trim(implode("\n\n", array_filter($parts, static fn ($p) => trim((string) $p) !== ''))), 28000);
 }
@@ -1815,13 +2269,17 @@ function seoAuditSameInputsPlan(string $dataDir, string $host): ?array
     $domStamp = (int) ($dom['updatedAt'] ?? 0);
     $gscAt = (int) ($gsc['fetchedAt'] ?? 0);
     $kwAt = (int) ($kw['fetchedAt'] ?? 0);
+    $serpStamp = seoAuditSerpStamp($dataDir, $host);
     $same = $commitSha !== ''
         && $commitSha === (string) ($cached['commitSha'] ?? '')
         && $domStamp > 0
         && $domStamp === (int) ($cached['domStamp'] ?? 0)
         && $gscAt > 0
         && $gscAt === (int) ($cached['gscFetchedAt'] ?? 0)
-        && $kwAt === (int) ($cached['kwFetchedAt'] ?? -1);
+        && $kwAt === (int) ($cached['kwFetchedAt'] ?? -1)
+        && (string) ($cached['dossierVersion'] ?? '') === DOSSIER_VERSION
+        && (string) ($cached['serpStamp'] ?? '') === $serpStamp
+        && (string) ($cached['planSchema'] ?? '') === SEO_AUDIT_PLAN_SCHEMA;
     if (!$same) {
         return null;
     }
@@ -1886,68 +2344,37 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
         return $unchanged;
     }
 
-    $started = microtime(true);
     $cfg = ersLoadGeminiConfig();
     if ($cfg['apiKey'] === '') {
         throw new RuntimeException('Falta configurar Gemini (ers/data/gemini.json).');
     }
 
     $site = gscReadJson(gscHostCacheFile($dataDir, $host), []);
-    if (($site['host'] ?? '') !== $host) {
-        throw new RuntimeException('Primero actualizá el SEO del sitio.');
-    }
-    $urls = seoAuditInventoryUrls($site, $host);
+    $hasSite = ($site['host'] ?? '') === $host;
+    $urls = seoAuditInventoryUrls($hasSite ? $site : [], $host);
     $sa = gscLoadServiceAccount($dataDir, $dataDir . '/gsc-service-account.json');
     // $fresh regenera solo la redacción Gemini. PSI/GA respetan su TTL (Actualizar SEO los fuerza).
     $dossier = dossierBuild($dataDir, $sa, $host, false, true);
     if (empty($dossier['ok'])) {
-        throw new RuntimeException('Primero actualizá el SEO del sitio.');
+        throw new RuntimeException('No hay inventario para este sitio. Cargá Search Console, páginas en la ficha o el HTML de la home.');
     }
     $domProgress = $dossier['domProgress'] ?? ['done' => 0, 'total' => 0, 'complete' => false];
     if ((int) ($domProgress['done'] ?? 0) === 0) {
         throw new RuntimeException('Todavía no hay HTML scrapeado. Pulsá “Continuar lote” al menos una vez.');
     }
 
-    // Keywords IA: reusa caché; si el dossier ya consumió mucho tiempo, no regeneres.
+    // Los buckets deterministas entran directo. La lectura IA de keywords queda fuera de este plan.
     $kwNote = '';
-    $kwPack = ['kw' => [], 'ai' => null, 'generated' => false];
-    $elapsedBeforeKw = microtime(true) - $started;
-    try {
-        if ($elapsedBeforeKw > 40) {
-            $kwCached = gscKeywordsCached($dataDir, $host);
-            $kwPack = [
-                'kw' => $kwCached,
-                'ai' => $kwCached !== []
-                    ? gscKeywordAiFor($dataDir, $host, (int) ($kwCached['fetchedAt'] ?? 0))
-                    : null,
-                'generated' => false,
-            ];
-            if ($kwPack['ai'] === null) {
-                $kwNote = 'Keywords IA omitidas: el dossier ya tardó; reintentá el plan cuando haya caché.';
-            }
-        } else {
-            $kwPack = gscEnsureKeywordsAi($dataDir, $host, false);
-        }
-    } catch (Throwable $e) {
-        $kwCached = gscKeywordsCached($dataDir, $host);
-        $kwPack = [
-            'kw' => $kwCached,
-            'ai' => $kwCached !== []
-                ? gscKeywordAiFor($dataDir, $host, (int) ($kwCached['fetchedAt'] ?? 0))
-                : null,
-            'generated' => false,
-        ];
-        $kwNote = 'Keywords IA no disponibles: ' . ersClip($e->getMessage(), 160);
-    }
-    $kw = $kwPack['kw'] !== [] ? $kwPack['kw'] : (is_array($dossier['keywords'] ?? null) ? $dossier['keywords'] : []);
-    $kwAi = $kwPack['ai'];
-    $kwAiSig = seoAuditKwAiSig($kwAi);
+    $kw = is_array($dossier['keywords'] ?? null) ? $dossier['keywords'] : [];
+    $serpStamp = seoAuditSerpStamp($dataDir, $host);
 
     $repo = $dossier['repo'] ?? [];
     $allFindings = findingsDetect($dossier);
     seoAuditAutoVerify($dataDir, $host, $allFindings);
     $findings = seoAuditFilterFindings($allFindings, $dataDir, $host);
-    $fingerprint = seoAuditFingerprint($dossier, $kwAiSig);
+    $appliedIds = array_keys(seoAuditAppliedMaps($dataDir, $host)['findingStatus']);
+    $sprint = findingsDecant($findings, $appliedIds, $dossier);
+    $fingerprint = seoAuditFingerprint($dossier, $serpStamp);
 
     $cacheFile = seoAuditCursorFile($dataDir, $host);
     $cached = gscReadJson($cacheFile, []);
@@ -1957,6 +2384,7 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
         && ($cached['fingerprint'] ?? '') === $fingerprint
         && is_array($cached['insights'] ?? null)
         && ($cached['version'] ?? '') === SEO_AUDIT_VERSION
+        && ($cached['planSchema'] ?? '') === SEO_AUDIT_PLAN_SCHEMA
     ) {
         $cached['cached'] = true;
         $cached['stale'] = false;
@@ -1978,79 +2406,51 @@ function seoAuditRunCursor(string $dataDir, string $host, bool $fresh = false): 
     }
 
     $search = $dossier['search'] ?? [];
-    $paths = array_slice($repo['paths'] ?? [], 0, 80);
-    $hasKwAi = is_array($kwAi['insights'] ?? null);
+    $pageCards = dossierBuildPageCards($dossier, $findings, $kw, 12);
+    $paths = seoAuditRelevantPaths($repo, $sprint, $pageCards);
     $parts = [
         'Sitio: ' . $host,
-        'Objetivo: subir de nivel el sitio — más clics relevantes, páginas más fuertes, más contactos.',
         'Clics 28d: ' . (int) ($search['clicks'] ?? 0) . ' (delta ' . (int) ($search['clicksDelta'] ?? 0) . ')',
         'Impresiones: ' . (int) ($search['impressions'] ?? 0),
+        'Posición media: ' . round((float) ($search['position'] ?? 0), 1),
         'Contactos (key events): ' . (int) ($dossier['ga']['contacts'] ?? 0)
             . (!empty($dossier['sources']['keyEvents']) ? '' : ' — sin eventos clave'),
         'HTML: ' . (int) ($domProgress['done'] ?? 0) . '/' . (int) ($domProgress['total'] ?? 0),
         'Repo: ' . $repoLabel,
         'PSI home: ' . (string) ($dossier['psi']['home']['score'] ?? '—'),
-        'Google Maps: ' . (!empty($dossier['sources']['gbp'])
-            ? ((string) ($dossier['gbp']['displayName'] ?? 'vinculado') . ' · ★' . (string) ($dossier['gbp']['rating'] ?? '—'))
-            : 'no vinculado'),
         '',
-        '## HALLAZGOS (lista cerrada: no agregues problemas que no estén aquí)',
-        findingsCursorBlock($findings),
+        '## SPRINT (5 a 8 causas ya decantadas: no agregues otras)',
+        findingsSprintBlock($sprint),
         '',
-        '## DATOS REALES GOOGLE BUSINESS PROFILE (NAP OFICIAL)',
-        seoAuditGbpBlock($dossier),
+        '## PUENTE DATAFORSEO',
+        seoAuditSerpBrief($dossier),
         '',
-        '## OPORTUNIDADES DE KEYWORDS (buckets GSC, datos reales)',
+        '## BUCKETS DE KEYWORDS (deterministas, incluye canibalización)',
         gscKeywordsBucketsBrief($kw),
         '',
-        '## CRECIMIENTO POR QUERIES (estrategia Keywords IA — lista cerrada)',
-        gscKeywordsGrowthBlock($kwAi),
+        '## NAP OFICIAL',
+        seoAuditGbpBlock($dossier),
         '',
-        '## PATHS DEL REPO',
-        $paths === [] ? 'Sin repo. El prompt debe decir que se aplique en el proyecto local abierto en Cursor.' : implode("\n", array_map(static fn ($p) => '- ' . $p, $paths)),
+        '## RUTAS RELEVANTES',
+        $paths === [] ? 'Sin repo. Los cambios de código quedan vacíos.' : implode("\n", array_map(static fn ($p) => '- ' . $p, $paths)),
         '',
-        '## PAGE SEO CARDS (radiografía por URL: métricas, queries a PROTEGER/CAPTURAR, DOM real)',
-        dossierPageCardsBlock($pageCards = dossierBuildPageCards($dossier, $findings, $kw, 12)),
+        '## PAGE SEO CARDS (máximo 12, primero las que tienen SERP)',
+        dossierPageCardsBlock($pageCards),
         '',
-        '## CICLO ANTERIOR',
-        seoAuditCycleBlock($dataDir, $host, $dossier),
-        '',
-        '## MEJORAS YA MARCADAS (checks del operador)',
-        seoAuditAppliedBlock($dataDir, $host),
-        '',
-        '## CÓDIGO DESDE EL ÚLTIMO PLAN',
+        '## DIFF DEL REPO',
         $delta,
     ];
-    $excerpt = seoAuditRepoExcerpt($repo, $findings, $pageCards);
-    if ($excerpt !== '') {
-        $parts[] = '';
-        $parts[] = '## CÓDIGO REAL DEL REPO (editá esto; no inventes archivos que no estén acá)';
-        $parts[] = $excerpt;
-    }
-    if ($kwNote !== '') {
-        $parts[] = '';
-        $parts[] = '## NOTA OPERATIVA';
-        $parts[] = $kwNote;
-    }
 
     $system = <<<TXT
-Sos un tech lead SEO. Tu trabajo es SUBIR DE NIVEL el sitio en cada pasada: más demanda capturada, mejor on-page, más contactos y coherencia local (Maps ↔ web).
-Los problemas YA están en HALLAZGOS. La estrategia de queries YA está en CRECIMIENTO POR QUERIES y en los buckets. El NAP oficial YA está en DATOS REALES GOOGLE BUSINESS PROFILE.
-Las PAGE SEO CARDS traen el estado real por URL (title/meta/H1/H2, queries a PROTEGER y a CAPTURAR, inlinks). No inventes otro title actual.
-REGLA ANTI-REGRESIÓN: al proponer title/H1/meta, conservá las queries de PROTEGER de esa Card y sumá CAPTURAR sin borrar lo que ya trae clics.
-No descubras otros problemas. No inventes métricas, queries, URLs, teléfonos, direcciones ni archivos.
-Si hay CÓDIGO REAL DEL REPO, citá el archivo y el cambio concreto. No pidas reescribir un archivo cuyo contenido no viste.
-Si hay CICLO ANTERIOR, no repitas un cambio ya pedido ni una tarea ya cerrada.
-Si MEJORAS YA MARCADAS lista un findingId o título, no lo pongas en cambios.
-Si CÓDIGO DESDE EL ÚLTIMO PLAN dice que el commit cambió, ese código ya está hecho.
+Sos un tech lead SEO. El sprint ya está decantado: no descubras otros problemas y no inventes métricas, queries, URLs, teléfonos, direcciones ni archivos.
+El NAP oficial es el de Google Business Profile. Las Page SEO Cards son el title/H1 actual: al proponer un cambio, conservá las queries de PROTEGER.
+Si el diff dice que el commit ya avanzó, no pidas reimplementar ese archivo.
 Respondés en español neutro-chileno, directo.
 
-Salida JSON:
-- resumenSimple: 3 a 6 frases, sin jerga. Qué nivel se gana y por qué importa al negocio.
-- cambios: máx 12, en orden. Incluí before→after concreto para title/meta/H1/H2/enlaces cuando aplique. url y archivo solo si aparecen en los datos. findingId = id exacto de HALLAZGOS cuando corresponde.
-- cursorPrompt: instrucciones cortas para Cursor Agent (contexto + orden de trabajo + criterios de aceptación). NO copies literales los bloques HALLAZGOS/GBP/CRECIMIENTO: el sistema los anexará una sola vez. Enfocate en el plan de ejecución quirúrgico por archivo/URL.
-
-Cubrí severidad 3 y 2, y acciones de keywords de impacto alto/medio, salvo lo que el commit nuevo ya cubre.
+Salida JSON con exactamente estas 3 claves:
+- diagnostico_ejecutivo: máximo 3 líneas. Por qué el sitio no está primero hoy en Google y en respuestas de IA. Cada línea cita un dato del brief.
+- top_acciones: máximo 5, ordenadas por impacto real. id = id exacto de un hallazgo del sprint. titulo corto. categoria: conversion | seo | geo | tecnico. impacto: alto | medio. evidencia: una línea con el dato. accion: el cambio concreto. Si el brief trae preguntas People Also Ask, al menos una acción dice cómo convertirlas en un párrafo answer-first más Schema FAQ o Service.
+- cambios_cursor: ediciones sobre archivos que aparecen en RUTAS o en las cards. archivo = ruta exacta. cambio = qué editar. url = una URL del brief, o vacío.
 TXT;
 
     $payload = [
@@ -2064,8 +2464,7 @@ TXT;
         ], ersGeminiThinkingConfig($cfg)),
     ];
 
-    // Si acabamos de regenerar Keywords IA, sumamos su timeout al presupuesto.
-    $budget = SEO_AUDIT_AI_TIMEOUT + 25 + (!empty($kwPack['generated']) ? GSC_KW_AI_TIMEOUT + 10 : 0);
+    $budget = SEO_AUDIT_AI_TIMEOUT + 25;
     @set_time_limit($budget);
     $res = ersGeminiHttp(ersGeminiUrl($cfg), $payload, SEO_AUDIT_AI_TIMEOUT);
     $text = '';
@@ -2077,46 +2476,61 @@ TXT;
     $text = trim((string) preg_replace('#^```(?:json)?|```$#m', '', $text));
     $raw = json_decode($text, true);
     $narrative = 'gemini';
-    if (!is_array($raw)) {
-        $raw = seoAuditFallbackRaw($findings);
+    if (!is_array($raw) || !isset($raw['diagnostico_ejecutivo'], $raw['top_acciones'], $raw['cambios_cursor'])) {
+        $raw = seoAuditFallbackPlan($sprint);
         $narrative = 'fallback';
     }
 
-    $insights = seoAuditSanitizeCursor($raw, $host, $urls, $repo['paths'] ?? []);
-    $insights['cambios'] = seoAuditAttachFindingIds(
-        is_array($insights['cambios'] ?? null) ? $insights['cambios'] : [],
-        $allFindings
-    );
-    // No devolver en el plan ítems que el operador ya marcó hechos/verificados.
+    $plan = seoAuditSanitizePlan($raw, $sprint, $host, $urls, $repo['paths'] ?? []);
+    if ($plan['top_acciones'] === []) {
+        $plan = seoAuditSanitizePlan(seoAuditFallbackPlan($sprint), $sprint, $host, $urls, $repo['paths'] ?? []);
+        $narrative = 'fallback';
+    }
+    $insights = $plan;
     $maps = seoAuditAppliedMaps($dataDir, $host);
     if ($maps['findingStatus'] !== []) {
-        $insights['cambios'] = array_values(array_filter(
-            $insights['cambios'],
-            static function (array $c) use ($maps): bool {
-                $key = seoAuditCambioKey($c);
-                $fid = trim((string) ($c['findingId'] ?? ''));
-                if (isset($maps['findingStatus'][$key]) || ($fid !== '' && isset($maps['findingStatus'][$fid]))) {
-                    return false;
-                }
-                return true;
+        $insights['top_acciones'] = array_values(array_filter(
+            $insights['top_acciones'],
+            static function (array $accion) use ($maps): bool {
+                $id = trim((string) ($accion['id'] ?? ''));
+                return $id === '' || !isset($maps['findingStatus'][$id]);
             }
         ));
     }
-    $insights['cambios'] = seoAuditAnnotateCambios($insights['cambios'], $dataDir, $host);
-    seoAuditRememberCycle($dataDir, $host, $dossier, $findings, $insights);
-    // Un solo prompt ensamblado: sin duplicar HALLAZGOS/GBP/queries al final.
+    $insights['top_acciones'] = seoAuditEnsurePaaAction($insights['top_acciones'], seoAuditPaaQuestions($dossier));
+    $insights['resumenSimple'] = (string) ($plan['diagnostico_ejecutivo'] ?? '');
+    $insights['cambios'] = seoAuditAnnotateCambios(seoAuditLegacyCambios($insights['top_acciones'], $sprint), $dataDir, $host);
+    $insights['decant'] = [];
+    foreach ($sprint as $finding) {
+        if (!is_array($finding)) {
+            continue;
+        }
+        $insights['decant'][] = [
+            'id' => (string) ($finding['id'] ?? ''),
+            'kind' => (string) ($finding['kind'] ?? ''),
+            'category' => (string) ($finding['category'] ?? ''),
+            'tier' => (int) ($finding['tier'] ?? 6),
+            'severity' => (int) ($finding['severity'] ?? 0),
+            'impact' => (int) ($finding['impact'] ?? 0),
+            'path' => (string) ($finding['path'] ?? ''),
+            'url' => (string) ($finding['url'] ?? ''),
+            'file' => (string) ($finding['file'] ?? ''),
+            'urlCount' => (int) ($finding['evidence']['urlCount'] ?? 1),
+            'sampleUrls' => array_slice(is_array($finding['evidence']['sampleUrls'] ?? null) ? $finding['evidence']['sampleUrls'] : [], 0, 5),
+            'template' => (string) ($finding['evidence']['template'] ?? ''),
+            'techText' => (string) ($finding['techText'] ?? ''),
+        ];
+    }
+    seoAuditRememberCycle($dataDir, $host, $dossier, $sprint, $insights);
     $insights['cursorPrompt'] = seoAuditAssembleCursorPrompt(
         $host,
         $insights,
-        $findings,
+        $sprint,
         $dossier,
         $pageCards,
         $delta,
         $codeChanged
     );
-    if ($hasKwAi) {
-        $insights['keywords'] = $kwAi['insights'];
-    }
     $out = [
         'ok' => true,
         'cached' => false,
@@ -2134,21 +2548,16 @@ TXT;
             'repo' => ($repo['slug'] ?? '') !== '',
             'repoSlug' => (string) ($repo['slug'] ?? ''),
             'keywords' => $kw !== [],
-            'keywordsAi' => $hasKwAi,
+            'keywordsAi' => false,
             'keywordsAiNote' => $kwNote,
             'sources' => array_merge(
                 is_array($dossier['sources'] ?? null) ? $dossier['sources'] : [],
-                ['keywords' => $kw !== [], 'keywordsAi' => $hasKwAi]
+                ['keywords' => $kw !== [], 'keywordsAi' => false]
             ),
             'findingCounts' => findingsCounts($findings),
+            'sprintCount' => count($sprint),
         ],
-        'keywordsAi' => $hasKwAi ? [
-            'model' => (string) ($kwAi['model'] ?? ''),
-            'generatedAt' => (int) ($kwAi['generatedAt'] ?? 0),
-            'basedOn' => (int) ($kwAi['basedOn'] ?? 0),
-            'stale' => false,
-            'insights' => $kwAi['insights'],
-        ] : null,
+        'keywordsAi' => null,
         'insights' => $insights,
         'commitSha' => $commitSha,
         'previousCommitSha' => $prevSha,
@@ -2160,6 +2569,9 @@ TXT;
         'domStamp' => (int) ($domProgress['updatedAt'] ?? 0),
         'gscFetchedAt' => (int) ($site['fetchedAt'] ?? 0),
         'kwFetchedAt' => (int) (gscReadJson(gscKeywordCacheFile($dataDir, $host), [])['fetchedAt'] ?? 0),
+        'dossierVersion' => DOSSIER_VERSION,
+        'serpStamp' => $serpStamp,
+        'planSchema' => SEO_AUDIT_PLAN_SCHEMA,
         'applied' => seoAuditReadApplied($dataDir, $host)['items'],
         'version' => SEO_AUDIT_VERSION,
     ];
@@ -2167,11 +2579,178 @@ TXT;
     return $out;
 }
 
+/**
+ * Recorte de lectura para la pantalla. No recalcula hallazgos ni llama a la red.
+ */
+function seoAuditBoardView(string $dataDir, array $dossier, array $findings, array $appliedItems): array
+{
+    $done = [];
+    foreach ($appliedItems as $item) {
+        if (!is_array($item) || !in_array($item['status'] ?? '', ['applied', 'verified'], true)) {
+            continue;
+        }
+        if (($item['id'] ?? '') !== '') {
+            $done[(string) $item['id']] = (string) $item['status'];
+        }
+        if (($item['findingId'] ?? '') !== '') {
+            $done[(string) $item['findingId']] = (string) $item['status'];
+        }
+    }
+
+    $catalog = [];
+    foreach (array_slice($findings, 0, 48) as $finding) {
+        if (!is_array($finding)) {
+            continue;
+        }
+        $id = (string) ($finding['id'] ?? '');
+        $catalog[] = [
+            'id' => $id,
+            'kind' => (string) ($finding['kind'] ?? ''),
+            'category' => (string) ($finding['category'] ?? ''),
+            'severity' => (int) ($finding['severity'] ?? 0),
+            'path' => (string) ($finding['path'] ?? ''),
+            'url' => (string) ($finding['url'] ?? ''),
+            'file' => (string) ($finding['file'] ?? ''),
+            'title' => (string) ($finding['lines']['es']['title'] ?? ''),
+            'line' => ersClip((string) ($finding['lines']['es']['line'] ?? ''), 220),
+            'status' => $done[$id] ?? 'pending',
+        ];
+    }
+
+    $serp = [];
+    $seen = [];
+    foreach ($dossier['pages'] ?? [] as $page) {
+        if (!is_array($page) || !is_array($page['serp'] ?? null)) {
+            continue;
+        }
+        $pack = $page['serp'];
+        $keyword = trim((string) ($pack['keyword'] ?? ''));
+        $sig = strtolower($keyword) . '|' . (int) ($pack['locationCode'] ?? 0);
+        if ($keyword === '' || isset($seen[$sig])) {
+            continue;
+        }
+        $seen[$sig] = true;
+        $rows = [];
+        foreach (array_slice(is_array($pack['comparison']['rows'] ?? null) ? $pack['comparison']['rows'] : [], 0, 4) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $rows[] = [
+                'role' => (string) ($row['role'] ?? ''),
+                'rank' => $row['rank'] ?? null,
+                'title' => ersClip((string) ($row['title'] ?? ''), 120),
+                'h1' => ersClip((string) ($row['h1'] ?? ''), 80),
+                'words' => $row['words'] ?? null,
+                'onpage_score' => $row['onpage_score'] ?? null,
+            ];
+        }
+        $paa = [];
+        foreach (array_slice(is_array($pack['peopleAlsoAsk'] ?? null) ? $pack['peopleAlsoAsk'] : [], 0, 8) as $question) {
+            $text = trim(is_array($question) ? (string) ($question['question'] ?? $question['title'] ?? '') : (string) $question);
+            if ($text !== '') {
+                $paa[] = $text;
+            }
+        }
+        $aio = is_array($pack['aiOverview'] ?? null) ? $pack['aiOverview'] : [];
+        $serp[] = [
+            'keyword' => $keyword,
+            'locationLabel' => (string) (($pack['locationLabel'] ?? '') !== '' ? $pack['locationLabel'] : ($pack['locationName'] ?? '')),
+            'locationCode' => (int) ($pack['locationCode'] ?? 0),
+            'position' => $pack['position'] ?? null,
+            'localPack' => !empty($pack['localPack']),
+            'aiOverview' => [
+                'present' => !empty($aio['present']),
+                'excerpt' => ersClip((string) ($aio['excerpt'] ?? ''), 280),
+                'cited' => seoAuditSerpCited($dossier, $pack),
+            ],
+            'peopleAlsoAsk' => $paa,
+            'rows' => $rows,
+            'path' => (string) ($page['path'] ?? ''),
+        ];
+        if (count($serp) >= 3) {
+            break;
+        }
+    }
+
+    $pages = [];
+    foreach (array_slice(is_array($dossier['pages'] ?? null) ? $dossier['pages'] : [], 0, 40) as $page) {
+        if (!is_array($page)) {
+            continue;
+        }
+        $contacts = is_array($page['ga']['contacts'] ?? null) ? $page['ga']['contacts'] : [];
+        $pages[] = [
+            'path' => (string) ($page['path'] ?? ''),
+            'url' => (string) ($page['url'] ?? ''),
+            'clicks' => (int) ($page['clicks'] ?? 0),
+            'impressions' => (int) ($page['impressions'] ?? 0),
+            'ctr' => (float) ($page['ctr'] ?? 0),
+            'position' => (float) ($page['position'] ?? 0),
+            'sessions' => (int) ($page['ga']['sessions'] ?? 0),
+            'keyEvents' => (int) ($page['ga']['keyEvents'] ?? 0),
+            'contacts' => (int) ($contacts['whatsapp'] ?? 0) + (int) ($contacts['llamada'] ?? 0) + (int) ($contacts['formulario'] ?? 0) + (int) ($contacts['email'] ?? 0),
+            'psiScore' => $page['psiScore'] ?? null,
+            'psiLcp' => (string) ($page['psiLcp'] ?? ''),
+        ];
+    }
+    usort($pages, static fn ($a, $b) => ($b['clicks'] <=> $a['clicks']) ?: ($b['impressions'] <=> $a['impressions']));
+
+    $cards = [];
+    if (!empty($dossier['ok'])) {
+        $kw = is_array($dossier['keywords'] ?? null) ? $dossier['keywords'] : [];
+        foreach (array_slice(dossierBuildPageCards($dossier, $findings, $kw, 12), 0, 12) as $card) {
+            if (!is_array($card)) {
+                continue;
+            }
+            $cards[] = [
+                'path' => (string) ($card['path'] ?? ''),
+                'url' => (string) ($card['url'] ?? ''),
+                'title' => ersClip((string) ($card['title'] ?? ''), 140),
+                'h1' => ersClip((string) ($card['h1'] ?? ''), 120),
+                'clicks' => (int) ($card['clicks'] ?? 0),
+                'position' => round((float) ($card['position'] ?? 0), 1),
+                'psiScore' => $card['psiScore'] ?? null,
+                'targetFile' => (string) ($card['targetFile'] ?? ''),
+                'hasSerp' => is_array($card['serp'] ?? null),
+            ];
+        }
+    }
+
+    $geo = is_array($dossier['geo'] ?? null) ? $dossier['geo'] : [];
+    $prefs = dossierHostPrefs($dataDir, (string) ($dossier['host'] ?? ''));
+    $repo = is_array($dossier['repo'] ?? null) ? $dossier['repo'] : [];
+    return [
+        'serp' => $serp,
+        'geo' => [
+            'fetchedAt' => (int) ($geo['fetchedAt'] ?? 0),
+            'robotsOk' => !empty($geo['robots']['ok']),
+            'robotsStatus' => (int) ($geo['robots']['status'] ?? 0),
+            'blocked' => array_values(array_slice(is_array($geo['robots']['blocked'] ?? null) ? $geo['robots']['blocked'] : [], 0, 6)),
+            'llmsOk' => !empty($geo['llms']['ok']),
+            'llmsStatus' => (int) ($geo['llms']['status'] ?? 0),
+            'llmsServices' => !empty($geo['llms']['hasServices']),
+            'llmsCoverage' => !empty($geo['llms']['hasCoverage']),
+            'llmsContact' => !empty($geo['llms']['hasContact']),
+        ],
+        'pages' => $pages,
+        'cards' => $cards,
+        'findings' => $catalog,
+        'host' => [
+            'seoKeyword' => (string) ($prefs['seoKeyword'] ?? ''),
+            'locationCode' => (int) ($prefs['locationCode'] ?? 0),
+        ],
+        'repo' => [
+            'slug' => (string) ($repo['slug'] ?? ''),
+            'commitSha' => (string) ($repo['commitSha'] ?? ''),
+            'changedFiles' => array_values(array_slice(is_array($repo['changedFiles'] ?? null) ? $repo['changedFiles'] : [], 0, 12)),
+        ],
+    ];
+}
+
 function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): array
 {
     $site = gscReadJson(gscHostCacheFile($dataDir, $host), []);
     $hasSite = ($site['host'] ?? '') === $host;
-    $urls = $hasSite ? seoAuditInventoryUrls($site, $host) : [];
+    $urls = seoAuditInventoryUrls($hasSite ? $site : [], $host);
     $dom = seoAuditDomCache($dataDir, $host);
     $domProgress = seoAuditDomProgress($dom, $urls);
 
@@ -2203,13 +2782,17 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
         seoAuditAutoVerify($dataDir, $host, $allFindings);
     }
     $findings = seoAuditFilterFindings($allFindings, $dataDir, $host);
-    $fingerprint = seoAuditFingerprint($dossier, seoAuditKwAiSig($kwAi));
+    $serpStamp = seoAuditSerpStamp($dataDir, $host);
+    $fingerprint = seoAuditFingerprint($dossier, $serpStamp);
     $appliedItems = seoAuditReadApplied($dataDir, $host)['items'];
 
     $planSha = (string) ($cursor['commitSha'] ?? '');
     if ($hasCursor) {
         $cursor['stale'] = ($cursor['fingerprint'] ?? '') !== $fingerprint
             || ($cursor['version'] ?? '') !== SEO_AUDIT_VERSION
+            || ($cursor['planSchema'] ?? '') !== SEO_AUDIT_PLAN_SCHEMA
+            || ($cursor['serpStamp'] ?? '') !== $serpStamp
+            || ($cursor['dossierVersion'] ?? '') !== DOSSIER_VERSION
             || ($repoSha !== '' && $planSha !== '' && $repoSha !== $planSha);
         if (is_array($cursor['insights']['cambios'] ?? null)) {
             $cursor['insights']['cambios'] = seoAuditAnnotateCambios($cursor['insights']['cambios'], $dataDir, $host);
@@ -2296,6 +2879,7 @@ function seoAuditStatus(string $dataDir, string $host, string $repoRaw = ''): ar
             'fetchedAt' => (int) ($site['fetchedAt'] ?? 0),
         ],
         'radiografia' => seoAuditRadiografiaStatus($dataDir, $host, $repoSha),
+        'board' => !empty($dossier['ok']) ? seoAuditBoardView($dataDir, $dossier, $allFindings, $appliedItems) : null,
     ];
 }
 

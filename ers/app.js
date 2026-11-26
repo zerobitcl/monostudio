@@ -1240,6 +1240,12 @@ class AppController {
     this.motorCityTimer = null;
     this.motorLocationCode = 0;
     this.motorLocationName = "";
+    this.radioOpen = false;
+    this.promptOpen = false;
+    this.findingCat = "all";
+    this.findingState = "pending";
+    this.hostCityTimer = null;
+    this.hostCitySeq = 0;
     this.motorTaskSig = "";
     this.motorTableSig = "";
     this.motorUrlSig = "";
@@ -1318,6 +1324,11 @@ class AppController {
       "seoClicksDelta", "seoImpressionsDelta", "seoCtrDelta", "seoPositionDelta",
       "btnGscRefresh", "btnSeoIndex", "btnClientReport", "btnStudioReport", "btnSeoPrint", "btnReportPdf", "btnReportFresh", "btnSeoBriefClose",
       "gscConfigForm", "gscSitemapUrl", "gscPages", "gscGa4Property", "ga4Properties", "ga4Hint",
+      "gscSeoKeyword", "gscLocationQuery", "gscLocationCode", "gscLocationList",
+      "badgePlan", "badgeSerp", "badgeGeo", "badgeSprint", "btnPromptToggle", "cursorFiles",
+      "radiografiaToggle", "radiografiaLamp", "radiografiaLive",
+      "seoEvidence", "serpBoard", "decantList", "findingFilters", "findingCatalog", "pageCards",
+      "geoStatus", "repoStatus",
       "growthPanel", "growthMeta", "growthList",
       "cursorAuditPanel", "cursorAuditMeta", "cursorAuditProgress", "cursorAuditBar",
       "cursorAuditStatus", "cursorAuditCoverage", "cursorAuditCounts", "cursorAuditResult", "cursorAuditSummary", "cursorAuditChanges",
@@ -1635,6 +1646,23 @@ class AppController {
     this.dom.cursorAuditChanges?.addEventListener("change", (e) => this.handleCambioCheck(e));
     this.dom.btnRadiografiaGenerate?.addEventListener("click", () => this.generateRadiografia());
     this.dom.btnRadiografiaCopy?.addEventListener("click", () => this.copyRadiografia());
+    this.dom.radiografiaToggle?.addEventListener("click", () => {
+      this.radioOpen = !this.radioOpen;
+      this.renderRadiografia();
+    });
+    this.dom.btnPromptToggle?.addEventListener("click", () => this.togglePrompt());
+    this.dom.seoEvidence?.addEventListener("click", (e) => {
+      const tab = e.target.closest("[data-seo-tab]");
+      if (tab) this.switchSeoTab(tab.dataset.seoTab);
+    });
+    this.dom.findingFilters?.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-finding-cat], [data-finding-state]");
+      if (!btn) return;
+      if (btn.dataset.findingCat) this.findingCat = btn.dataset.findingCat;
+      if (btn.dataset.findingState) this.findingState = btn.dataset.findingState;
+      this.renderFindingCatalog();
+    });
+    this.dom.gscLocationQuery?.addEventListener("input", () => this.queueHostCity());
     this.dom.btnGbpSearch?.addEventListener("click", () => this.searchGbp());
     this.dom.gbpSearchInput?.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
@@ -3905,8 +3933,8 @@ class AppController {
       const empty = document.createElement("p");
       empty.className = "signal-empty";
       empty.textContent = plan
-        ? "Gemini no dejó tareas con la evidencia de este diagnóstico."
-        : "Ejecutá un diagnóstico para generar tareas. No corre solo.";
+        ? "Esta consulta no dejó tareas nuevas. La comparativa y el historial aplicado quedan arriba."
+        : "Ejecutá un diagnóstico para ver la comparativa. No corre solo.";
       root.appendChild(empty);
       return;
     }
@@ -4137,11 +4165,118 @@ class AppController {
     }
   }
 
+  sprintRows(insights) {
+    const cambios = insights?.cambios || [];
+    const acciones = Array.isArray(insights?.top_acciones) && insights.top_acciones.length
+      ? insights.top_acciones
+      : cambios.slice(0, 5).map((c) => ({
+          id: c.findingId || c.key || "",
+          titulo: c.titulo || "",
+          categoria: "",
+          impacto: c.impacto || "medio",
+          evidencia: c.porque || "",
+          accion: "",
+        }));
+    return acciones.slice(0, 5).map((accion) => {
+      const id = String(accion.id || "");
+      let idx = cambios.findIndex((c) => id && (c.findingId === id || c.key === id));
+      if (idx < 0 && accion.titulo) idx = cambios.findIndex((c) => c.titulo === accion.titulo);
+      const c = idx >= 0 ? cambios[idx] : {
+        titulo: accion.titulo || "",
+        impacto: accion.impacto || "medio",
+        porque: "",
+        findingId: id,
+        status: "",
+        url: "",
+        archivo: "",
+      };
+      return { c, idx, accion };
+    });
+  }
+
+  paintVerdict(status, audit) {
+    const plan = this.dom.badgePlan;
+    if (plan) {
+      const when = audit?.generatedAt ? SeoAuditModule.fmtStampShort(audit.generatedAt) : "";
+      if (!audit?.ready) {
+        plan.textContent = "Plan sin generar";
+        plan.className = "seo-badge";
+      } else if (audit.stale) {
+        plan.textContent = when ? `Desactualizado · ${when}` : "Desactualizado";
+        plan.className = "seo-badge is-warn";
+      } else {
+        plan.textContent = when ? `Al día · ${when}` : "Al día";
+        plan.className = "seo-badge is-ok";
+      }
+    }
+    const board = status?.board || {};
+    const first = Array.isArray(board.serp) ? board.serp[0] : null;
+    if (this.dom.badgeSerp) {
+      if (!first) this.dom.badgeSerp.textContent = "SERP sin puente";
+      else if (first.position) this.dom.badgeSerp.textContent = `SERP #${first.position}${first.locationLabel ? ` · ${first.locationLabel}` : ""}`;
+      else this.dom.badgeSerp.textContent = `SERP sin ranking${first.locationLabel ? ` · ${first.locationLabel}` : ""}`;
+    }
+    if (this.dom.badgeGeo) {
+      const cited = (board.serp || []).some((row) => row?.aiOverview?.cited);
+      const present = (board.serp || []).some((row) => row?.aiOverview?.present);
+      const geoCount = Number(status?.findingCounts?.geo || 0);
+      this.dom.badgeGeo.textContent = cited
+        ? "IA cita al sitio"
+        : present
+          ? "AI Overview sin cita"
+          : geoCount
+            ? `GEO ${geoCount}`
+            : "GEO sin señal";
+    }
+    if (this.dom.badgeSprint) {
+      const sprint = Number(audit?.coverage?.sprintCount || (audit?.insights?.top_acciones || []).length || 0);
+      const total = Number(status?.findingCounts?.total || 0);
+      this.dom.badgeSprint.textContent = total ? `Sprint ${sprint} · ${total} hallazgos` : `Sprint ${sprint}`;
+    }
+  }
+
+  paintCursorFiles(insights) {
+    const list = this.dom.cursorFiles;
+    if (!list) return;
+    list.replaceChildren();
+    (insights?.cambios_cursor || []).forEach((row) => {
+      if (!row?.archivo) return;
+      const li = document.createElement("li");
+      if (row.url) {
+        const a = document.createElement("a");
+        a.href = row.url;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.textContent = row.archivo;
+        li.appendChild(a);
+      } else {
+        li.textContent = row.archivo;
+      }
+      list.appendChild(li);
+    });
+  }
+
+  syncPromptBox() {
+    const box = this.dom.cursorAuditPrompt;
+    const btn = this.dom.btnPromptToggle;
+    if (box) box.hidden = !this.promptOpen;
+    if (btn) {
+      btn.setAttribute("aria-expanded", this.promptOpen ? "true" : "false");
+      btn.textContent = this.promptOpen ? "Ocultar prompt" : "Ver prompt completo";
+    }
+  }
+
+  togglePrompt() {
+    this.promptOpen = !this.promptOpen;
+    this.syncPromptBox();
+  }
+
   renderCursorAudit() {
     const host = this.seoHost;
     const seo = host ? SeoStore.get(host) : null;
     const panel = this.dom.cursorAuditPanel;
-    if (!host || !seo?.totals) {
+    const known = host ? this.auditData.get(host) : null;
+    if (!host || (!seo?.totals && !known)) {
       panel.hidden = true;
       return;
     }
@@ -4156,8 +4291,10 @@ class AppController {
     const total = Number(dom.total || seo.pages?.length || 0);
     const pct = total > 0 ? Math.round((done / Math.max(total, 1)) * 100) : Number(dom.pct || 0);
 
-    this.dom.cursorAuditProgress.hidden = false;
+    const showProgress = this.auditBusy || (Boolean(status) && !dom.complete && total > done);
+    this.dom.cursorAuditProgress.hidden = !showProgress;
     this.dom.cursorAuditBar.style.width = `${Math.min(100, pct)}%`;
+    this.paintVerdict(status, audit);
 
     const parts = [];
     if (status?.error) {
@@ -4322,6 +4459,8 @@ class AppController {
       this.dom.cursorAuditSummary.textContent = "";
       this.dom.cursorAuditChanges.innerHTML = "";
       this.dom.cursorAuditPrompt.value = "";
+      this.paintCursorFiles(null);
+      this.renderEvidence();
       if (this.dom.btnAuditVerify) this.dom.btnAuditVerify.hidden = true;
       if (this.dom.btnAuditNext) this.dom.btnAuditNext.hidden = true;
       if (this.dom.cursorAuditScore) this.dom.cursorAuditScore.hidden = true;
@@ -4331,7 +4470,7 @@ class AppController {
     result.hidden = false;
     const narrative = audit.narrative || "";
     const modelBits = [audit.model, audit.thinkingLevel].filter(Boolean).join(" · ");
-    let summaryText = insights.resumenSimple || "";
+    let summaryText = insights.diagnostico_ejecutivo || insights.resumenSimple || "";
     if (narrative === "fallback") {
       summaryText = `${summaryText}${summaryText ? "\n\n" : ""}(Redacción base: Gemini no devolvió JSON usable; los cambios salen de los hallazgos.)`;
       this.dom.cursorAuditSummary.title = "Fallback sin redacción Gemini";
@@ -4347,6 +4486,7 @@ class AppController {
       this.dom.cursorAuditMeta.textContent += ` ${coverage.keywordsAiNote}`;
     }
     this.dom.cursorAuditPrompt.value = insights.cursorPrompt || "";
+    this.syncPromptBox();
     this.dom.btnAuditCopy.disabled = !insights.cursorPrompt;
     // Cuenta desde store y desde los checks visibles: el botón no puede quedar “muerto”.
     const appliedFromStore = (status?.applied || audit.applied || []).filter(
@@ -4373,35 +4513,25 @@ class AppController {
 
     const list = this.dom.cursorAuditChanges;
     list.innerHTML = "";
-    (insights.cambios || []).forEach((c, idx) => {
+    this.sprintRows(insights).forEach(({ c, idx, accion }) => {
       const statusKey = c.status || "";
       const done = statusKey === "applied" || statusKey === "verified";
       const li = document.createElement("li");
       li.className = `kw-action is-${c.impacto || "medio"}${done ? ` is-${statusKey}` : ""}`;
       li.dataset.cambioIndex = String(idx);
+      li.dataset.findingId = String(accion.id || c.findingId || c.key || "");
 
-      const manual = this.cambioIsManual(c);
       const checkLabel = document.createElement("label");
       checkLabel.className = "kw-action__check";
-      if (manual) {
-        const check = document.createElement("input");
-        check.type = "checkbox";
-        check.checked = done;
-        check.disabled = this.auditBusy;
-        check.dataset.act = "cambio-check";
-        check.setAttribute("aria-label", "Marcar mejora manual como hecha");
-        const checkText = document.createElement("span");
-        checkText.textContent = statusKey === "verified" ? "Verificado" : "Hecho";
-        checkLabel.append(check, checkText);
-      } else {
-        const state = document.createElement("span");
-        state.textContent = statusKey === "verified"
-          ? "Comprobado"
-          : statusKey === "applied"
-            ? "Sigue en el HTML"
-            : "Sin comprobar";
-        checkLabel.appendChild(state);
-      }
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.checked = done;
+      check.disabled = this.auditBusy || !li.dataset.findingId;
+      check.dataset.act = "cambio-check";
+      check.setAttribute("aria-label", "Marcar acción como hecha");
+      const checkText = document.createElement("span");
+      checkText.textContent = statusKey === "verified" ? "Comprobado" : done ? "Hecho" : "Pendiente";
+      checkLabel.append(check, checkText);
 
       const top = document.createElement("div");
       top.className = "kw-action__top";
@@ -4409,13 +4539,16 @@ class AppController {
       strong.textContent = c.titulo || "";
       const tags = document.createElement("div");
       tags.className = "kw-action__tags";
+      if (accion.categoria) {
+        const cat = document.createElement("span");
+        cat.className = `seo-tag is-cat is-${accion.categoria}`;
+        cat.textContent = accion.categoria;
+        tags.appendChild(cat);
+      }
       const impact = document.createElement("span");
-      impact.className = `seo-tag${c.impacto === "alto" ? " is-up" : ""}`;
-      impact.textContent = `Impacto ${c.impacto || "medio"}`;
-      const effort = document.createElement("span");
-      effort.className = "seo-tag";
-      effort.textContent = `Esfuerzo ${c.esfuerzo || "medio"}`;
-      tags.append(impact, effort);
+      impact.className = `seo-tag${(accion.impacto || c.impacto) === "alto" ? " is-up" : ""}`;
+      impact.textContent = accion.impacto || c.impacto || "medio";
+      tags.appendChild(impact);
       if (statusKey === "verified") {
         const verified = document.createElement("span");
         verified.className = "seo-tag is-up";
@@ -4469,11 +4602,18 @@ class AppController {
       }
       top.append(strong, tags);
       li.append(checkLabel, top);
-      if (c.porque) {
+      const evidence = accion.evidencia || c.porque || "";
+      if (evidence) {
         const p = document.createElement("p");
         p.className = "kw-action__detail";
-        p.textContent = c.porque;
+        p.textContent = evidence;
         li.appendChild(p);
+      }
+      if (accion.accion) {
+        const act = document.createElement("p");
+        act.className = "kw-action__action";
+        act.textContent = accion.accion;
+        li.appendChild(act);
       }
       const foot = document.createElement("div");
       foot.className = "kw-action__foot";
@@ -4495,6 +4635,8 @@ class AppController {
       if (foot.childNodes.length) li.appendChild(foot);
       list.appendChild(li);
     });
+    this.paintCursorFiles(insights);
+    this.renderEvidence();
   }
 
   async handleCambioCheck(e) {
@@ -4505,30 +4647,37 @@ class AppController {
     const li = input.closest("li");
     const idx = Number(li?.dataset.cambioIndex ?? -1);
     const status = this.auditData.get(host);
-    const cambio = status?.audit?.insights?.cambios?.[idx];
+    const findingId = li?.dataset.findingId || "";
+    let cambio = idx >= 0 ? status?.audit?.insights?.cambios?.[idx] : null;
+    if (!cambio && findingId) {
+      cambio = (status?.audit?.insights?.cambios || []).find((row) => row.findingId === findingId || row.key === findingId) || null;
+    }
+    if (!cambio && findingId) {
+      cambio = { findingId, titulo: li.querySelector("strong")?.textContent || findingId, key: findingId };
+    }
     if (!cambio) return;
     const key = cambio.key || cambio.findingId || "";
     input.disabled = true;
     try {
       if (input.checked) {
         const data = await SeoAuditModule.markApplied(host, cambio, status?.audit?.commitSha || "");
-        if (status.audit?.insights?.cambios?.[idx]) {
-          status.audit.insights.cambios[idx].status = "applied";
-          status.audit.insights.cambios[idx].key = data.item?.id || key;
-          status.audit.insights.cambios[idx].appliedAt = data.item?.appliedAt || Date.now() / 1000;
-        }
+        cambio.status = "applied";
+        cambio.key = data.item?.id || key;
+        cambio.appliedAt = data.item?.appliedAt || Date.now() / 1000;
         status.applied = data.items || status.applied;
+        li.classList.add("is-applied");
         this.showToast("Mejora marcada como hecha. El próximo plan no la vuelve a pedir.");
       } else {
         const data = await SeoAuditModule.unmarkApplied(host, key || cambio.titulo);
-        if (status.audit?.insights?.cambios?.[idx]) {
-          status.audit.insights.cambios[idx].status = "";
-          status.audit.insights.cambios[idx].appliedAt = 0;
-          status.audit.insights.cambios[idx].verifiedAt = 0;
-        }
+        cambio.status = "";
+        cambio.appliedAt = 0;
+        cambio.verifiedAt = 0;
         status.applied = data.items || [];
+        li.classList.remove("is-applied", "is-verified");
         this.showToast("Check quitado");
       }
+      const stored = status.audit?.insights?.cambios;
+      if (Array.isArray(stored) && !stored.includes(cambio)) stored.push(cambio);
       this.auditData.set(host, status);
       this.renderCursorAudit();
     } catch (err) {
@@ -4829,9 +4978,12 @@ class AppController {
     }
 
     const hasMd = Boolean(data?.markdown);
-    if (this.dom.radiografiaEmpty) this.dom.radiografiaEmpty.hidden = hasMd;
-    if (this.dom.radiografiaBody) this.dom.radiografiaBody.hidden = !hasMd;
+    const open = this.radioOpen && hasMd;
+    if (this.dom.radiografiaEmpty) this.dom.radiografiaEmpty.hidden = hasMd || open;
+    if (this.dom.radiografiaBody) this.dom.radiografiaBody.hidden = !open;
+    if (this.dom.radiografiaToggle) this.dom.radiografiaToggle.setAttribute("aria-expanded", open ? "true" : "false");
     if (this.dom.btnRadiografiaCopy) this.dom.btnRadiografiaCopy.disabled = !hasMd || this.radiografiaBusy;
+    this.paintRadioLamp(data);
 
     if (!hasMd) {
       if (this.dom.radiografiaTableWrap) this.dom.radiografiaTableWrap.innerHTML = "";
@@ -4883,6 +5035,54 @@ class AppController {
     }
 
     this.dom.radiografiaMarkdown.textContent = data.markdown;
+    this.paintLivePages(data?.live?.pages || []);
+  }
+
+  paintRadioLamp(data) {
+    const lamp = this.dom.radiografiaLamp;
+    if (!lamp) return;
+    const detectors = Array.isArray(data?.detectors) ? data.detectors : [];
+    const hard = new Set(["liveHttp", "liveNoindex", "liveCanonical", "liveCta"]);
+    const pages = Array.isArray(data?.live?.pages) ? data.live.pages : [];
+    const pageAlert = pages.some((page) => {
+      const http = Number(page?.http || 0);
+      const canonicalOff = page?.canonicalPath && page.canonicalPath !== page.path;
+      const lostCta = page?.prevHasCta === true && !page?.hasCta;
+      return (http > 0 && http !== 200) || page?.noindex || canonicalOff || lostCta;
+    });
+    const red = pageAlert || detectors.some((item) => hard.has(item.id) || item.severity === "alto");
+    const yellow = !red && detectors.some((item) => item.id !== "gscLag" && item.id !== "positionTrend");
+    lamp.dataset.state = !data?.markdown ? "idle" : red ? "bad" : yellow ? "warn" : "ok";
+  }
+
+  paintLivePages(pages) {
+    const root = this.dom.radiografiaLive;
+    if (!root) return;
+    root.replaceChildren();
+    if (!pages.length) return;
+    const table = document.createElement("table");
+    table.className = "seo-table";
+    table.innerHTML = "<thead><tr><th>URL</th><th>HTTP</th><th>Index</th><th>Canonical</th><th>CTA</th></tr></thead>";
+    const body = document.createElement("tbody");
+    pages.slice(0, 6).forEach((page) => {
+      const tr = document.createElement("tr");
+      const http = Number(page.http || 0);
+      const cells = [
+        page.path || "/",
+        http ? String(http) : "—",
+        page.noindex ? "noindex" : "index",
+        page.canonicalPath && page.canonicalPath !== page.path ? "otra URL" : "ok",
+        page.prevHasCta === true && !page.hasCta ? "desapareció" : page.hasCta ? "sí" : "no",
+      ];
+      cells.forEach((text) => {
+        const td = document.createElement("td");
+        td.textContent = text;
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    });
+    table.appendChild(body);
+    root.appendChild(table);
   }
 
   async generateRadiografia() {
@@ -4947,7 +5147,11 @@ class AppController {
       this.dom.cursorAuditPrompt.select();
       document.execCommand("copy");
     }
+    const btn = this.dom.btnAuditCopy;
+    const previous = btn?.textContent || "";
+    if (btn) btn.textContent = "Copiado";
     this.showToast("Prompt de crecimiento copiado · pegalo en Cursor Agent");
+    if (btn) setTimeout(() => { btn.textContent = previous || "Copiar prompt para Cursor"; }, 1600);
   }
 
   async taskFromKeywordAction(index) {
@@ -5059,6 +5263,8 @@ class AppController {
       this.dom.btnSeoIndex.hidden = true;
       this.dom.kwPanel.hidden = true;
       if (this.dom.motorPanel) this.dom.motorPanel.hidden = true;
+      if (this.dom.radiografiaPanel) this.dom.radiografiaPanel.hidden = true;
+      if (this.dom.seoEvidence) this.dom.seoEvidence.hidden = true;
       return;
     } else if (data?.error) {
       this.#seoNotice(data.error, "warn");
@@ -5084,8 +5290,10 @@ class AppController {
     this.renderSeoPages(data);
     this.renderKeywords();
     this.renderGrowth();
+    if (this.dom.seoEvidence) this.dom.seoEvidence.hidden = false;
     this.renderCursorAudit();
     this.renderRadiografia();
+    this.renderEvidence();
     this.renderMotor();
     this.renderGaHint();
     this.renderSeoDiagnostics(data);
@@ -5734,7 +5942,283 @@ class AppController {
     return li;
   }
 
+  switchSeoTab(name) {
+    const root = this.dom.seoEvidence;
+    if (!root) return;
+    root.querySelectorAll("[data-seo-tab]").forEach((btn) => {
+      const on = btn.dataset.seoTab === name;
+      btn.classList.toggle("is-active", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    root.querySelectorAll("[data-seo-pane]").forEach((pane) => {
+      const on = pane.dataset.seoPane === name;
+      pane.hidden = !on;
+      pane.classList.toggle("is-active", on);
+    });
+  }
+
+  renderEvidence() {
+    const status = this.seoHost ? this.auditData.get(this.seoHost) : null;
+    const board = status?.board || {};
+    const insights = status?.audit?.insights || {};
+    this.renderSerpBoard(board.serp || []);
+    this.renderDecant(insights.decant || []);
+    this.renderFindingFilters();
+    this.renderFindingCatalog(board.findings || []);
+    this.renderPageCards(board.cards || []);
+    this.renderHostTools(board);
+  }
+
+  renderSerpBoard(packs) {
+    const root = this.dom.serpBoard;
+    if (!root) return;
+    root.replaceChildren();
+    if (!packs.length) {
+      const empty = document.createElement("p");
+      empty.className = "signal-empty";
+      empty.textContent = "El puente de ciudad se llena al generar el dossier. La consulta manual sigue debajo.";
+      root.appendChild(empty);
+      return;
+    }
+    packs.forEach((pack) => {
+      const card = document.createElement("article");
+      card.className = "serp-card";
+      const title = document.createElement("h3");
+      title.textContent = `${pack.keyword || "Keyword"}${pack.locationLabel ? ` · ${pack.locationLabel}` : ""}`;
+      const meta = document.createElement("p");
+      meta.className = "kw__meta";
+      const pos = pack.position ? `#${pack.position}` : "sin ranking";
+      const cited = pack.aiOverview?.cited ? "citado en AI Overview" : pack.aiOverview?.present ? "AI Overview sin cita" : "sin AI Overview";
+      meta.textContent = `${pos} · ${pack.localPack ? "Local Pack" : "sin Local Pack"} · ${cited}`;
+      card.append(title, meta);
+      if (pack.aiOverview?.excerpt) {
+        const quote = document.createElement("p");
+        quote.className = "serp-card__quote";
+        quote.textContent = pack.aiOverview.excerpt;
+        card.appendChild(quote);
+      }
+      if (pack.peopleAlsoAsk?.length) {
+        const list = document.createElement("ul");
+        list.className = "serp-card__paa";
+        pack.peopleAlsoAsk.forEach((question) => {
+          const li = document.createElement("li");
+          li.textContent = question;
+          list.appendChild(li);
+        });
+        card.appendChild(list);
+      }
+      if (pack.rows?.length) {
+        const table = document.createElement("table");
+        table.className = "seo-table";
+        table.innerHTML = "<thead><tr><th></th><th>Pos.</th><th>Title</th><th>H1</th><th>Palabras</th><th>On-page</th></tr></thead>";
+        const body = document.createElement("tbody");
+        pack.rows.forEach((row) => {
+          const tr = document.createElement("tr");
+          [row.role || "", row.rank ?? "—", row.title || "—", row.h1 || "—", row.words ?? "—", row.onpage_score ?? "—"].forEach((text) => {
+            const td = document.createElement("td");
+            td.textContent = String(text);
+            tr.appendChild(td);
+          });
+          body.appendChild(tr);
+        });
+        table.appendChild(body);
+        card.appendChild(table);
+      }
+      root.appendChild(card);
+    });
+  }
+
+  renderDecant(rows) {
+    const root = this.dom.decantList;
+    if (!root) return;
+    root.replaceChildren();
+    if (!rows.length) return;
+    const heading = document.createElement("h3");
+    heading.textContent = "Sprint decantado";
+    root.appendChild(heading);
+    const list = document.createElement("ul");
+    list.className = "decant-list";
+    rows.forEach((row) => {
+      const li = document.createElement("li");
+      const title = document.createElement("strong");
+      title.textContent = row.kind || row.id || "";
+      const count = Number(row.urlCount || 1);
+      const meta = document.createElement("span");
+      meta.textContent = count > 1 ? `${count} URLs` : (row.path || "");
+      li.append(title, meta);
+      (row.sampleUrls || []).slice(0, 5).forEach((url) => {
+        const sample = document.createElement("small");
+        sample.textContent = url;
+        li.appendChild(sample);
+      });
+      list.appendChild(li);
+    });
+    root.appendChild(list);
+  }
+
+  renderFindingFilters() {
+    const root = this.dom.findingFilters;
+    if (!root || root.childElementCount) {
+      root?.querySelectorAll("[data-finding-cat], [data-finding-state]").forEach((btn) => {
+        const on = btn.dataset.findingCat
+          ? btn.dataset.findingCat === this.findingCat
+          : btn.dataset.findingState === this.findingState;
+        btn.classList.toggle("is-active", on);
+      });
+      return;
+    }
+    const cats = ["all", "index", "demand", "onpage", "conversion", "speed", "local", "geo", "code"];
+    const states = [["pending", "Pendiente"], ["done", "Hecho"], ["all", "Todos"]];
+    cats.forEach((cat) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "period-toggle__btn";
+      btn.dataset.findingCat = cat;
+      btn.textContent = cat === "all" ? "Todas" : cat;
+      btn.classList.toggle("is-active", cat === this.findingCat);
+      root.appendChild(btn);
+    });
+    states.forEach(([value, label]) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "period-toggle__btn";
+      btn.dataset.findingState = value;
+      btn.textContent = label;
+      btn.classList.toggle("is-active", value === this.findingState);
+      root.appendChild(btn);
+    });
+  }
+
+  renderFindingCatalog(findings) {
+    const root = this.dom.findingCatalog;
+    if (!root) return;
+    root.replaceChildren();
+    const rows = findings.filter((item) => {
+      if (this.findingCat !== "all" && item.category !== this.findingCat) return false;
+      const done = item.status === "applied" || item.status === "verified";
+      if (this.findingState === "pending") return !done;
+      if (this.findingState === "done") return done;
+      return true;
+    });
+    if (!rows.length) {
+      const empty = document.createElement("li");
+      empty.className = "signal-empty";
+      empty.textContent = findings.length ? "Ningún hallazgo con ese filtro." : "El catálogo aparece con el dossier del sitio.";
+      root.appendChild(empty);
+      return;
+    }
+    rows.forEach((item) => {
+      const li = document.createElement("li");
+      li.className = item.status === "pending" ? "" : "is-done";
+      const title = document.createElement("strong");
+      title.textContent = item.title || item.kind || item.id;
+      const tags = document.createElement("span");
+      tags.className = "seo-tag";
+      tags.textContent = `${item.category || "—"} · ${item.status === "pending" ? "pendiente" : "hecho"}`;
+      li.append(title, tags);
+      if (item.line) {
+        const line = document.createElement("p");
+        line.textContent = item.line;
+        li.appendChild(line);
+      }
+      root.appendChild(li);
+    });
+  }
+
+  renderPageCards(cards) {
+    const root = this.dom.pageCards;
+    if (!root) return;
+    root.replaceChildren();
+    cards.slice(0, 12).forEach((card) => {
+      const details = document.createElement("details");
+      details.className = "page-card";
+      const summary = document.createElement("summary");
+      summary.textContent = `${card.path || "/"} · pos ${card.position || "—"} · PSI ${card.psiScore ?? "—"}`;
+      const body = document.createElement("p");
+      body.textContent = [card.title, card.h1, card.targetFile].filter(Boolean).join(" · ");
+      details.append(summary, body);
+      root.appendChild(details);
+    });
+  }
+
+  renderHostTools(board) {
+    const geo = board.geo || {};
+    const repo = board.repo || {};
+    if (this.dom.geoStatus) {
+      const robots = geo.fetchedAt ? (geo.robotsOk ? "robots.txt ok" : `robots.txt ${geo.robotsStatus || "sin respuesta"}`) : "robots.txt sin leer";
+      const blocked = (geo.blocked || []).length ? ` · bloquea ${(geo.blocked || []).join(", ")}` : "";
+      const llms = geo.fetchedAt ? (geo.llmsOk ? "llms.txt ok" : `llms.txt ${geo.llmsStatus || "ausente"}`) : "llms.txt sin leer";
+      this.dom.geoStatus.textContent = `${robots}${blocked} · ${llms}`;
+    }
+    if (this.dom.repoStatus) {
+      const sha = repo.commitSha ? String(repo.commitSha).slice(0, 7) : "";
+      const files = (repo.changedFiles || []).slice(0, 8).join(", ");
+      this.dom.repoStatus.textContent = sha
+        ? `Commit ${sha}${files ? ` · ${files}` : ""}`
+        : "Sin commit leído";
+    }
+  }
+
+  queueHostCity() {
+    const input = this.dom.gscLocationQuery;
+    if (!input) return;
+    const query = input.value.trim();
+    if (/^\d{3,}$/.test(query)) this.dom.gscLocationCode.value = query;
+    clearTimeout(this.hostCityTimer);
+    if (query.length < 2 || /^\d+$/.test(query)) {
+      if (this.dom.gscLocationList) this.dom.gscLocationList.hidden = true;
+      return;
+    }
+    this.hostCityTimer = setTimeout(() => this.searchHostCities(query), 220);
+  }
+
+  async searchHostCities(query) {
+    const client = this.clientForHost(this.seoHost);
+    const list = this.dom.gscLocationList;
+    const seq = ++this.hostCitySeq;
+    const paint = (matches) => {
+      if (!list || seq !== this.hostCitySeq) return;
+      list.replaceChildren();
+      const chile = /chile/i.test(query) || !matches.length;
+      const rows = chile ? [{ location_code: 2152, label: "Chile" }, ...matches] : matches;
+      rows.forEach((match) => {
+        const item = document.createElement("li");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = match.label || match.location_name || String(match.location_code);
+        btn.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          this.dom.gscLocationCode.value = String(match.location_code || "");
+          this.dom.gscLocationQuery.value = btn.textContent;
+          list.hidden = true;
+        });
+        item.appendChild(btn);
+        list.appendChild(item);
+      });
+      list.hidden = false;
+    };
+    if (!client?.id) {
+      paint([]);
+      return;
+    }
+    try {
+      const qs = new URLSearchParams({ action: "locations", proyecto_id: client.id, q: query });
+      const data = await this.motorRequest(`./api/compile_growth_plan.php?${qs}`, {
+        headers: { Accept: "application/json" },
+      });
+      paint(data.matches || []);
+    } catch {
+      paint([]);
+    }
+  }
+
   renderSeoPages(data) {
+    const boardPages = this.auditData.get(this.seoHost)?.board?.pages;
+    if (Array.isArray(boardPages) && boardPages.length) {
+      this.renderUnifiedPages(boardPages, data);
+      return;
+    }
+    this.setSeoTableHead(["Página", "Clics", "Imp.", "CTR", "Pos.", "Índice"]);
     const pages = data?.pages || [];
     const indexed = Number(data?.inventory?.indexed || 0);
     const checked = Number(data?.inventory?.checked || data?.inventory?.total || pages.length || 0);
@@ -5839,6 +6323,55 @@ class AppController {
     this.dom.seoTableBody.appendChild(fragment);
   }
 
+  setSeoTableHead(labels) {
+    const row = this.dom.seoTableBody?.closest("table")?.querySelector("thead tr");
+    if (!row) return;
+    row.replaceChildren();
+    labels.forEach((label) => {
+      const th = document.createElement("th");
+      th.textContent = label;
+      row.appendChild(th);
+    });
+  }
+
+  renderUnifiedPages(pages, data) {
+    const indexed = Number(data?.inventory?.indexed || 0);
+    const checked = Number(data?.inventory?.checked || data?.inventory?.total || pages.length || 0);
+    this.dom.seoPagesCount.textContent = checked ? `${indexed} de ${checked} indexadas` : `${pages.length} URLs`;
+    this.dom.seoPagesDrawer.hidden = false;
+    this.setSeoTableHead(["URL", "Clics", "Imp.", "CTR", "Pos.", "Sesiones", "Contactos", "PSI móvil"]);
+    this.dom.seoTableBody.innerHTML = "";
+    const fragment = document.createDocumentFragment();
+    pages.forEach((row) => {
+      const tr = document.createElement("tr");
+      const name = document.createElement("td");
+      const link = document.createElement("a");
+      link.href = row.url || row.path || "#";
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.className = "seo-page-link";
+      link.textContent = row.path || "/";
+      name.appendChild(link);
+      const cell = (text) => {
+        const td = document.createElement("td");
+        td.textContent = text;
+        return td;
+      };
+      tr.append(
+        name,
+        cell(GscModule.fmt(row.clicks)),
+        cell(GscModule.fmt(row.impressions)),
+        cell(GscModule.pct(row.ctr)),
+        cell(row.position ? GscModule.pos(row.position) : "—"),
+        cell(GscModule.fmt(row.sessions)),
+        cell(GscModule.fmt(row.contacts)),
+        cell(row.psiScore == null || row.psiScore === "" ? "—" : String(row.psiScore))
+      );
+      fragment.appendChild(tr);
+    });
+    this.dom.seoTableBody.appendChild(fragment);
+  }
+
   renderSeoDiagnostics(data) {
     const diag = data?.diagnostics || {};
     const rows = [
@@ -5888,11 +6421,23 @@ class AppController {
       document.activeElement === this.dom.gscSitemapUrl
       || document.activeElement === this.dom.gscPages
       || document.activeElement === this.dom.gscGa4Property
+      || document.activeElement === this.dom.gscSeoKeyword
+      || document.activeElement === this.dom.gscLocationQuery
     ) {
       return;
     }
     this.dom.gscSitemapUrl.value = data?.diagnostics?.sitemapUrl || "";
     if (this.dom.gscGa4Property) this.dom.gscGa4Property.value = data?.ga4Property || "";
+    const boardHost = this.auditData.get(this.seoHost)?.board?.host || {};
+    const keyword = data?.seoKeyword ?? boardHost.seoKeyword ?? "";
+    const location = data?.locationCode ?? boardHost.locationCode ?? "";
+    if (this.dom.gscSeoKeyword) this.dom.gscSeoKeyword.value = keyword;
+    if (this.dom.gscLocationCode && document.activeElement !== this.dom.gscLocationQuery) {
+      this.dom.gscLocationCode.value = location ? String(location) : "";
+      if (this.dom.gscLocationQuery && !this.dom.gscLocationQuery.value) {
+        this.dom.gscLocationQuery.value = Number(location) === 2152 ? "Chile" : (location ? String(location) : "");
+      }
+    }
     const manual = (data?.pages || []).filter((p) => p.label && p.label !== p.url);
     this.dom.gscPages.value = GscModule.serializePages(manual);
   }
@@ -6162,6 +6707,8 @@ class AppController {
         sitemapUrl: this.dom.gscSitemapUrl.value.trim(),
         pages: GscModule.parsePages(this.dom.gscPages.value),
         ga4Property: this.dom.gscGa4Property.value.trim(),
+        seoKeyword: this.dom.gscSeoKeyword?.value.trim() || "",
+        locationCode: Number(this.dom.gscLocationCode?.value || 0),
       });
       this.showToast("Configuración guardada");
       await this.loadSeoHost(this.seoHost, true);

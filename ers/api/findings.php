@@ -752,7 +752,7 @@ function findingsOnPage(array $dossier): array
         if ($meta !== '') {
             $metas[$meta][] = (string) $path;
         }
-        $worth = $impr >= 15 || $path === '/';
+        $worth = $impr >= 15 || $path === '/' || dossierIsCommercialPath((string) $path);
         if (!$worth) {
             continue;
         }
@@ -1148,7 +1148,8 @@ function findingsConversion(array $dossier): array
         $query = (string) ($page['query'] ?? '');
         $clicks = (int) ($page['clicks'] ?? 0);
         $impr = (int) ($page['impressions'] ?? 0);
-        if ($path === '' || ($clicks < 5 && $impr < 80)) {
+        $priority = $path === '/' || dossierIsCommercialPath($path);
+        if ($path === '' || findingsSkip($path) || ($clicks < 5 && $impr < 80 && !$priority)) {
             continue;
         }
         $landing = $landings[dossierNormPath($path)] ?? null;
@@ -1186,8 +1187,16 @@ function findingsConversion(array $dossier): array
             }
         }
 
-        if ($bare < 4 && $dom !== null && $commercial && ($clicks >= 8 || (is_array($landing) && (int) ($landing['sessions'] ?? 0) >= 8))) {
-            $hasRoute = !empty($dom['hasTel']) || !empty($dom['hasWhatsapp']) || !empty($dom['hasForm']);
+        $pageGa = is_array($page['ga'] ?? null) ? $page['ga'] : [];
+        $sessions = (int) ($pageGa['sessions'] ?? 0);
+        if ($sessions === 0 && is_array($landing)) {
+            $sessions = (int) ($landing['sessions'] ?? 0);
+        }
+        $events = array_key_exists('keyEvents', $pageGa)
+            ? (int) $pageGa['keyEvents']
+            : (int) (is_array($landing) ? ($landing['keyEvents'] ?? $landing['conversions'] ?? 0) : 0);
+        $hasRoute = $dom !== null && (!empty($dom['hasTel']) || !empty($dom['hasWhatsapp']) || !empty($dom['hasForm']) || !empty($dom['hasMailto']));
+        if ($bare < 4 && $dom !== null && !$hasRoute && ($priority || ($commercial && ($clicks >= 8 || $sessions >= 8)))) {
             if (!$hasRoute && !findingsSkip($path)) {
                 $bare++;
                 $out[] = findingsMake(
@@ -1211,6 +1220,29 @@ function findingsConversion(array $dossier): array
                     'Sin tel:, WhatsApp ni <form> en ' . $path . ' (' . $clicks . ' clics, intención comercial).'
                 );
             }
+        }
+        if ($leaks < 4 && $hasRoute && $sessions >= 3 && $events === 0 && !empty($dossier['sources']['ga4'])) {
+            $leaks++;
+            $out[] = findingsMake(
+                'ctaSilent',
+                'conversion',
+                3,
+                max(4, $sessions),
+                findingsFigure(0, 'contacts', 'risk'),
+                $path,
+                (string) $page['url'],
+                $query,
+                ['sessions' => $sessions, 'keyEvents' => 0, 'contacts' => $pageGa['contacts'] ?? []],
+                findingsSay(
+                    'Hay cómo escribir y nadie lo usa',
+                    'La página muestra contacto, llegan visitas y Analytics no registra WhatsApp, llamada, formulario ni correo.',
+                    'There is a way to write and nobody uses it',
+                    'The page shows contact, people arrive, and Analytics records no WhatsApp, call, form or email.',
+                    'Há como escrever e ninguém usa',
+                    'A página mostra contato, chegam visitas e o Analytics não registra WhatsApp, ligação, formulário nem e-mail.'
+                ),
+                'CTA visible en ' . $path . ' con ' . $sessions . ' sesiones y 0 eventos de contacto.'
+            );
         }
     }
 
@@ -1297,7 +1329,7 @@ function findingsSpeed(array $dossier): array
             continue;
         }
         $impr = (int) ($page['impressions'] ?? 0);
-        if ($impr < 20 && $path !== '/') {
+        if ($impr < 20 && $path !== '/' && !dossierIsCommercialPath($path)) {
             continue;
         }
         $score = $row['score'] ?? null;
@@ -1386,7 +1418,7 @@ function findingsSpeed(array $dossier): array
         }
         $score = $row['accessibility'] ?? null;
         $impr = (int) ($page['impressions'] ?? 0);
-        if (!is_int($score) || $score <= 0 || $score >= 70 || ($impr < 20 && $path !== '/')) {
+        if (!is_int($score) || $score <= 0 || $score >= 70 || ($impr < 20 && $path !== '/' && !dossierIsCommercialPath($path))) {
             continue;
         }
         $a11yCount++;
@@ -2152,6 +2184,189 @@ function findingsLinkingAndCrawl(array $dossier): array
     return $out;
 }
 
+function findingsGEO(array $dossier): array
+{
+    $out = [];
+    $host = (string) ($dossier['host'] ?? '');
+    $home = 'https://' . $host . '/';
+    $geo = is_array($dossier['geo'] ?? null) ? $dossier['geo'] : [];
+    if (!empty($geo['fetchedAt'])) {
+        $blocked = is_array($geo['robots']['blocked'] ?? null) ? $geo['robots']['blocked'] : [];
+        if ($blocked !== []) {
+            $out[] = findingsMake(
+                'aiBotsBlocked',
+                'geo',
+                3,
+                30,
+                findingsFigure(count($blocked), 'pages', 'risk'),
+                '/',
+                $home,
+                '',
+                ['blocked' => $blocked],
+                findingsSay(
+                    'El sitio le cierra la puerta a los buscadores de IA',
+                    'robots.txt impide que estos bots lean el sitio, así que no pueden citarlo.',
+                    'The site shuts the door on AI search bots',
+                    'robots.txt stops these bots from reading the site, so they cannot cite it.',
+                    'O site fecha a porta para os buscadores de IA',
+                    'robots.txt impede que esses bots leiam o site, então não podem citá-lo.'
+                ),
+                'robots.txt bloquea: ' . implode(', ', $blocked) . '.'
+            );
+        }
+        $llms = is_array($geo['llms'] ?? null) ? $geo['llms'] : [];
+        if (empty($llms['ok'])) {
+            $out[] = findingsMake(
+                'llmsMissing',
+                'geo',
+                2,
+                12,
+                findingsFigure(1, 'pages', 'risk'),
+                '/',
+                $home . 'llms.txt',
+                '',
+                ['status' => (int) ($llms['status'] ?? 0)],
+                findingsSay(
+                    'Falta el archivo que le explica el negocio a las IAs',
+                    'Sin /llms.txt el modelo no tiene una ficha corta de servicios, cobertura y contacto.',
+                    'The file that explains the business to AIs is missing',
+                    'Without /llms.txt a model has no short card of services, coverage and contact.',
+                    'Falta o arquivo que explica o negócio às IAs',
+                    'Sem /llms.txt o modelo não tem uma ficha curta de serviços, cobertura e contato.'
+                ),
+                '/llms.txt no responde en la raíz.'
+            );
+        } elseif (empty($llms['hasServices']) || empty($llms['hasCoverage']) || empty($llms['hasContact'])) {
+            $out[] = findingsMake(
+                'llmsThin',
+                'geo',
+                2,
+                8,
+                findingsFigure(1, 'pages', 'risk'),
+                '/',
+                $home . 'llms.txt',
+                '',
+                [
+                    'services' => !empty($llms['hasServices']),
+                    'coverage' => !empty($llms['hasCoverage']),
+                    'contact' => !empty($llms['hasContact']),
+                ],
+                findingsSay(
+                    'llms.txt no cuenta el negocio completo',
+                    'Tiene que decir qué servicios ofrece, dónde cubre y cómo contactar.',
+                    'llms.txt does not tell the whole business',
+                    'It needs the services, the coverage and how to get in touch.',
+                    'llms.txt não conta o negócio inteiro',
+                    'Precisa dizer os serviços, a cobertura e como entrar em contato.'
+                ),
+                'llms.txt sin servicios, cobertura o contacto.'
+            );
+        }
+    }
+
+    $schemaCount = 0;
+    $answerCount = 0;
+    $citeCount = 0;
+    $brand = gscAscii((string) ($dossier['client']['name'] ?? ''));
+    foreach ($dossier['pages'] ?? [] as $page) {
+        if (!is_array($page)) {
+            continue;
+        }
+        $path = (string) ($page['path'] ?? '');
+        $priority = $path === '/' || dossierIsCommercialPath($path);
+        if (!$priority) {
+            continue;
+        }
+        $dom = findingsDom($dossier, $path);
+        if ($schemaCount < 3 && is_array($dom) && array_key_exists('schemaGraph', $dom)) {
+            $graph = is_array($dom['schemaGraph'] ?? null) ? $dom['schemaGraph'] : [];
+            $types = is_array($dom['schemas'] ?? null) ? $dom['schemas'] : [];
+            $wantsGraph = $path === '/' || array_intersect($types, ['LocalBusiness', 'Organization', 'Service', 'ProfessionalService']) !== [];
+            if ($wantsGraph && $types !== [] && empty($graph['linked'])) {
+                $schemaCount++;
+                $out[] = findingsMake(
+                    'schemaUnlinked',
+                    'geo',
+                    2,
+                    (int) ($page['impressions'] ?? 0) > 0 ? 10 : 6,
+                    findingsFigure(1, 'pages', 'risk'),
+                    $path,
+                    (string) ($page['url'] ?? ''),
+                    '',
+                    ['types' => array_slice($types, 0, 8)],
+                    findingsSay(
+                        'El marcado no conecta el negocio con el servicio',
+                        'Hay datos estructurados, pero no unen el negocio, el servicio, la zona y los perfiles con un mismo identificador.',
+                        'The markup does not connect the business to the service',
+                        'Structured data is there, but it does not join the business, the service, the area and the profiles.',
+                        'A marcação não conecta o negócio ao serviço',
+                        'Há dados estruturados, mas não unem o negócio, o serviço, a área e os perfis.'
+                    ),
+                    'Schema en ' . $path . ' sin cadena LocalBusiness/Organization → Service (@id, areaServed o sameAs).'
+                );
+            }
+        }
+        if ($answerCount < 4 && is_array($dom) && array_key_exists('leadParagraph', $dom)) {
+            $lead = trim((string) ($dom['leadParagraph'] ?? ''));
+            $leadLen = function_exists('mb_strlen') ? mb_strlen($lead) : strlen($lead);
+            $answerReady = $leadLen >= 80 || !empty($dom['hasFaq']) || !empty($dom['hasList']) || !empty($dom['hasTable']);
+            if (!$answerReady) {
+                $answerCount++;
+                $out[] = findingsMake(
+                    'answerFirst',
+                    'geo',
+                    2,
+                    (int) ($page['impressions'] ?? 0) > 0 ? 8 : 5,
+                    findingsFigure(1, 'pages', 'risk'),
+                    $path,
+                    (string) ($page['url'] ?? ''),
+                    '',
+                    ['leadLen' => $leadLen],
+                    findingsSay(
+                        'La página no responde al principio',
+                        'Falta una respuesta directa en el primer párrafo, una lista o una tabla de preguntas. Eso es lo que una IA puede citar.',
+                        'The page does not answer up front',
+                        'It lacks a direct answer in the first paragraph, a list or a question table. That is what an AI can cite.',
+                        'A página não responde no começo',
+                        'Falta uma resposta direta no primeiro parágrafo, uma lista ou uma tabela. É isso que uma IA pode citar.'
+                    ),
+                    'Sin answer-first en ' . $path . ': párrafo inicial corto y sin FAQ, lista ni tabla.'
+                );
+            }
+        }
+        $serp = is_array($page['serp'] ?? null) ? $page['serp'] : null;
+        if ($citeCount < 2 && is_array($serp) && !empty($serp['aiOverview']['present'])) {
+            $excerpt = gscAscii((string) ($serp['aiOverview']['excerpt'] ?? ''));
+            $cited = ($host !== '' && str_contains($excerpt, gscAscii($host)))
+                || ($brand !== '' && strlen($brand) >= 4 && str_contains($excerpt, $brand));
+            if (!$cited) {
+                $citeCount++;
+                $out[] = findingsMake(
+                    'aiOverviewGap',
+                    'geo',
+                    3,
+                    20,
+                    findingsFigure(1, 'pages', 'risk'),
+                    $path,
+                    (string) ($page['url'] ?? ''),
+                    (string) ($serp['keyword'] ?? ''),
+                    ['keyword' => (string) ($serp['keyword'] ?? ''), 'excerpt' => ersClip((string) ($serp['aiOverview']['excerpt'] ?? ''), 180)],
+                    findingsSay(
+                        'La respuesta de IA no cita al negocio',
+                        'Google arma un resumen con IA para esta búsqueda y no menciona el dominio ni el nombre.',
+                        'The AI answer does not cite the business',
+                        'Google builds an AI summary for this search and does not mention the domain or the name.',
+                        'A resposta de IA não cita o negócio',
+                        'O Google monta um resumo com IA para esta busca e não menciona o domínio nem o nome.'
+                    ),
+                    'AI Overview para «' . (string) ($serp['keyword'] ?? '') . '» sin citar ' . $host . '.'
+                );
+            }
+        }
+    }
+    return $out;
+}
+
 function findingsDetect(array $dossier): array
 {
     if (empty($dossier['ok'])) {
@@ -2164,7 +2379,8 @@ function findingsDetect(array $dossier): array
         findingsLinkingAndCrawl($dossier),
         findingsConversion($dossier),
         findingsSpeed($dossier),
-        findingsLocal($dossier)
+        findingsLocal($dossier),
+        findingsGEO($dossier)
     );
     $seen = [];
     $out = [];
@@ -2179,6 +2395,174 @@ function findingsDetect(array $dossier): array
     usort($out, static fn ($a, $b) => ($b['severity'] <=> $a['severity']) ?: ($b['impact'] <=> $a['impact']));
     $out = array_slice($out, 0, 48);
     return findingsAttachFiles($out, $dossier);
+}
+
+/**
+ * Peso de sprint. 6 es cosmética: solo entra si los tramos 1–5 no llenan 5 ítems.
+ */
+function findingsDecantTier(array $finding): int
+{
+    $kind = (string) ($finding['kind'] ?? '');
+    $category = (string) ($finding['category'] ?? '');
+    if ($category === 'index' || in_array($kind, ['blocked', 'noindex', 'robotsMeta', 'canonical', 'sitemap', 'xRobotsNoindex', 'canonicalHop', 'crawlStale'], true)) {
+        return 1;
+    }
+    if ($category === 'conversion' || in_array($kind, ['noContact', 'ctaSilent', 'leak', 'measure'], true)) {
+        return 2;
+    }
+    if ($category === 'geo' || in_array($kind, ['schema', 'schemaUnlinked', 'answerFirst', 'aiOverviewGap', 'aiBotsBlocked', 'llmsMissing', 'llmsThin', 'gap', 'gapH2', 'localSchemaIncomplete'], true)) {
+        return 3;
+    }
+    if (in_array($kind, ['striking', 'lowctr', 'cannibal', 'falling'], true)) {
+        return 4;
+    }
+    if (in_array($kind, ['slow', 'cls', 'psiSeo'], true) && (int) ($finding['severity'] ?? 0) >= 2) {
+        return 5;
+    }
+    return 6;
+}
+
+/**
+ * Sprint de 5–8 causas. El catálogo de hasta 48 no se toca: esto solo recorta
+ * lo que ve Gemini. Misma plantilla en varias URLs = un hallazgo.
+ */
+function findingsDecant(array $findings, array $appliedIds, array $dossier): array
+{
+    $applied = [];
+    foreach ($appliedIds as $id) {
+        $id = trim((string) $id);
+        if ($id !== '') {
+            $applied[$id] = true;
+        }
+    }
+
+    $groups = [];
+    foreach ($findings as $finding) {
+        if (!is_array($finding)) {
+            continue;
+        }
+        $id = (string) ($finding['id'] ?? '');
+        if ($id !== '' && isset($applied[$id])) {
+            continue;
+        }
+        $kind = (string) ($finding['kind'] ?? '');
+        if ($kind === '') {
+            continue;
+        }
+        if (isset($applied['group|' . $kind])) {
+            continue;
+        }
+        $groups[$kind][] = $finding;
+    }
+
+    $collapsed = [];
+    foreach ($groups as $kind => $members) {
+        usort($members, static fn ($a, $b) => ((int) ($b['severity'] ?? 0) <=> (int) ($a['severity'] ?? 0))
+            ?: ((int) ($b['impact'] ?? 0) <=> (int) ($a['impact'] ?? 0)));
+        $base = $members[0];
+        $urls = [];
+        $memberIds = [];
+        $files = [];
+        foreach ($members as $member) {
+            $memberId = (string) ($member['id'] ?? '');
+            if ($memberId !== '') {
+                $memberIds[] = $memberId;
+            }
+            $url = trim((string) ($member['url'] ?? ''));
+            if ($url !== '' && !in_array($url, $urls, true)) {
+                $urls[] = $url;
+            }
+            $file = trim((string) ($member['file'] ?? ''));
+            if ($file !== '') {
+                $files[$file] = ($files[$file] ?? 0) + 1;
+            }
+        }
+        arsort($files);
+        $template = '';
+        foreach ($files as $file => $times) {
+            if ($times >= 2 || count($members) === 1) {
+                $template = (string) $file;
+            }
+            break;
+        }
+        $count = count($members);
+        $samples = array_slice($urls, 0, 5);
+        $samplePaths = [];
+        foreach ($samples as $url) {
+            $samplePaths[] = (string) (parse_url($url, PHP_URL_PATH) ?: $url);
+        }
+        $note = ' Afecta ' . $count . ' URL' . ($count === 1 ? '' : 's');
+        if ($samplePaths !== []) {
+            $note .= ': ' . implode(', ', $samplePaths);
+        }
+        $note .= '.';
+        if ($template !== '' && $count > 1) {
+            $note .= ' Plantilla probable: ' . $template . '.';
+        }
+        $base['techText'] = ersClip(rtrim((string) ($base['techText'] ?? '')) . $note, 700);
+        $evidence = is_array($base['evidence'] ?? null) ? $base['evidence'] : [];
+        $evidence['urlCount'] = $count;
+        $evidence['sampleUrls'] = $samples;
+        $evidence['memberIds'] = array_slice($memberIds, 0, 12);
+        $evidence['template'] = $template;
+        $base['evidence'] = $evidence;
+        if ($template !== '') {
+            $base['file'] = $template;
+        }
+        if ($count > 1) {
+            $base['id'] = 'group|' . $kind;
+            $base['path'] = 'site';
+            $base['url'] = $samples[0] ?? (string) ($base['url'] ?? '');
+            $base['query'] = '';
+            foreach (['es', 'en', 'pt'] as $lang) {
+                $title = (string) ($base['lines'][$lang]['title'] ?? $kind);
+                $base['lines'][$lang]['title'] = $count . ' páginas: ' . $title;
+            }
+        }
+        $base['tier'] = findingsDecantTier($base);
+        $collapsed[] = $base;
+    }
+
+    $tiers = [1 => [], 2 => [], 3 => [], 4 => [], 5 => [], 6 => []];
+    foreach ($collapsed as $finding) {
+        $tier = (int) ($finding['tier'] ?? 6);
+        if ($tier < 1 || $tier > 6) {
+            $tier = 6;
+        }
+        $tiers[$tier][] = $finding;
+    }
+    foreach ($tiers as &$bucket) {
+        usort($bucket, static fn ($a, $b) => ((int) ($b['severity'] ?? 0) <=> (int) ($a['severity'] ?? 0))
+            ?: ((int) ($b['impact'] ?? 0) <=> (int) ($a['impact'] ?? 0)));
+    }
+    unset($bucket);
+
+    $sprint = [];
+    for ($tier = 1; $tier <= 5; $tier++) {
+        foreach ($tiers[$tier] as $finding) {
+            if (count($sprint) >= 8) {
+                break 2;
+            }
+            $sprint[] = $finding;
+        }
+    }
+    if (count($sprint) < 5) {
+        foreach ($tiers[6] as $finding) {
+            if (count($sprint) >= 5) {
+                break;
+            }
+            $sprint[] = $finding;
+        }
+    }
+    return $sprint;
+}
+
+function findingsSprintBlock(array $findings): string
+{
+    if ($findings === []) {
+        return 'Sin hallazgos críticos pendientes en este sprint.';
+    }
+    return findingsCursorLines($findings);
 }
 
 /**
@@ -2199,7 +2583,7 @@ function findingsTop(array $findings, int $limit = 3): array
 
 function findingsCounts(array $findings): array
 {
-    $out = ['total' => count($findings), 'index' => 0, 'demand' => 0, 'onpage' => 0, 'conversion' => 0, 'speed' => 0, 'local' => 0, 'code' => 0];
+    $out = ['total' => count($findings), 'index' => 0, 'demand' => 0, 'onpage' => 0, 'conversion' => 0, 'speed' => 0, 'local' => 0, 'geo' => 0, 'code' => 0];
     foreach ($findings as $finding) {
         $category = (string) ($finding['category'] ?? '');
         if (isset($out[$category])) {

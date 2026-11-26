@@ -231,7 +231,158 @@
         <div class="spark" id="seoSpark" role="img" aria-label="Clics por día"></div>
       </div>
 
-      <section class="seo-coverage" id="seoPagesDrawer" hidden>
+      <section class="seo-decision cursor-audit" id="cursorAuditPanel" hidden aria-labelledby="cursorAuditTitle">
+        <header class="seo-decision__head">
+          <div>
+            <h3 id="cursorAuditTitle">Decisión</h3>
+            <p class="kw__meta" id="cursorAuditMeta"></p>
+          </div>
+          <p class="cursor-audit__score" id="cursorAuditScore" hidden></p>
+        </header>
+        <article class="verdict">
+          <div class="verdict__badges" id="verdictBadges">
+            <span class="seo-badge" id="badgePlan">Plan</span>
+            <button class="btn btn--neon" id="btnAuditGenerate" type="button">Actualizar plan</button>
+            <button class="btn btn--ghost" id="btnAuditNext" type="button" hidden>Siguiente nivel</button>
+            <span class="seo-badge" id="badgeSerp">SERP</span>
+            <span class="seo-badge" id="badgeGeo">IA / GEO</span>
+            <span class="seo-badge" id="badgeSprint">Sprint</span>
+          </div>
+          <div class="verdict__lines" id="cursorAuditSummary"></div>
+        </article>
+        <div class="cursor-audit__progress" id="cursorAuditProgress" hidden>
+          <div class="cursor-audit__bar" aria-hidden="true"><span id="cursorAuditBar"></span></div>
+          <p class="cursor-audit__status" id="cursorAuditStatus"></p>
+        </div>
+        <div class="cursor-audit__result" id="cursorAuditResult" hidden>
+          <ol class="sprint-list kw-ai__actions" id="cursorAuditChanges"></ol>
+          <div class="prompt-box">
+            <div class="prompt-box__bar">
+              <button class="btn btn--ghost" id="btnPromptToggle" type="button" aria-expanded="false">Ver prompt completo</button>
+              <button class="btn btn--neon" id="btnAuditCopy" type="button">Copiar prompt para Cursor</button>
+              <button class="btn btn--ghost" id="btnAuditVerify" type="button" hidden>Verificar mejoras</button>
+            </div>
+            <textarea class="cursor-audit__prompt is-collapsed" id="cursorAuditPrompt" readonly rows="8" spellcheck="false" hidden></textarea>
+            <ul class="prompt-files" id="cursorFiles"></ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="radio-bar radiografia" id="radiografiaPanel" hidden aria-labelledby="radiografiaTitle">
+        <button class="radio-bar__toggle" id="radiografiaToggle" type="button" aria-expanded="false">
+          <span class="radio-bar__lamp" id="radiografiaLamp" aria-hidden="true"></span>
+          <span>
+            <strong id="radiografiaTitle">Radiografía 7 días</strong>
+            <small id="radiografiaMeta"></small>
+          </span>
+        </button>
+        <div class="radio-bar__actions">
+          <button class="btn btn--ghost" id="btnRadiografiaCopy" type="button" disabled>Copiar</button>
+          <button class="btn btn--neon" id="btnRadiografiaGenerate" type="button">Generar radiografía</button>
+        </div>
+        <div class="radiografia__body" id="radiografiaBody" hidden>
+          <div class="radiografia__live" id="radiografiaLive"></div>
+          <div class="radiografia__table-wrap" id="radiografiaTableWrap"></div>
+          <div class="radiografia__chips" id="radiografiaChips"></div>
+          <pre class="radiografia__md" id="radiografiaMarkdown"></pre>
+        </div>
+        <p class="signal-empty" id="radiografiaEmpty">Todavía no hay radiografía de 7 días.</p>
+      </section>
+
+      <div class="seo-evidence" id="seoEvidence">
+        <div class="seo-evidence__tabs" role="tablist" aria-label="Evidencia">
+          <button class="seo-evidence__tab is-active" type="button" role="tab" data-seo-tab="serp" aria-selected="true">Competencia</button>
+          <button class="seo-evidence__tab" type="button" role="tab" data-seo-tab="findings" aria-selected="false">Hallazgos</button>
+          <button class="seo-evidence__tab" type="button" role="tab" data-seo-tab="pages" aria-selected="false">Páginas</button>
+          <button class="seo-evidence__tab" type="button" role="tab" data-seo-tab="config" aria-selected="false">Host</button>
+        </div>
+
+        <div class="seo-evidence__pane is-active" data-seo-pane="serp">
+          <div id="serpBoard"></div>
+          <section class="motor" id="motorPanel" hidden aria-labelledby="motorTitle">
+            <header class="kw__head">
+              <div>
+                <h3 id="motorTitle">Consulta manual</h3>
+                <p class="kw__meta" id="motorMeta"></p>
+              </div>
+              <p class="motor__cost" id="motorCost">Última consulta — · Acumulado —</p>
+            </header>
+            <form class="motor__form" id="motorForm" autocomplete="off">
+              <label class="field">
+                <span>URL del proyecto</span>
+                <select id="motorUrl" required></select>
+              </label>
+              <label class="field">
+                <span>Keyword principal</span>
+                <input type="text" id="motorKeyword" maxlength="120" placeholder="servicio + ciudad" required />
+              </label>
+              <label class="field motor__city">
+                <span>Ciudad o comuna</span>
+                <input type="text" id="motorCity" placeholder="Escribí para buscar en Chile" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="motorCityList" aria-expanded="false" />
+                <ul class="motor__suggest" id="motorCityList" role="listbox" hidden></ul>
+              </label>
+              <div class="motor__actions">
+                <button class="btn btn--neon" id="btnMotorRun" type="submit">Ejecutar Diagnóstico</button>
+                <button class="btn btn--ghost" id="btnMotorForce" type="button">Forzar actualización</button>
+              </div>
+            </form>
+            <p class="notice" id="motorNotice" hidden></p>
+            <div class="motor__kpis" id="motorKpis" hidden>
+              <article class="seo-kpi">
+                <span>Posición local</span>
+                <strong id="motorPos">—</strong>
+                <em id="motorPosMeta"></em>
+              </article>
+              <article class="seo-kpi">
+                <span>Clics / Leads (28d)</span>
+                <strong id="motorLeads">—</strong>
+                <em id="motorLeadsMeta"></em>
+              </article>
+              <article class="seo-kpi">
+                <span>On-Page propio vs top 3</span>
+                <strong id="motorScore">—</strong>
+                <em id="motorScoreMeta"></em>
+              </article>
+            </div>
+            <div class="seo-table-wrap" id="motorTableWrap" hidden>
+              <table class="seo-table">
+                <thead>
+                  <tr>
+                    <th>Sitio</th>
+                    <th>Score</th>
+                    <th>Title</th>
+                    <th>H1</th>
+                    <th>Palabras</th>
+                    <th>Schema</th>
+                    <th>Errores</th>
+                  </tr>
+                </thead>
+                <tbody id="motorTableBody"></tbody>
+              </table>
+            </div>
+            <div id="motorTasks"></div>
+          </section>
+        </div>
+
+        <div class="seo-evidence__pane" data-seo-pane="findings" hidden>
+          <div id="decantList"></div>
+          <div class="finding-filters" id="findingFilters"></div>
+          <ul class="finding-catalog" id="findingCatalog"></ul>
+          <section class="page-board" id="pageBoard" aria-label="Páginas que piden atención">
+            <header class="kw__head">
+              <div>
+                <h3>Señales por URL</h3>
+                <p class="kw__meta">Lo que Search Console marca ahora, aparte del catálogo.</p>
+              </div>
+            </header>
+            <div class="page-board__site" id="seoSitewide" hidden></div>
+            <ul class="page-board__list" id="seoSignals"></ul>
+            <p class="signal-empty" id="seoSignalsEmpty" hidden>Sin alertas en este sitio.</p>
+          </section>
+        </div>
+
+        <div class="seo-evidence__pane" data-seo-pane="pages" hidden>
+          <section class="seo-coverage" id="seoPagesDrawer" hidden>
         <header class="kw__head">
           <div>
             <h3>Todas las páginas</h3>
@@ -255,7 +406,48 @@
           </table>
         </div>
       </section>
+          <div class="page-cards" id="pageCards"></div>
 
+      <section class="growth" id="growthPanel" hidden>
+        <header class="kw__head">
+          <div>
+            <h3>Crecimiento por página</h3>
+            <p class="kw__meta" id="growthMeta"></p>
+          </div>
+        </header>
+        <ul class="growth__list" id="growthList"></ul>
+      </section>
+
+      <section class="kw" id="kwPanel" aria-labelledby="kwTitle" hidden>
+        <header class="kw__head">
+          <div>
+            <h3 id="kwTitle">Keywords</h3>
+            <p class="kw__meta" id="kwMeta"></p>
+          </div>
+          <button class="btn btn--ghost" id="btnKwAi" type="button">Keywords IA</button>
+        </header>
+        <div class="kw__stats" id="kwStats"></div>
+        <div class="kw-ai" id="kwAi" hidden aria-live="polite"></div>
+        <div class="period-toggle kw__tabs" id="kwTabs" role="tablist" aria-label="Grupos de keywords">
+          <button class="period-toggle__btn is-active" type="button" role="tab" data-kw-tab="striking">Oportunidades</button>
+          <button class="period-toggle__btn" type="button" role="tab" data-kw-tab="lowCtr">CTR bajo</button>
+          <button class="period-toggle__btn" type="button" role="tab" data-kw-tab="rising">En alza</button>
+          <button class="period-toggle__btn" type="button" role="tab" data-kw-tab="falling">Cayendo</button>
+          <button class="period-toggle__btn" type="button" role="tab" data-kw-tab="top">Más buscadas</button>
+          <button class="period-toggle__btn" type="button" role="tab" data-kw-tab="cannibal">Canibalización</button>
+        </div>
+        <p class="kw__hint" id="kwHint"></p>
+        <div class="seo-table-wrap">
+          <table class="seo-table kw__table">
+            <thead id="kwHead"></thead>
+            <tbody id="kwBody"></tbody>
+          </table>
+        </div>
+        <p class="signal-empty" id="kwEmpty" hidden></p>
+      </section>
+        </div>
+
+        <div class="seo-evidence__pane" data-seo-pane="config" hidden>
       <section class="gbp-panel" id="gbpPanel" hidden aria-labelledby="gbpTitle">
         <header class="kw__head">
           <div>
@@ -277,175 +469,17 @@
         </div>
       </section>
 
-      <section class="page-board" id="pageBoard" aria-label="Páginas que piden atención">
-        <header class="kw__head">
-          <div>
-            <h3>Qué página pide atención</h3>
-            <p class="kw__meta">Agrupado por URL. Lo del sitio entero va aparte.</p>
-          </div>
-        </header>
-        <div class="page-board__site" id="seoSitewide" hidden></div>
-        <ul class="page-board__list" id="seoSignals"></ul>
-        <p class="signal-empty" id="seoSignalsEmpty" hidden>Sin alertas en este sitio.</p>
-      </section>
-
-      <section class="growth" id="growthPanel" hidden>
-        <header class="kw__head">
-          <div>
-            <h3>Crecimiento por página</h3>
-            <p class="kw__meta" id="growthMeta"></p>
-          </div>
-        </header>
-        <ul class="growth__list" id="growthList"></ul>
-      </section>
-
-      <section class="radiografia" id="radiografiaPanel" hidden aria-labelledby="radiografiaTitle">
-        <header class="kw__head">
-          <div>
-            <h3 id="radiografiaTitle">Radiografía 7 días</h3>
-            <p class="kw__meta" id="radiografiaMeta"></p>
-          </div>
-          <div class="cursor-audit__actions">
-            <button class="btn btn--ghost" id="btnRadiografiaCopy" type="button" disabled>Copiar</button>
-            <button class="btn btn--neon" id="btnRadiografiaGenerate" type="button">Generar radiografía</button>
-          </div>
-        </header>
-        <div class="radiografia__body" id="radiografiaBody" hidden>
-          <div class="radiografia__table-wrap" id="radiografiaTableWrap"></div>
-          <div class="radiografia__chips" id="radiografiaChips"></div>
-          <pre class="radiografia__md" id="radiografiaMarkdown"></pre>
-        </div>
-        <p class="signal-empty" id="radiografiaEmpty">Diagnóstico forense 7d vs 7d: CTR×dispositivo, commits de title/meta e indexación. No reemplaza el plan de Cursor.</p>
-      </section>
-
-      <section class="motor" id="motorPanel" hidden aria-labelledby="motorTitle">
-        <header class="kw__head">
-          <div>
-            <h3 id="motorTitle">Motor de Mejora Continua</h3>
-            <p class="kw__meta" id="motorMeta"></p>
-          </div>
-          <p class="motor__cost" id="motorCost">Última consulta — · Acumulado —</p>
-        </header>
-        <form class="motor__form" id="motorForm" autocomplete="off">
-          <label class="field">
-            <span>URL del proyecto</span>
-            <select id="motorUrl" required></select>
-          </label>
-          <label class="field">
-            <span>Keyword principal</span>
-            <input type="text" id="motorKeyword" maxlength="120" placeholder="servicio + ciudad" required />
-          </label>
-          <label class="field motor__city">
-            <span>Ciudad o comuna</span>
-            <input type="text" id="motorCity" placeholder="Escribí para buscar en Chile" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="motorCityList" aria-expanded="false" />
-            <ul class="motor__suggest" id="motorCityList" role="listbox" hidden></ul>
-          </label>
-          <div class="motor__actions">
-            <button class="btn btn--neon" id="btnMotorRun" type="submit">Ejecutar Diagnóstico</button>
-            <button class="btn btn--ghost" id="btnMotorForce" type="button">Forzar actualización</button>
-          </div>
-        </form>
-        <p class="notice" id="motorNotice" hidden></p>
-        <div class="motor__kpis" id="motorKpis" hidden>
-          <article class="seo-kpi">
-            <span>Posición local</span>
-            <strong id="motorPos">—</strong>
-            <em id="motorPosMeta"></em>
-          </article>
-          <article class="seo-kpi">
-            <span>Clics / Leads (28d)</span>
-            <strong id="motorLeads">—</strong>
-            <em id="motorLeadsMeta"></em>
-          </article>
-          <article class="seo-kpi">
-            <span>On-Page propio vs top 3</span>
-            <strong id="motorScore">—</strong>
-            <em id="motorScoreMeta"></em>
-          </article>
-        </div>
-        <div class="seo-table-wrap" id="motorTableWrap" hidden>
-          <table class="seo-table">
-            <thead>
-              <tr>
-                <th>Sitio</th>
-                <th>Score</th>
-                <th>Title</th>
-                <th>H1</th>
-                <th>Palabras</th>
-                <th>Schema</th>
-                <th>Errores</th>
-              </tr>
-            </thead>
-            <tbody id="motorTableBody"></tbody>
-          </table>
-        </div>
-        <div id="motorTasks"></div>
-      </section>
-
-      <section class="cursor-audit" id="cursorAuditPanel" hidden aria-labelledby="cursorAuditTitle">
-        <header class="kw__head">
-          <div>
-            <h3 id="cursorAuditTitle">Plan de crecimiento</h3>
-            <p class="kw__meta" id="cursorAuditMeta"></p>
-          </div>
-          <div class="cursor-audit__actions">
-            <button class="btn btn--ghost" id="btnAuditBatch" type="button">Continuar lote</button>
-            <button class="btn btn--ghost" id="btnAuditNext" type="button" hidden>Buscar el siguiente nivel</button>
-            <button class="btn btn--neon" id="btnAuditGenerate" type="button">Generar plan</button>
-          </div>
-        </header>
-        <div class="cursor-audit__progress" id="cursorAuditProgress" hidden>
-          <div class="cursor-audit__bar" aria-hidden="true"><span id="cursorAuditBar"></span></div>
-          <p class="cursor-audit__status" id="cursorAuditStatus"></p>
-        </div>
+      <div class="host-tools">
+        <button class="btn btn--ghost" id="btnAuditBatch" type="button">Continuar lote HTML</button>
         <div class="cursor-audit__sources" id="cursorAuditCoverage" hidden></div>
         <p class="cursor-audit__counts" id="cursorAuditCounts" hidden></p>
-        <p class="cursor-audit__score" id="cursorAuditScore" hidden></p>
-        <div class="cursor-audit__result" id="cursorAuditResult" hidden>
-          <h4 class="kw-ai__label">Qué nivel se gana</h4>
-          <p class="kw-ai__summary" id="cursorAuditSummary"></p>
-          <ol class="kw-ai__actions" id="cursorAuditChanges"></ol>
-          <h4 class="kw-ai__label">Prompt para Cursor</h4>
-          <p class="kw__hint">Verificar lee el HTML de todas las mejoras, sin marcarlas. Al 100% el plan se cierra. Se reabre si cambia el código o caen los clics. El plan lee el commit de GitHub: sin push, no lo ve.</p>
-          <textarea class="cursor-audit__prompt" id="cursorAuditPrompt" readonly rows="12" spellcheck="false"></textarea>
-          <div class="cursor-audit__copy-row">
-            <button class="btn btn--ghost" id="btnAuditVerify" type="button" hidden>Verificar mejoras</button>
-            <button class="btn btn--neon" id="btnAuditCopy" type="button">Copiar prompt para Cursor</button>
-          </div>
-        </div>
-      </section>
+        <div id="geoStatus"></div>
+        <div id="repoStatus"></div>
+      </div>
 
-      <section class="kw" id="kwPanel" aria-labelledby="kwTitle" hidden>
-        <header class="kw__head">
-          <div>
-            <h3 id="kwTitle">Keywords</h3>
-            <p class="kw__meta" id="kwMeta"></p>
-          </div>
-        </header>
+      <details class="drawer" id="seoDiagDrawer" open>
+        <summary>Datos del host</summary>
 
-        <div class="kw__stats" id="kwStats"></div>
-        <div class="kw-ai" id="kwAi" hidden aria-live="polite"></div>
-
-        <div class="period-toggle kw__tabs" id="kwTabs" role="tablist" aria-label="Grupos de keywords">
-          <button class="period-toggle__btn is-active" type="button" role="tab" data-kw-tab="striking">Oportunidades</button>
-          <button class="period-toggle__btn" type="button" role="tab" data-kw-tab="lowCtr">CTR bajo</button>
-          <button class="period-toggle__btn" type="button" role="tab" data-kw-tab="rising">En alza</button>
-          <button class="period-toggle__btn" type="button" role="tab" data-kw-tab="falling">Cayendo</button>
-          <button class="period-toggle__btn" type="button" role="tab" data-kw-tab="top">Más buscadas</button>
-          <button class="period-toggle__btn" type="button" role="tab" data-kw-tab="cannibal">Canibalización</button>
-        </div>
-        <p class="kw__hint" id="kwHint"></p>
-        <div class="seo-table-wrap">
-          <table class="seo-table kw__table">
-            <thead id="kwHead"></thead>
-            <tbody id="kwBody"></tbody>
-          </table>
-        </div>
-        <p class="signal-empty" id="kwEmpty" hidden></p>
-      </section>
-
-      <details class="drawer" id="seoDiagDrawer">
-        <summary>Soporte</summary>
         <div class="diag" id="seoDiag"></div>
         <form class="seo-form" id="gscConfigForm" autocomplete="off">
           <label class="field">
@@ -463,9 +497,22 @@
             <datalist id="ga4Properties"></datalist>
             <small class="field__hint" id="ga4Hint">Si lo dejás vacío, usamos la propiedad cuyo sitio es este dominio.</small>
           </label>
+          <label class="field">
+            <span>Keyword comercial</span>
+            <input type="text" name="seoKeyword" id="gscSeoKeyword" maxlength="120" placeholder="servicio principal" autocomplete="off" />
+          </label>
+          <label class="field motor__city">
+            <span>Ciudad de la SERP</span>
+            <input type="text" id="gscLocationQuery" placeholder="Santiago o el código 2152" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="gscLocationList" aria-expanded="false" />
+            <input type="hidden" name="locationCode" id="gscLocationCode" value="" />
+            <ul class="motor__suggest" id="gscLocationList" role="listbox" hidden></ul>
+            <small class="field__hint">Se guarda el código numérico. Chile entero es 2152.</small>
+          </label>
           <button type="submit" class="btn btn--neon">Guardar y recargar</button>
         </form>
       </details>
+        </div>
+      </div>
     </main>
     </div>
     </div>

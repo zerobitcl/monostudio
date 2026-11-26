@@ -15,7 +15,8 @@ require_once __DIR__ . '/gsc.php';
 require_once __DIR__ . '/lib.php';
 require_once __DIR__ . '/gbp.php';
 
-const DOSSIER_VERSION = '2026.11.21-tuning';
+const DOSSIER_VERSION = '2026.11.26-unified';
+const DOSSIER_SERP_CHILE = 2152;
 const DOSSIER_GA_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly';
 const DOSSIER_GA_TTL = 21600;
 const DOSSIER_PSI_TTL = 604800;
@@ -133,6 +134,28 @@ function dossierHostPrefs(string $dataDir, string $host): array
     return is_array($entry) ? gscHostEntry($entry) : gscHostEntry([]);
 }
 
+function dossierIsCommercialPath(string $path): bool
+{
+    return (bool) preg_match('#/(servicio|servicios|contacto|contact|cotiz|producto|productos)(/|$)#', $path);
+}
+
+function dossierProjectId(string $host): string
+{
+    foreach (ersReadStore()['clients'] ?? [] as $client) {
+        if (!is_array($client)) {
+            continue;
+        }
+        foreach (ersClientHosts($client) as $candidate) {
+            if (gscSanitizeHost($candidate) !== $host) {
+                continue;
+            }
+            $id = strtolower(trim((string) ($client['id'] ?? '')));
+            return ersLooksLikeUuid($id) ? $id : '';
+        }
+    }
+    return '';
+}
+
 function dossierClient(string $host): array
 {
     $found = ['id' => '', 'name' => $host];
@@ -225,6 +248,158 @@ function dossierCollectSchemaTypes(mixed $node, array &$out, int $depth = 0): vo
         }
         dossierCollectSchemaTypes($child, $out, $depth + 1);
     }
+}
+
+/** @return list<string> */
+function dossierSchemaStrings(mixed $value, int $limit = 6): array
+{
+    $out = [];
+    $walk = static function (mixed $node) use (&$walk, &$out, $limit): void {
+        if (count($out) >= $limit) {
+            return;
+        }
+        if (is_string($node)) {
+            $text = trim($node);
+            if ($text !== '') {
+                $out[] = ersClip($text, 160);
+            }
+            return;
+        }
+        if (!is_array($node)) {
+            return;
+        }
+        foreach (['name', 'addressLocality', '@id'] as $key) {
+            if (isset($node[$key]) && is_string($node[$key]) && trim($node[$key]) !== '') {
+                $out[] = ersClip(trim($node[$key]), 160);
+                return;
+            }
+        }
+        foreach ($node as $child) {
+            $walk($child);
+            if (count($out) >= $limit) {
+                return;
+            }
+        }
+    };
+    $walk($value);
+    return array_values(array_unique($out));
+}
+
+function dossierSchemaIdRef(mixed $value): string
+{
+    if (is_string($value)) {
+        return trim($value);
+    }
+    if (!is_array($value)) {
+        return '';
+    }
+    if (isset($value['@id']) && is_string($value['@id'])) {
+        return trim($value['@id']);
+    }
+    foreach ($value as $child) {
+        $id = dossierSchemaIdRef($child);
+        if ($id !== '') {
+            return $id;
+        }
+    }
+    return '';
+}
+
+/**
+ * Grafo compacto: @id, tipos, areaServed, sameAs y a qué negocio apunta cada Service.
+ *
+ * @return array{nodes: list<array<string, mixed>>, linked: bool}
+ */
+function dossierSchemaGraph(mixed $json): array
+{
+    $nodes = [];
+    $walk = static function (mixed $node, int $depth) use (&$walk, &$nodes): void {
+        if ($depth > 8 || !is_array($node) || count($nodes) >= 12) {
+            return;
+        }
+        $isList = function_exists('array_is_list')
+            ? array_is_list($node)
+            : ($node === [] || array_keys($node) === range(0, count($node) - 1));
+        if ($isList) {
+            foreach ($node as $child) {
+                $walk($child, $depth + 1);
+            }
+            return;
+        }
+        if (isset($node['@graph']) && is_array($node['@graph'])) {
+            $walk($node['@graph'], $depth + 1);
+        }
+        $types = [];
+        if (isset($node['@type'])) {
+            $raw = is_array($node['@type']) ? $node['@type'] : [$node['@type']];
+            foreach ($raw as $type) {
+                if (is_string($type) && $type !== '') {
+                    $types[] = $type;
+                }
+            }
+        }
+        $id = trim((string) ($node['@id'] ?? ''));
+        if ($types !== [] || $id !== '') {
+            $serviceOf = '';
+            if (in_array('Service', $types, true)) {
+                $serviceOf = dossierSchemaIdRef($node['provider'] ?? $node['broker'] ?? $node['offeredBy'] ?? null);
+            }
+            $nodes[] = [
+                'id' => ersClip($id, 180),
+                'types' => array_slice($types, 0, 4),
+                'areaServed' => dossierSchemaStrings($node['areaServed'] ?? null),
+                'sameAs' => dossierSchemaStrings($node['sameAs'] ?? null),
+                'serviceOf' => ersClip($serviceOf, 180),
+            ];
+        }
+        foreach ($node as $key => $child) {
+            if ($key === '@context' || $key === '@graph' || !is_array($child)) {
+                continue;
+            }
+            $walk($child, $depth + 1);
+        }
+    };
+    $walk($json, 0);
+
+    $business = [];
+    foreach ($nodes as $node) {
+        $local = array_intersect($node['types'], ['LocalBusiness', 'Organization', 'ProfessionalService', 'Store']);
+        if ($local !== [] && $node['id'] !== '') {
+            $business[$node['id']] = $node;
+        }
+    }
+    $linked = false;
+    foreach ($nodes as $node) {
+        if (!in_array('Service', $node['types'], true)) {
+            continue;
+        }
+        $ref = (string) $node['serviceOf'];
+        if ($ref === '' || !isset($business[$ref])) {
+            continue;
+        }
+        $biz = $business[$ref];
+        if ($biz['areaServed'] !== [] || $biz['sameAs'] !== [] || $node['areaServed'] !== [] || $node['sameAs'] !== []) {
+            $linked = true;
+            break;
+        }
+    }
+
+    return ['nodes' => $nodes, 'linked' => $linked];
+}
+
+function dossierMergeSchemaGraph(array $base, array $extra): array
+{
+    $nodes = $base['nodes'] ?? [];
+    foreach ($extra['nodes'] ?? [] as $node) {
+        if (count($nodes) >= 12) {
+            break;
+        }
+        $nodes[] = $node;
+    }
+    return [
+        'nodes' => $nodes,
+        'linked' => !empty($base['linked']) || !empty($extra['linked']),
+    ];
 }
 
 /**
@@ -603,6 +778,10 @@ function dossierFetchDom(string $url): array
         'h3Count' => 0,
         'titleLen' => 0,
         'schemas' => [],
+        'schemaGraph' => ['nodes' => [], 'linked' => false],
+        'leadParagraph' => '',
+        'hasList' => false,
+        'hasTable' => false,
         'images' => 0,
         'imagesMissingAlt' => 0,
         'imgsWithoutDimensions' => 0,
@@ -779,6 +958,7 @@ function dossierFetchDom(string $url): array
     $h3Count = $h3Nodes ? $h3Nodes->length : 0;
 
     $schemas = [];
+    $schemaGraph = ['nodes' => [], 'linked' => false];
     $napAcc = dossierEmptyNap();
     $dateModified = '';
     $datePublished = '';
@@ -788,6 +968,7 @@ function dossierFetchDom(string $url): array
         foreach ($ld as $script) {
             $json = json_decode((string) $script->textContent, true);
             dossierCollectSchemaTypes($json, $schemas);
+            $schemaGraph = dossierMergeSchemaGraph($schemaGraph, dossierSchemaGraph($json));
             dossierCollectNapFromLd($json, $napAcc);
             $walkDates = static function ($node) use (&$walkDates, &$dateModified, &$datePublished, &$hasFaqSchema): void {
                 if (!is_array($node)) {
@@ -1017,6 +1198,45 @@ function dossierFetchDom(string $url): array
     }
     $mainWordCount = dossierWordCountFromText($mainText);
     $leadExcerpt = gscAscii(ersClip(trim(preg_replace('/\s+/u', ' ', $mainText) ?? ''), 280));
+    $leadParagraph = '';
+    $hasList = false;
+    $hasTable = false;
+    $scope = $mainNode instanceof DOMNode ? $mainNode : $xpath->query('//body')->item(0);
+    if ($scope instanceof DOMNode) {
+        foreach ($xpath->query('.//p', $scope) ?: [] as $para) {
+            if (!$para instanceof DOMNode || dossierNodeInChrome($para)) {
+                continue;
+            }
+            $text = trim(preg_replace('/\s+/u', ' ', (string) $para->textContent) ?? '');
+            $len = function_exists('mb_strlen') ? mb_strlen($text) : strlen($text);
+            if ($len < 40) {
+                continue;
+            }
+            $leadParagraph = gscAscii(ersClip($text, 320));
+            break;
+        }
+        foreach ($xpath->query('.//ul|.//ol', $scope) ?: [] as $list) {
+            if (!$list instanceof DOMElement || dossierNodeInChrome($list)) {
+                continue;
+            }
+            $items = 0;
+            foreach ($list->childNodes as $child) {
+                if ($child instanceof DOMElement && strtolower($child->tagName) === 'li') {
+                    $items++;
+                }
+            }
+            if ($items >= 2) {
+                $hasList = true;
+                break;
+            }
+        }
+        foreach ($xpath->query('.//table', $scope) ?: [] as $table) {
+            if ($table instanceof DOMNode && !dossierNodeInChrome($table)) {
+                $hasTable = true;
+                break;
+            }
+        }
+    }
 
     $lang = '';
     $langAttr = $xpath->query('/html/@lang');
@@ -1067,6 +1287,10 @@ function dossierFetchDom(string $url): array
         'h3Count' => $h3Count,
         'titleLen' => function_exists('mb_strlen') ? mb_strlen($title) : strlen($title),
         'schemas' => $schemaKeys,
+        'schemaGraph' => $schemaGraph,
+        'leadParagraph' => $leadParagraph,
+        'hasList' => $hasList,
+        'hasTable' => $hasTable,
         'images' => $images,
         'imagesMissingAlt' => $missingAlt,
         'imgsWithoutDimensions' => $imgsWithoutDimensions,
@@ -1179,14 +1403,8 @@ function dossierDomIndex(string $dataDir, string $host): array
             $pages[$path] = $row;
         }
     }
-    $total = 0;
     $site = gscReadJson(gscHostCacheFile($dataDir, $host), []);
-    foreach ($site['pages'] ?? [] as $row) {
-        $url = trim((string) ($row['url'] ?? ''));
-        if ($url !== '' && gscUrlBelongsToHost($url, $host)) {
-            $total++;
-        }
-    }
+    $total = count(dossierInventoryUrls($dataDir, $host, ($site['host'] ?? '') === $host ? $site : []));
     return [
         'pages' => $pages,
         'done' => $done,
@@ -1523,6 +1741,42 @@ function dossierFetchGa(string $dataDir, array $sa, string $host, string $proper
         // El lote extra es contexto. Si falla, el informe sigue con los totales.
     }
 
+    $landingContacts = [];
+    try {
+        $contactReport = dossierGaBatch($token, $propertyId, [[
+            'dateRanges' => [$current],
+            'dimensions' => [
+                ['name' => 'landingPagePlusQueryString'],
+                ['name' => 'eventName'],
+            ],
+            'metrics' => [['name' => $metric]],
+            'metricFilter' => [
+                'filter' => [
+                    'fieldName' => $metric,
+                    'numericFilter' => ['operation' => 'GREATER_THAN', 'value' => ['int64Value' => '0']],
+                ],
+            ],
+            'orderBys' => [['metric' => ['metricName' => $metric], 'desc' => true]],
+            'limit' => 80,
+        ]]);
+        foreach (dossierGaRows(is_array($contactReport[0] ?? null) ? $contactReport[0] : []) as $row) {
+            $kind = dossierEventKind((string) ($row['eventName'] ?? ''));
+            if (!in_array($kind, ['whatsapp', 'llamada', 'formulario', 'email'], true)) {
+                continue;
+            }
+            $path = dossierNormPath((string) ($row['landingPagePlusQueryString'] ?? ''));
+            if ($path === '') {
+                continue;
+            }
+            if (!isset($landingContacts[$path])) {
+                $landingContacts[$path] = ['whatsapp' => 0, 'llamada' => 0, 'formulario' => 0, 'email' => 0];
+            }
+            $landingContacts[$path][$kind] += (int) round($row[$metric] ?? 0);
+        }
+    } catch (Throwable) {
+        // Sin este corte el desglose de contacto sigue siendo del sitio entero.
+    }
+
     $breakdown = ['whatsapp' => 0, 'llamada' => 0, 'formulario' => 0, 'email' => 0];
     foreach ($events as $event) {
         $kind = (string) ($event['kind'] ?? 'otro');
@@ -1587,6 +1841,7 @@ function dossierFetchGa(string $dataDir, array $sa, string $host, string $proper
         ], $devices),
         'events' => $events,
         'landingDevices' => $landingDevices,
+        'landingContacts' => $landingContacts,
         'contacts' => $contacts,
         'contactsClassified' => $classified > 0,
         'contactBreakdown' => $breakdown,
@@ -1640,11 +1895,32 @@ function dossierPsiPage(string $apiKey, string $url): ?array
     ];
 }
 
-function dossierPsiTargets(array $gsc, string $host): array
+function dossierPsiTargets(array $gsc, string $host, array $extraUrls = []): array
 {
     $home = 'https://' . $host . '/';
     $urls = [$home];
     $seen = [dossierNormPath($home) => true];
+    $push = static function (string $url) use (&$urls, &$seen, $host): void {
+        if (count($urls) >= DOSSIER_PSI_LIMIT) {
+            return;
+        }
+        $url = trim($url);
+        if ($url === '' || !gscUrlBelongsToHost($url, $host)) {
+            return;
+        }
+        $key = dossierNormPath($url);
+        if (isset($seen[$key])) {
+            return;
+        }
+        $seen[$key] = true;
+        $urls[] = $url;
+    };
+    foreach ($extraUrls as $url) {
+        if (!is_string($url) || !dossierIsCommercialPath(dossierNormPath($url))) {
+            continue;
+        }
+        $push($url);
+    }
     $rows = is_array($gsc['pages'] ?? null) ? $gsc['pages'] : [];
     usort($rows, static fn ($a, $b) => ((int) ($b['current']['impressions'] ?? 0)) <=> ((int) ($a['current']['impressions'] ?? 0)));
     foreach ($rows as $row) {
@@ -1658,17 +1934,12 @@ function dossierPsiTargets(array $gsc, string $host): array
         if ($url === '' || (int) ($row['current']['impressions'] ?? 0) < 30) {
             continue;
         }
-        $key = dossierNormPath($url);
-        if (isset($seen[$key])) {
-            continue;
-        }
-        $seen[$key] = true;
-        $urls[] = $url;
+        $push($url);
     }
     return $urls;
 }
 
-function dossierPsi(string $dataDir, string $host, string $apiKey, bool $fresh, array $gsc = []): array
+function dossierPsi(string $dataDir, string $host, string $apiKey, bool $fresh, array $gsc = [], array $extraUrls = []): array
 {
     $file = dossierPsiFile($dataDir, $host);
     $cached = gscReadJson($file, []);
@@ -1678,7 +1949,7 @@ function dossierPsi(string $dataDir, string $host, string $apiKey, bool $fresh, 
         return ['pages' => $pages, 'home' => is_array($pages[$home] ?? null) ? $pages[$home] : null];
     }
 
-    $targets = dossierPsiTargets($gsc !== [] ? $gsc : ['pages' => []], $host);
+    $targets = dossierPsiTargets($gsc !== [] ? $gsc : ['pages' => []], $host, $extraUrls);
     $changed = false;
     foreach ($targets as $url) {
         $hit = $pages[$url] ?? null;
@@ -1913,6 +2184,10 @@ function dossierBuildPageCards(array $dossier, array $findings = [], array $kw =
         if ((int) ($page['impressions'] ?? 0) >= 80) {
             $paths[$p] = ($paths[$p] ?? 0) + 2;
         }
+        // Las fichas con SERP real van primero: el plan las usa como evidencia, no como adorno.
+        if (is_array($page['serp'] ?? null) && trim((string) ($page['serp']['keyword'] ?? '')) !== '') {
+            $paths[$p] = ($paths[$p] ?? 0) + 400;
+        }
     }
     if ($paths === []) {
         $paths['/'] = 1;
@@ -1974,7 +2249,14 @@ function dossierBuildPageCards(array $dossier, array $findings = [], array $kw =
             'mainWordCount' => (int) ($domRow['mainWordCount'] ?? $domRow['wordCount'] ?? 0),
             'wordCount' => (int) ($domRow['wordCount'] ?? 0),
             'leadExcerpt' => (string) ($domRow['leadExcerpt'] ?? ''),
+            'leadParagraph' => (string) ($domRow['leadParagraph'] ?? ''),
+            'hasList' => !empty($domRow['hasList']),
+            'hasTable' => !empty($domRow['hasTable']),
             'schemas' => is_array($domRow['schemas'] ?? null) ? $domRow['schemas'] : [],
+            'schemaLinked' => !empty($domRow['schemaGraph']['linked']),
+            'gaSessions' => (int) ($page['ga']['sessions'] ?? 0),
+            'gaKeyEvents' => (int) ($page['ga']['keyEvents'] ?? 0),
+            'serp' => is_array($page['serp'] ?? null) ? $page['serp'] : null,
             'hasTel' => !empty($domRow['hasTel']),
             'hasWhatsapp' => !empty($domRow['hasWhatsapp']),
             'hasForm' => !empty($domRow['hasForm']),
@@ -2034,7 +2316,17 @@ function dossierPageCardsBlock(array $cards): string
             . "\npalabras main: " . (int) ($c['mainWordCount'] ?? 0)
             . ' (total ' . (int) ($c['wordCount'] ?? 0) . ')'
             . ((($c['leadExcerpt'] ?? '') !== '') ? "\nexcerpt: " . $c['leadExcerpt'] : '')
+            . ((($c['leadParagraph'] ?? '') !== '') ? "\nprimer párrafo: " . $c['leadParagraph'] : '')
+            . "\nlista=" . (!empty($c['hasList']) ? 'sí' : 'no') . ' · tabla=' . (!empty($c['hasTable']) ? 'sí' : 'no')
+            . ' · sesiones ' . (int) ($c['gaSessions'] ?? 0) . ' · eventos ' . (int) ($c['gaKeyEvents'] ?? 0)
             . ((($c['schemas'] ?? []) !== []) ? "\nschema: " . implode(', ', array_slice($c['schemas'], 0, 6)) : '')
+            . ' · grafo=' . (!empty($c['schemaLinked']) ? 'enlazado' : 'sin enlace')
+            . (is_array($c['serp'] ?? null)
+                ? "\nSERP " . (string) ($c['serp']['keyword'] ?? '')
+                    . ' · pos ' . (($c['serp']['position'] ?? null) === null ? 'fuera del top 10' : (string) $c['serp']['position'])
+                    . ' · Local Pack=' . (!empty($c['serp']['localPack']) ? 'sí' : 'no')
+                    . ' · AI Overview=' . (!empty($c['serp']['aiOverview']['present']) ? 'sí' : 'no')
+                : '')
             . ' · FAQ=' . (!empty($c['hasFaq']) ? 'sí' : 'no')
             . ' · CTA tel/wa/form=' . (!empty($c['hasTel']) ? 'tel ' : '')
             . (!empty($c['hasWhatsapp']) ? 'wa ' : '')
@@ -2057,9 +2349,395 @@ function dossierPsiStamp(array $psi): string
     return md5(implode('|', $bits));
 }
 
+function dossierSitemapFile(string $dataDir, string $host): string
+{
+    return $dataDir . '/seo-urls-' . md5($host) . '.json';
+}
+
+function dossierGeoFile(string $dataDir, string $host): string
+{
+    return $dataDir . '/seo-geo-' . md5($host) . '.json';
+}
+
+function dossierSerpFile(string $dataDir, string $host): string
+{
+    return $dataDir . '/seo-serp-' . md5($host) . '.json';
+}
+
+/** @return list<string> */
+function dossierInventoryUrls(string $dataDir, string $host, array $siteCache = []): array
+{
+    if ($host === '') {
+        return [];
+    }
+    $urls = [];
+    $seen = [];
+    $push = static function (string $url) use (&$urls, &$seen, $host): void {
+        $url = trim($url);
+        if ($url === '' || !gscUrlBelongsToHost($url, $host)) {
+            return;
+        }
+        $path = dossierNormPath($url);
+        if (isset($seen[$path])) {
+            return;
+        }
+        $seen[$path] = true;
+        $urls[] = $url;
+    };
+    $push('https://' . $host . '/');
+    foreach ($siteCache['pages'] ?? [] as $row) {
+        if (is_array($row)) {
+            $push((string) ($row['url'] ?? ''));
+        }
+    }
+    foreach (dossierHostPrefs($dataDir, $host)['pages'] ?? [] as $row) {
+        if (is_array($row)) {
+            $push((string) ($row['url'] ?? ''));
+        }
+    }
+    $saved = gscReadJson(dossierSitemapFile($dataDir, $host), []);
+    if (($saved['host'] ?? '') === $host) {
+        foreach ($saved['urls'] ?? [] as $url) {
+            if (is_string($url)) {
+                $push($url);
+            }
+        }
+    }
+    $dom = gscReadJson(dossierDomFile($dataDir, $host), []);
+    if (($dom['host'] ?? '') === $host) {
+        foreach ($dom['pages'] ?? [] as $url => $row) {
+            if (is_string($url)) {
+                $push($url);
+            }
+        }
+    }
+    return $urls;
+}
+
+function dossierEnsureSitemap(string $dataDir, string $host, bool $allowFetch): void
+{
+    if (!$allowFetch || $host === '') {
+        return;
+    }
+    $prefs = dossierHostPrefs($dataDir, $host);
+    $sitemap = (string) ($prefs['sitemapUrl'] ?? '');
+    if ($sitemap === '') {
+        return;
+    }
+    $file = dossierSitemapFile($dataDir, $host);
+    $cached = gscReadJson($file, []);
+    if (
+        ($cached['host'] ?? '') === $host
+        && ($cached['sitemap'] ?? '') === $sitemap
+        && (time() - (int) ($cached['fetchedAt'] ?? 0)) < 86400
+    ) {
+        return;
+    }
+    try {
+        $found = gscDiscoverPagesFromSitemap([$sitemap], microtime(true) + 18);
+    } catch (Throwable) {
+        return;
+    }
+    $urls = [];
+    foreach ($found['pages'] ?? $found as $row) {
+        $url = is_array($row) ? (string) ($row['url'] ?? '') : (string) $row;
+        if ($url !== '' && gscUrlBelongsToHost($url, $host)) {
+            $urls[$url] = $url;
+        }
+        if (count($urls) >= 80) {
+            break;
+        }
+    }
+    gscWriteJson($file, [
+        'host' => $host,
+        'sitemap' => $sitemap,
+        'fetchedAt' => time(),
+        'urls' => array_values($urls),
+    ]);
+}
+
+/** @return list<string> */
+function dossierRobotsBlocked(string $body): array
+{
+    $bots = ['OAI-SearchBot', 'GPTBot', 'PerplexityBot', 'ClaudeBot', 'Google-Extended'];
+    $groups = [];
+    $agents = [];
+    $rules = [];
+    $flush = static function () use (&$groups, &$agents, &$rules): void {
+        if ($agents !== []) {
+            $groups[] = ['agents' => $agents, 'disallow' => $rules];
+        }
+        $agents = [];
+        $rules = [];
+    };
+    foreach (preg_split('/\R/', $body) ?: [] as $line) {
+        $line = trim((string) (preg_replace('/#.*$/', '', $line) ?? ''));
+        if ($line === '' || !str_contains($line, ':')) {
+            continue;
+        }
+        [$key, $value] = array_map('trim', explode(':', $line, 2));
+        $key = strtolower($key);
+        if ($key === 'user-agent') {
+            if ($rules !== []) {
+                $flush();
+            }
+            $agents[] = strtolower($value);
+            continue;
+        }
+        if ($key === 'disallow') {
+            $rules[] = $value;
+        }
+    }
+    $flush();
+    $blocked = [];
+    foreach ($bots as $bot) {
+        $needle = strtolower($bot);
+        $matched = [];
+        $star = [];
+        foreach ($groups as $group) {
+            if (in_array($needle, $group['agents'], true)) {
+                $matched[] = $group;
+            }
+            if (in_array('*', $group['agents'], true)) {
+                $star[] = $group;
+            }
+        }
+        foreach ($matched !== [] ? $matched : $star as $group) {
+            foreach ($group['disallow'] as $rule) {
+                if ($rule === '/') {
+                    $blocked[] = $bot;
+                    break 2;
+                }
+            }
+        }
+    }
+    return $blocked;
+}
+
+/** @return array{hasServices: bool, hasCoverage: bool, hasContact: bool} */
+function dossierLlmsFlags(string $body): array
+{
+    $text = gscAscii($body);
+    return [
+        'hasServices' => (bool) preg_match('/\b(servicio|servicios|service|services)\b/', $text),
+        'hasCoverage' => (bool) preg_match('/\b(cobertura|comuna|ciudad|zona|region|area)\b/', $text),
+        'hasContact' => str_contains($body, '@') || (bool) preg_match('/\b(contacto|telefono|whatsapp|correo|email|fono)\b/', $text),
+    ];
+}
+
+function dossierEnsureGeo(string $dataDir, string $host, bool $allowFetch): void
+{
+    if (!$allowFetch || $host === '') {
+        return;
+    }
+    $file = dossierGeoFile($dataDir, $host);
+    $cached = gscReadJson($file, []);
+    $age = time() - (int) ($cached['fetchedAt'] ?? 0);
+    $ttl = !empty($cached['ok']) ? 604800 : 21600;
+    if (($cached['host'] ?? '') === $host && $age >= 0 && $age < $ttl) {
+        return;
+    }
+    $pull = static function (string $url): array {
+        $status = 0;
+        $body = '';
+        if (function_exists('curl_init')) {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_TIMEOUT => 8,
+                CURLOPT_CONNECTTIMEOUT => 3,
+                CURLOPT_USERAGENT => 'MonoStudio-SeoAudit/1.1',
+            ]);
+            $raw = curl_exec($ch);
+            $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+            $body = is_string($raw) ? $raw : '';
+        }
+        $ok = $status >= 200 && $status < 300 && $body !== '';
+        return ['status' => $status, 'ok' => $ok, 'body' => $ok ? $body : ''];
+    };
+    $robots = $pull('https://' . $host . '/robots.txt');
+    $llms = $pull('https://' . $host . '/llms.txt');
+    $flags = dossierLlmsFlags($llms['body']);
+    $llmsOk = $llms['ok'] && $llms['status'] >= 200 && $llms['status'] < 300 && trim($llms['body']) !== '';
+    gscWriteJson($file, [
+        'host' => $host,
+        'ok' => true,
+        'fetchedAt' => time(),
+        'robots' => [
+            'status' => $robots['status'],
+            'ok' => $robots['ok'] && $robots['status'] >= 200 && $robots['status'] < 300,
+            'blocked' => $robots['ok'] ? dossierRobotsBlocked($robots['body']) : [],
+        ],
+        'llms' => [
+            'status' => $llms['status'],
+            'ok' => $llmsOk,
+            'hasServices' => $llmsOk && $flags['hasServices'],
+            'hasCoverage' => $llmsOk && $flags['hasCoverage'],
+            'hasContact' => $llmsOk && $flags['hasContact'],
+            'excerpt' => ersClip(trim(preg_replace('/\s+/u', ' ', $llms['body']) ?? ''), 240),
+        ],
+    ]);
+}
+
+/**
+ * Hasta 3 URLs. Con una sola keyword de proyecto, todas comparten la misma pareja SERP.
+ *
+ * @return array{fromGsc: bool, targets: list<array{url: string, keyword: string, score: int}>}
+ */
+function dossierSelectSerpTargets(string $host, array $kw, array $prefs, array $urls): array
+{
+    $best = [];
+    foreach (['striking', 'lowCtr'] as $bucket) {
+        foreach ($kw['buckets'][$bucket] ?? [] as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $pos = (float) ($row['position'] ?? 0);
+            if ($bucket === 'striking' && ($pos < 4 || $pos > 15)) {
+                continue;
+            }
+            $url = trim((string) ($row['page'] ?? ''));
+            $query = trim((string) ($row['q'] ?? ''));
+            if ($url === '' || $query === '' || !gscUrlBelongsToHost($url, $host)) {
+                continue;
+            }
+            $score = max((int) ($row['gain'] ?? 0), (int) ($row['ctrGain'] ?? 0));
+            $path = dossierNormPath($url);
+            if (!isset($best[$path]) || $score > $best[$path]['score']) {
+                $best[$path] = ['url' => $url, 'keyword' => $query, 'score' => $score];
+            }
+        }
+    }
+    if ($best !== []) {
+        uasort($best, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
+        return ['fromGsc' => true, 'targets' => array_slice(array_values($best), 0, 3)];
+    }
+
+    $keyword = trim((string) ($prefs['seoKeyword'] ?? ''));
+    $len = function_exists('mb_strlen') ? mb_strlen($keyword) : strlen($keyword);
+    if ($len < 2) {
+        return ['fromGsc' => false, 'targets' => []];
+    }
+    $targets = [['url' => 'https://' . $host . '/', 'keyword' => $keyword, 'score' => 0]];
+    $extra = 0;
+    foreach ($urls as $url) {
+        if ($extra >= 2) {
+            break;
+        }
+        $path = dossierNormPath($url);
+        if ($path === '/' || !dossierIsCommercialPath($path)) {
+            continue;
+        }
+        $targets[] = ['url' => $url, 'keyword' => $keyword, 'score' => 0];
+        $extra++;
+    }
+    return ['fromGsc' => false, 'targets' => $targets];
+}
+
+function dossierEnsureSerp(string $dataDir, string $host, bool $allowFetch): void
+{
+    if (!$allowFetch || $host === '') {
+        return;
+    }
+    $prefs = dossierHostPrefs($dataDir, $host);
+    $gsc = gscReadJson(gscHostCacheFile($dataDir, $host), []);
+    $hasGsc = ($gsc['host'] ?? '') === $host;
+    $kw = gscReadJson(gscKeywordCacheFile($dataDir, $host), []);
+    if (!isset($kw['buckets'])) {
+        $kw = [];
+    }
+    $urls = dossierInventoryUrls($dataDir, $host, $hasGsc ? $gsc : []);
+    $selection = dossierSelectSerpTargets($host, $kw, $prefs, $urls);
+    $targets = $selection['targets'];
+    if ($targets === []) {
+        return;
+    }
+    $code = (int) ($prefs['locationCode'] ?? 0);
+    $label = '';
+    $name = '';
+    if ($code <= 0) {
+        if (!$selection['fromGsc']) {
+            return;
+        }
+        $code = DOSSIER_SERP_CHILE;
+        $label = 'Chile';
+        $name = 'Chile';
+    }
+    $jobs = [];
+    foreach ($targets as $target) {
+        $jobs[] = [
+            'url' => $target['url'],
+            'keyword' => $target['keyword'],
+            'location_code' => $code,
+            'location_name' => $name,
+            'location_label' => $label,
+        ];
+    }
+    $sigParts = [];
+    foreach ($jobs as $job) {
+        $sigParts[] = dossierNormPath($job['url']) . '|' . gscAscii($job['keyword']) . '|' . $code;
+    }
+    sort($sigParts);
+    $signature = md5(implode("\n", $sigParts));
+    $file = dossierSerpFile($dataDir, $host);
+    $cached = gscReadJson($file, []);
+    $age = time() - (int) ($cached['fetchedAt'] ?? 0);
+    $ttl = ($cached['error'] ?? '') === '' ? 604800 : 21600;
+    if (($cached['host'] ?? '') === $host && ($cached['signature'] ?? '') === $signature && $age >= 0 && $age < $ttl && is_array($cached['byUrl'] ?? null)) {
+        return;
+    }
+
+    $projectId = dossierProjectId($host);
+    require_once dirname(__DIR__) . '/services/DataForSeoService.php';
+    $service = new DataForSeoService($dataDir);
+    if ($projectId === '' || !$service->isConfigured()) {
+        return;
+    }
+    require_once __DIR__ . '/compile_growth_plan.php';
+    @set_time_limit(180);
+    $dom = dossierDomIndex($dataDir, $host);
+    $local = [];
+    foreach ($jobs as $job) {
+        $row = $dom['pages'][dossierNormPath($job['url'])] ?? [];
+        $local[$job['url']] = [
+            'title' => (string) ($row['title'] ?? ''),
+            'h1' => (string) ($row['h1'] ?? ''),
+            'words' => (int) ($row['mainWordCount'] ?? $row['wordCount'] ?? 0),
+            'schema' => is_array($row['schemas'] ?? null) ? $row['schemas'] : [],
+        ];
+    }
+    $service->beginRun();
+    try {
+        $probe = ersGrowthProbe($service, $projectId, $host, $jobs, false, $local);
+        $service->finishRun($projectId);
+        gscWriteJson($file, [
+            'host' => $host,
+            'fetchedAt' => time(),
+            'signature' => $signature,
+            'error' => '',
+            'locationCode' => $code,
+            'locationLabel' => $label !== '' ? $label : (string) ($probe['locationLabel'] ?? ''),
+            'byUrl' => $probe['byUrl'],
+        ]);
+    } catch (Throwable $e) {
+        $service->finishRun($projectId);
+        gscWriteJson($file, [
+            'host' => $host,
+            'fetchedAt' => time(),
+            'signature' => $signature,
+            'error' => ersClip($e->getMessage(), 300),
+            'locationCode' => $code,
+            'locationLabel' => $label,
+            'byUrl' => is_array($cached['byUrl'] ?? null) ? $cached['byUrl'] : [],
+        ]);
+    }
+}
+
 /**
  * Arma el paquete desde los cachés. No llama a la red.
- * ok=false cuando todavía no hay Search Console: sin eso no hay dossier.
+ * Hay dossier con Search Console o, si todavía no hay, con el inventario propio.
  */
 function dossierPack(string $dataDir, string $host): array
 {
@@ -2084,58 +2762,17 @@ function dossierPack(string $dataDir, string $host): array
     $dom = dossierDomIndex($dataDir, $host);
     $inlinkGraph = dossierBuildInlinkGraph($dom['pages'] ?? []);
 
-    $pages = [];
+    $gscByPath = [];
     foreach ($gsc['pages'] ?? [] as $row) {
         if (!is_array($row)) {
             continue;
         }
         $url = (string) ($row['url'] ?? '');
         $path = dossierNormPath($url);
-        $qPack = isset($kw['buckets'])
-            ? dossierPageQueries($row, $kw, $path)
-            : ['topQueries' => [], 'protectQueries' => [], 'opportunityQueries' => []];
-        $links = $inlinkGraph[$path] ?? [
-            'inlinksTotal' => 0,
-            'inlinksContextual' => 0,
-            'inlinkAnchors' => [],
-            'inlinkFrom' => [],
-        ];
-        $domRow = is_array($dom['pages'][$path] ?? null) ? $dom['pages'][$path] : [];
-        $pages[] = [
-            'url' => $url,
-            'path' => $path,
-            'title' => gscPageTitle($row),
-            'clicks' => (int) ($row['current']['clicks'] ?? 0),
-            'impressions' => (int) ($row['current']['impressions'] ?? 0),
-            'ctr' => (float) ($row['current']['ctr'] ?? 0),
-            'position' => (float) ($row['current']['position'] ?? 0),
-            'prevClicks' => (int) ($row['previous']['clicks'] ?? 0),
-            'deltaClicks' => (int) ($row['delta']['clicks'] ?? 0),
-            'deltaPosition' => (float) ($row['delta']['position'] ?? 0),
-            'indexTone' => (string) ($row['indexStatus']['tone'] ?? ''),
-            'indexLabel' => (string) ($row['indexStatus']['label'] ?? ''),
-            'indexReason' => (string) ($row['indexStatus']['reason'] ?? $row['indexStatus']['coverage'] ?? ''),
-            'lastCrawl' => (string) ($row['indexStatus']['lastCrawl'] ?? ''),
-            'lastmod' => (string) ($row['lastmod'] ?? ''),
-            'error' => (string) ($row['error'] ?? ''),
-            'thermometer' => (string) ($row['thermometer']['tone'] ?? ''),
-            'query' => isset($kw['buckets']) ? dossierQueryForPath($kw, $path) : '',
-            'topQueries' => $qPack['topQueries'],
-            'protectQueries' => $qPack['protectQueries'],
-            'opportunityQueries' => $qPack['opportunityQueries'],
-            'inlinksTotal' => (int) ($links['inlinksTotal'] ?? 0),
-            'inlinksContextual' => (int) ($links['inlinksContextual'] ?? 0),
-            'inlinkAnchors' => $links['inlinkAnchors'] ?? [],
-            'inlinkFrom' => $links['inlinkFrom'] ?? [],
-            'redirectCount' => (int) ($domRow['redirectCount'] ?? 0),
-            'effectiveUrl' => (string) ($domRow['effectiveUrl'] ?? ''),
-            'xRobots' => (string) ($domRow['xRobots'] ?? ''),
-            'mainWordCount' => (int) ($domRow['mainWordCount'] ?? 0),
-            'contentHash' => (string) ($domRow['contentHash'] ?? ''),
-            'domFetchedAt' => (int) ($domRow['fetchedAt'] ?? 0),
-        ];
+        if ($path !== '' && !isset($gscByPath[$path])) {
+            $gscByPath[$path] = $row;
+        }
     }
-
     $ga = gscReadJson(dossierGaFile($dataDir, $host), []);
     $gaOk = !empty($ga['ok']) && empty($ga['error']) && ($ga['version'] ?? '') === DOSSIER_VERSION;
     if (!$gaOk) {
@@ -2178,8 +2815,114 @@ function dossierPack(string $dataDir, string $host): array
         ? gbpPackForDossier($dataDir, $host, false, false)
         : ['ok' => false, 'linked' => false];
 
+    $gaLandings = [];
+    if (is_array($ga)) {
+        foreach ($ga['landings'] ?? [] as $landing) {
+            if (!is_array($landing)) {
+                continue;
+            }
+            $gaLandings[(string) ($landing['path'] ?? '')] = $landing;
+        }
+    }
+    $gaDevices = is_array($ga['landingDevices'] ?? null) ? $ga['landingDevices'] : [];
+    $gaContacts = is_array($ga['landingContacts'] ?? null) ? $ga['landingContacts'] : [];
+    $serpFile = gscReadJson(dossierSerpFile($dataDir, $host), []);
+    $serpByPath = [];
+    if (($serpFile['host'] ?? '') === $host && ($serpFile['error'] ?? '') === '') {
+        foreach ($serpFile['byUrl'] ?? [] as $serpUrl => $pack) {
+            if (is_array($pack)) {
+                $serpByPath[dossierNormPath((string) $serpUrl)] = $pack;
+            }
+        }
+    }
+    $geo = gscReadJson(dossierGeoFile($dataDir, $host), []);
+    if (($geo['host'] ?? '') !== $host) {
+        $geo = [];
+    }
+    $inventory = $host === '' ? [] : dossierInventoryUrls($dataDir, $host, $hasGsc ? $gsc : []);
+    $pages = [];
+    foreach ($inventory as $url) {
+        $path = dossierNormPath($url);
+        $row = is_array($gscByPath[$path] ?? null) ? $gscByPath[$path] : [];
+        $qPack = $row !== [] && isset($kw['buckets'])
+            ? dossierPageQueries($row, $kw, $path)
+            : ['topQueries' => [], 'protectQueries' => [], 'opportunityQueries' => []];
+        $links = $inlinkGraph[$path] ?? [
+            'inlinksTotal' => 0,
+            'inlinksContextual' => 0,
+            'inlinkAnchors' => [],
+            'inlinkFrom' => [],
+        ];
+        $domRow = is_array($dom['pages'][$path] ?? null) ? $dom['pages'][$path] : [];
+        $landing = is_array($gaLandings[$path] ?? null) ? $gaLandings[$path] : [];
+        $devices = is_array($gaDevices[$path] ?? null) ? $gaDevices[$path] : [];
+        $contacts = is_array($gaContacts[$path] ?? null) ? $gaContacts[$path] : ['whatsapp' => 0, 'llamada' => 0, 'formulario' => 0, 'email' => 0];
+        $psiRow = null;
+        if (is_array($psiPages[$url] ?? null)) {
+            $psiRow = $psiPages[$url];
+        } else {
+            foreach ($psiPages as $psiUrl => $candidate) {
+                if (is_array($candidate) && dossierNormPath((string) $psiUrl) === $path) {
+                    $psiRow = $candidate;
+                    break;
+                }
+            }
+        }
+        $pages[] = [
+            'url' => $row !== [] ? (string) ($row['url'] ?? $url) : $url,
+            'path' => $path,
+            'title' => $row !== [] ? gscPageTitle($row) : (string) ($domRow['title'] ?? ''),
+            'clicks' => (int) ($row['current']['clicks'] ?? 0),
+            'impressions' => (int) ($row['current']['impressions'] ?? 0),
+            'ctr' => (float) ($row['current']['ctr'] ?? 0),
+            'position' => (float) ($row['current']['position'] ?? 0),
+            'prevClicks' => (int) ($row['previous']['clicks'] ?? 0),
+            'deltaClicks' => (int) ($row['delta']['clicks'] ?? 0),
+            'deltaPosition' => (float) ($row['delta']['position'] ?? 0),
+            'indexTone' => (string) ($row['indexStatus']['tone'] ?? ''),
+            'indexLabel' => (string) ($row['indexStatus']['label'] ?? ''),
+            'indexReason' => (string) ($row['indexStatus']['reason'] ?? $row['indexStatus']['coverage'] ?? ''),
+            'lastCrawl' => (string) ($row['indexStatus']['lastCrawl'] ?? ''),
+            'lastmod' => (string) ($row['lastmod'] ?? ''),
+            'error' => (string) ($row['error'] ?? ''),
+            'thermometer' => (string) ($row['thermometer']['tone'] ?? ''),
+            'query' => isset($kw['buckets']) ? dossierQueryForPath($kw, $path) : '',
+            'topQueries' => $qPack['topQueries'],
+            'protectQueries' => $qPack['protectQueries'],
+            'opportunityQueries' => $qPack['opportunityQueries'],
+            'inlinksTotal' => (int) ($links['inlinksTotal'] ?? 0),
+            'inlinksContextual' => (int) ($links['inlinksContextual'] ?? 0),
+            'inlinkAnchors' => $links['inlinkAnchors'] ?? [],
+            'inlinkFrom' => $links['inlinkFrom'] ?? [],
+            'redirectCount' => (int) ($domRow['redirectCount'] ?? 0),
+            'effectiveUrl' => (string) ($domRow['effectiveUrl'] ?? ''),
+            'xRobots' => (string) ($domRow['xRobots'] ?? ''),
+            'mainWordCount' => (int) ($domRow['mainWordCount'] ?? 0),
+            'contentHash' => (string) ($domRow['contentHash'] ?? ''),
+            'domFetchedAt' => (int) ($domRow['fetchedAt'] ?? 0),
+            'ga' => [
+                'sessions' => (int) ($landing['sessions'] ?? 0),
+                'engagementRate' => isset($landing['engagementRate']) ? (float) $landing['engagementRate'] : null,
+                'keyEvents' => (int) ($landing['keyEvents'] ?? $landing['conversions'] ?? 0),
+                'sessionsMobile' => (int) ($devices['mobile']['sessions'] ?? 0),
+                'sessionsDesktop' => (int) ($devices['desktop']['sessions'] ?? 0),
+                'sessionsTablet' => (int) ($devices['tablet']['sessions'] ?? 0),
+                'contacts' => [
+                    'whatsapp' => (int) ($contacts['whatsapp'] ?? 0),
+                    'llamada' => (int) ($contacts['llamada'] ?? 0),
+                    'formulario' => (int) ($contacts['formulario'] ?? 0),
+                    'email' => (int) ($contacts['email'] ?? 0),
+                ],
+            ],
+            'psiScore' => is_array($psiRow) ? ($psiRow['score'] ?? null) : null,
+            'psiField' => is_array($psiRow) ? (string) ($psiRow['field'] ?? '') : '',
+            'psiLcp' => is_array($psiRow) ? (string) ($psiRow['lcp'] ?? '') : '',
+            'serp' => $serpByPath[$path] ?? null,
+        ];
+    }
+
     return [
-        'ok' => $hasGsc && $totals !== [],
+        'ok' => $host !== '' && (($hasGsc && $totals !== []) || $inventory !== []),
         'host' => $host,
         'version' => DOSSIER_VERSION,
         'fingerprint' => '',
@@ -2220,6 +2963,7 @@ function dossierPack(string $dataDir, string $host): array
             'updatedAt' => $dom['updatedAt'],
         ],
         'siteNap' => $siteNap,
+        'geo' => $geo,
         'gbp' => $gbp,
         'repo' => $repo,
         'tasks' => $tasks,
@@ -2232,6 +2976,8 @@ function dossierPack(string $dataDir, string $host): array
             'repo' => $repo['slug'] !== '',
             'keywords' => isset($kw['buckets']),
             'gbp' => !empty($gbp['ok']),
+            'serp' => $serpByPath !== [],
+            'geo' => !empty($geo['fetchedAt']),
         ],
         'freshness' => dossierFreshnessLedger($dataDir, $host, [
             'domProgress' => [
@@ -2270,6 +3016,8 @@ function dossierStamps(string $dataDir, string $host): array
         'repoSha' => (string) ($repo['commitSha'] ?? ''),
         'gbp' => (int) ($gbp['fetchedAt'] ?? 0),
         'gbpId' => (string) ($gbp['placeId'] ?? $gbp['place']['placeId'] ?? ''),
+        'serp' => (int) (gscReadJson(dossierSerpFile($dataDir, $host), [])['fetchedAt'] ?? 0),
+        'geo' => (int) (gscReadJson(dossierGeoFile($dataDir, $host), [])['fetchedAt'] ?? 0),
         'tasks' => dossierTasksSig($host, $windows),
     ];
 }
@@ -2288,39 +3036,56 @@ function dossierBuild(string $dataDir, array $sa, string $host, bool $fresh = fa
     $gaNote = '';
     if ($allowFetch) {
         $gsc = gscReadJson(gscHostCacheFile($dataDir, $host), []);
-        if (($gsc['host'] ?? '') === $host) {
+        $hasGscHost = ($gsc['host'] ?? '') === $host;
+        if ($hasGscHost) {
             try {
                 dossierEnsureKeywords($dataDir, $sa, $host, $gsc);
             } catch (Throwable) {
             }
-            $prefs = dossierHostPrefs($dataDir, $host);
-            $resolved = dossierResolveProperty($dataDir, $sa, $host, (string) ($prefs['ga4Property'] ?? ''));
-            if ($resolved['id'] !== '' && $sa !== []) {
-                try {
-                    dossierFetchGa($dataDir, $sa, $host, $resolved['id'], dossierWindows($gsc), $fresh);
-                } catch (Throwable $e) {
-                    $gaNote = dossierPublicError($e->getMessage());
-                }
-            } elseif (($resolved['error'] ?? '') !== '') {
-                $gaNote = (string) $resolved['error'];
+        }
+        $prefs = dossierHostPrefs($dataDir, $host);
+        $resolved = dossierResolveProperty($dataDir, $sa, $host, (string) ($prefs['ga4Property'] ?? ''));
+        if ($resolved['id'] !== '' && $sa !== []) {
+            try {
+                dossierFetchGa($dataDir, $sa, $host, $resolved['id'], dossierWindows($hasGscHost ? $gsc : []), $fresh);
+            } catch (Throwable $e) {
+                $gaNote = dossierPublicError($e->getMessage());
             }
-            $psiKey = dossierSecret($dataDir, 'psi.json');
-            if ($psiKey !== '') {
-                try {
-                    dossierPsi($dataDir, $host, $psiKey, $fresh, $gsc);
-                } catch (Throwable) {
-                }
-            }
-            // GBP: respeta TTL interno; fresh fuerza Place Details.
-            if (function_exists('gbpEnsure')) {
-                try {
-                    $prefs = dossierHostPrefs($dataDir, $host);
-                    if (gscPlaceId((string) ($prefs['placeId'] ?? '')) !== '') {
-                        gbpEnsure($dataDir, $host, $fresh);
+        } elseif (($resolved['error'] ?? '') !== '') {
+            $gaNote = (string) $resolved['error'];
+        }
+        try {
+            dossierEnsureSitemap($dataDir, $host, true);
+        } catch (Throwable) {
+        }
+        try {
+            dossierEnsureGeo($dataDir, $host, true);
+        } catch (Throwable) {
+        }
+        $psiKey = dossierSecret($dataDir, 'psi.json');
+        if ($psiKey !== '') {
+            try {
+                $extra = [];
+                foreach (dossierInventoryUrls($dataDir, $host, $hasGscHost ? $gsc : []) as $url) {
+                    if (dossierIsCommercialPath(dossierNormPath($url))) {
+                        $extra[] = $url;
                     }
-                } catch (Throwable) {
                 }
+                dossierPsi($dataDir, $host, $psiKey, $fresh, $hasGscHost ? $gsc : [], $extra);
+            } catch (Throwable) {
             }
+        }
+        if (function_exists('gbpEnsure')) {
+            try {
+                if (gscPlaceId((string) ($prefs['placeId'] ?? '')) !== '') {
+                    gbpEnsure($dataDir, $host, $fresh);
+                }
+            } catch (Throwable) {
+            }
+        }
+        try {
+            dossierEnsureSerp($dataDir, $host, true);
+        } catch (Throwable) {
         }
     }
 

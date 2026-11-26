@@ -435,6 +435,10 @@ function gscHostEntry(array $entry): array
         'placeQuery' => function_exists('ersClip')
             ? ersClip(trim((string) ($entry['placeQuery'] ?? '')), 200)
             : substr(trim((string) ($entry['placeQuery'] ?? '')), 0, 200),
+        'seoKeyword' => function_exists('ersClip')
+            ? ersClip(trim((string) ($entry['seoKeyword'] ?? '')), 120)
+            : substr(trim((string) ($entry['seoKeyword'] ?? '')), 0, 120),
+        'locationCode' => max(0, (int) ($entry['locationCode'] ?? 0)),
     ];
 }
 
@@ -2542,6 +2546,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'config') {
         'placeQuery' => array_key_exists('placeQuery', $input)
             ? (string) $input['placeQuery']
             : (string) ($prev['placeQuery'] ?? ''),
+        'seoKeyword' => array_key_exists('seoKeyword', $input)
+            ? (string) $input['seoKeyword']
+            : (string) ($prev['seoKeyword'] ?? ''),
+        'locationCode' => array_key_exists('locationCode', $input)
+            ? (int) $input['locationCode']
+            : (int) ($prev['locationCode'] ?? 0),
     ]);
     $config['hosts'][$host] = $next;
 
@@ -2786,6 +2796,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             $cached['ga4Property'] = gscGa4Property((string) ($override['ga4Property'] ?? ''));
             $cached['placeId'] = gscPlaceId((string) ($override['placeId'] ?? ''));
             $cached['placeQuery'] = (string) ($override['placeQuery'] ?? '');
+            $cached['seoKeyword'] = ersClip(trim((string) ($override['seoKeyword'] ?? '')), 120);
+            $cached['locationCode'] = max(0, (int) ($override['locationCode'] ?? 0));
             // Señales locales desde caché GBP (sin red).
             if (function_exists('gscMergeLocalSignals')) {
                 $cached['signals'] = gscMergeLocalSignals($dataDir, $host, is_array($cached['signals'] ?? null) ? $cached['signals'] : []);
@@ -2808,6 +2820,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             $cached['ga4Property'] = gscGa4Property((string) ($override['ga4Property'] ?? ''));
             $cached['placeId'] = gscPlaceId((string) ($override['placeId'] ?? ''));
             $cached['placeQuery'] = (string) ($override['placeQuery'] ?? '');
+            $cached['seoKeyword'] = ersClip(trim((string) ($override['seoKeyword'] ?? '')), 120);
+            $cached['locationCode'] = max(0, (int) ($override['locationCode'] ?? 0));
             if (function_exists('gscMergeLocalSignals')) {
                 $cached['signals'] = gscMergeLocalSignals($dataDir, $host, is_array($cached['signals'] ?? null) ? $cached['signals'] : []);
             }
@@ -3268,6 +3282,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'site' || $action === '
             'ga4Property' => gscGa4Property((string) ($override['ga4Property'] ?? '')),
             'placeId' => gscPlaceId((string) ($override['placeId'] ?? '')),
             'placeQuery' => (string) ($override['placeQuery'] ?? ''),
+            'seoKeyword' => ersClip(trim((string) ($override['seoKeyword'] ?? '')), 120),
+            'locationCode' => max(0, (int) ($override['locationCode'] ?? 0)),
         ];
         gscWriteJson($hostCacheFile, $payload);
         gscJson($payload);

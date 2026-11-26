@@ -1,7 +1,7 @@
 <?php
 /**
- * Motor de mejora continua. Solo corre con el botón del proyecto:
- * GSC + GA4 + SERP local + On-Page, y Gemini devuelve tareas persistentes.
+ * Motor de mejora continua. El botón manual trae SERP y On-Page de rivales.
+ * No redacta un segundo plan: conserva las tareas ya guardadas.
  *
  * GET  action=status&proyecto_id=&host=
  * GET  action=locations&proyecto_id=&q=
@@ -13,14 +13,7 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/services/DataForSeoService.php';
 
-header('Content-Type: application/json; charset=utf-8');
-header('X-Content-Type-Options: nosniff');
-header('Cache-Control: no-store');
-
-if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') {
-    http_response_code(204);
-    exit;
-}
+$ersGrowthStandalone = realpath((string) ($_SERVER['SCRIPT_FILENAME'] ?? '')) === realpath(__FILE__);
 
 const ERS_GROWTH_TTL = 604800;
 
@@ -402,8 +395,8 @@ function ersGrowthGa4(string $dataDir, string $host, string $url): array
     }
 }
 
-/** @param array<string, mixed> $serp @param array<int, array<string, mixed>> $pages @return array<string, mixed> */
-function ersGrowthComparison(string $url, array $serp, array $pages): array
+/** @param array<string, mixed> $serp @param array<int, array<string, mixed>> $pages @param array<string, mixed>|null $local @return array<string, mixed> */
+function ersGrowthComparison(string $url, array $serp, array $pages, ?array $local = null): array
 {
     $byUrl = [];
     foreach ($pages as $page) {
@@ -413,7 +406,26 @@ function ersGrowthComparison(string $url, array $serp, array $pages): array
         $byUrl[ersGrowthNormUrl((string) ($page['url'] ?? ''))] = $page;
     }
     $rows = [];
-    $push = static function (string $role, ?int $rank, string $pageUrl, ?array $serpRow) use (&$rows, $byUrl): void {
+    $push = static function (string $role, ?int $rank, string $pageUrl, ?array $serpRow) use (&$rows, $byUrl, $local): void {
+        if ($role === 'ours') {
+            $title = trim((string) ($local['title'] ?? ''));
+            if ($title === '') {
+                $title = (string) ($serpRow['title'] ?? '');
+            }
+            $rows[] = [
+                'role' => 'ours',
+                'rank' => $rank,
+                'url' => $pageUrl,
+                'onpage_score' => null,
+                'title' => $title,
+                'h1' => (string) ($local['h1'] ?? ''),
+                'words' => isset($local['words']) ? (int) $local['words'] : null,
+                'schema' => is_array($local['schema'] ?? null) ? $local['schema'] : [],
+                'errors' => ['HTML propio'],
+                'page' => null,
+            ];
+            return;
+        }
         $page = $byUrl[ersGrowthNormUrl($pageUrl)] ?? null;
         $h1 = '';
         if (is_array($page) && is_array($page['h1'] ?? null) && isset($page['h1'][0])) {
@@ -616,6 +628,119 @@ function ersGrowthPublicSerp(array $serp): array
     return $serp;
 }
 
+/**
+ * Una llamada SERP por pareja keyword+ciudad. On-Page solo de rivales.
+ *
+ * @param list<array<string, mixed>> $jobs
+ * @param array<string, array<string, mixed>> $localByUrl
+ * @return array{byUrl: array<string, array<string, mixed>>, locationLabel: string}
+ */
+function ersGrowthProbe(DataForSeoService $service, string $projectId, string $host, array $jobs, bool $force, array $localByUrl): array
+{
+    $groups = [];
+    foreach ($jobs as $job) {
+        if (!is_array($job)) {
+            continue;
+        }
+        $url = trim((string) ($job['url'] ?? ''));
+        $keyword = trim(preg_replace('/\s+/', ' ', (string) ($job['keyword'] ?? '')) ?? '');
+        $code = (int) ($job['location_code'] ?? 0);
+        if ($url === '' || $keyword === '' || $code <= 0) {
+            continue;
+        }
+        $key = ersGrowthFold($keyword) . '|' . $code;
+        if (!isset($groups[$key])) {
+            $groups[$key] = [
+                'keyword' => $keyword,
+                'location_code' => $code,
+                'location_name' => (string) ($job['location_name'] ?? ''),
+                'location_label' => (string) ($job['location_label'] ?? ''),
+                'urls' => [],
+            ];
+        }
+        $groups[$key]['urls'][$url] = $url;
+    }
+
+    $byUrl = [];
+    $labelOut = '';
+    foreach ($groups as $group) {
+        $code = (int) $group['location_code'];
+        $name = (string) $group['location_name'];
+        $label = (string) $group['location_label'];
+        if ($code !== DOSSIER_SERP_CHILE) {
+            $place = $service->requireLocation($projectId, $code);
+            $name = (string) $place['location_name'];
+            $label = (string) $place['label'];
+        } else {
+            $name = $name !== '' ? $name : 'Chile';
+            $label = $label !== '' ? $label : 'Chile';
+        }
+        if ($labelOut === '') {
+            $labelOut = $label;
+        }
+        $serp = $service->serp($projectId, $host, (string) $group['keyword'], $code, $force);
+        $rivals = [];
+        foreach ($serp['competitors'] ?? [] as $rival) {
+            if (!is_array($rival)) {
+                continue;
+            }
+            $rivalUrl = trim((string) ($rival['url'] ?? ''));
+            if ($rivalUrl === '' || gscSanitizeHost($rivalUrl) === $host) {
+                continue;
+            }
+            $rivals[] = $rivalUrl;
+            if (count($rivals) >= 3) {
+                break;
+            }
+        }
+        $pages = [];
+        if ($rivals !== []) {
+            $onpage = $service->onpage($projectId, $rivals, $force);
+            $pages = is_array($onpage['pages'] ?? null) ? $onpage['pages'] : [];
+        }
+        foreach ($group['urls'] as $pageUrl) {
+            $local = is_array($localByUrl[$pageUrl] ?? null) ? $localByUrl[$pageUrl] : [];
+            $comparison = ersGrowthComparison($pageUrl, $serp, $pages, $local);
+            $byUrl[$pageUrl] = [
+                'keyword' => (string) $group['keyword'],
+                'locationCode' => $code,
+                'locationName' => $name,
+                'locationLabel' => $label,
+                'position' => $serp['position'] ?? null,
+                'localPack' => !empty($serp['local_pack']),
+                'aiOverview' => is_array($serp['ai_overview'] ?? null) ? $serp['ai_overview'] : ['present' => false, 'excerpt' => ''],
+                'peopleAlsoAsk' => array_values(array_slice(is_array($serp['people_also_ask'] ?? null) ? $serp['people_also_ask'] : [], 0, 8)),
+                'competitors' => is_array($serp['competitors'] ?? null) ? $serp['competitors'] : [],
+                'our' => $serp['our'] ?? null,
+                'leader' => $serp['leader'] ?? null,
+                'comparison' => [
+                    'own_score' => $comparison['own_score'],
+                    'top3_avg_score' => $comparison['top3_avg_score'],
+                    'rows' => array_map(static function (array $row): array {
+                        unset($row['page']);
+                        return $row;
+                    }, $comparison['rows']),
+                ],
+                'fromCache' => !empty($serp['fromCache']),
+            ];
+        }
+    }
+
+    return ['byUrl' => $byUrl, 'locationLabel' => $labelOut];
+}
+
+function ersGrowthLocalSnapshot(string $dataDir, string $host, string $url): array
+{
+    $dom = dossierDomIndex($dataDir, $host);
+    $row = $dom['pages'][dossierNormPath($url)] ?? [];
+    return [
+        'title' => (string) ($row['title'] ?? ''),
+        'h1' => (string) ($row['h1'] ?? ''),
+        'words' => (int) ($row['mainWordCount'] ?? $row['wordCount'] ?? 0),
+        'schema' => is_array($row['schemas'] ?? null) ? $row['schemas'] : [],
+    ];
+}
+
 function ersGrowthRun(DataForSeoService $service, string $dataDir, array $input): array
 {
     $projectId = strtolower(trim((string) ($input['proyecto_id'] ?? '')));
@@ -664,63 +789,34 @@ function ersGrowthRun(DataForSeoService $service, string $dataDir, array $input)
     try {
         $gsc = ersGrowthGsc($dataDir, $host, $url);
         $ga4 = ersGrowthGa4($dataDir, $host, $url);
-        $place = $service->requireLocation($projectId, $locationCode);
-        $serp = $service->serp($projectId, $host, $keyword, $locationCode, $force);
-        $auditUrls = [$url];
-        foreach ($serp['competitors'] ?? [] as $rival) {
-            if (!is_array($rival)) {
-                continue;
-            }
-            $rivalUrl = trim((string) ($rival['url'] ?? ''));
-            if ($rivalUrl === '' || ersGrowthSameUrl($rivalUrl, $url)) {
-                continue;
-            }
-            $auditUrls[] = $rivalUrl;
-            if (count($auditUrls) >= 4) {
-                break;
+        $probe = ersGrowthProbe($service, $projectId, $host, [[
+            'url' => $url,
+            'keyword' => $keyword,
+            'location_code' => $locationCode,
+        ]], $force, [
+            $url => ersGrowthLocalSnapshot($dataDir, $host, $url),
+        ]);
+        $hit = is_array($probe['byUrl'][$url] ?? null) ? $probe['byUrl'][$url] : null;
+        if ($hit === null) {
+            foreach ($probe['byUrl'] as $candidate) {
+                if (is_array($candidate)) {
+                    $hit = $candidate;
+                    break;
+                }
             }
         }
-        $onpage = $service->onpage($projectId, $auditUrls, $force);
-        $comparison = ersGrowthComparison($url, $serp, is_array($onpage['pages'] ?? null) ? $onpage['pages'] : []);
-        $bundle = [
-            'proyecto' => [
-                'id' => $projectId,
-                'nombre' => (string) ($client['name'] ?? ''),
-                'host' => $host,
-            ],
-            'url_objetivo' => $url,
-            'keyword' => $keyword,
-            'ubicacion' => [
-                'location_code' => $place['location_code'],
-                'nombre' => $place['location_name'],
-                'tipo' => $place['location_type'],
-            ],
-            'gsc_data' => $gsc,
-            'ga4_data' => $ga4,
-            'serp_local_data' => [
-                'position' => $serp['position'],
-                'local_pack' => $serp['local_pack'],
-                'ai_overview' => $serp['ai_overview'],
-                'people_also_ask' => $serp['people_also_ask'],
-                'our' => $serp['our'],
-                'leader' => $serp['leader'],
-                'competitors' => $serp['competitors'],
-            ],
-            'onpage_comparison' => [
-                'own_score' => $comparison['own_score'],
-                'top3_avg_score' => $comparison['top3_avg_score'],
-                'pages' => $comparison['pages'],
-            ],
-        ];
-        $previous = is_array($existing['tasks'] ?? null) && ($existing['key'] ?? '') === $key
-            ? $existing['tasks']
-            : [];
-        $geminiError = '';
-        try {
-            $tasks = ersGrowthGemini($bundle, $previous);
-        } catch (Throwable $e) {
-            $tasks = $previous;
-            $geminiError = ersClip($e->getMessage(), 300);
+        if (!is_array($hit)) {
+            throw new RuntimeException('DataForSEO no devolvió la comparativa.');
+        }
+        $kept = [];
+        foreach (is_array($existing['tasks'] ?? null) ? $existing['tasks'] : [] as $task) {
+            if (!is_array($task)) {
+                continue;
+            }
+            $same = ($existing['key'] ?? '') === $key;
+            if ($same || ($task['estado'] ?? '') === 'aplicado') {
+                $kept[] = $task;
+            }
         }
         $warnings = [];
         if (empty($gsc['ok'])) {
@@ -729,48 +825,43 @@ function ersGrowthRun(DataForSeoService $service, string $dataDir, array $input)
         if (empty($ga4['ok'])) {
             $warnings[] = 'Analytics: ' . (string) $ga4['error'];
         }
-        if ($geminiError !== '') {
-            $warnings[] = $geminiError;
-        }
         $run = $close();
         $now = time();
+        $comparison = is_array($hit['comparison'] ?? null) ? $hit['comparison'] : ['own_score' => null, 'top3_avg_score' => null, 'rows' => []];
         $plan = [
             'proyecto_id' => $projectId,
             'host' => $host,
             'key' => $key,
             'url' => $url,
             'keyword' => $keyword,
-            'location_code' => $place['location_code'],
-            'location_name' => $place['location_name'],
-            'location_label' => $place['label'],
+            'location_code' => (int) ($hit['locationCode'] ?? $locationCode),
+            'location_name' => (string) ($hit['locationName'] ?? ''),
+            'location_label' => (string) ($hit['locationLabel'] ?? $probe['locationLabel'] ?? ''),
             'fetchedAt' => $now,
             'expiresAt' => $now + ERS_GROWTH_TTL,
             'fromCache' => false,
             'chargedUsd' => $run['chargedUsd'],
-            'geminiError' => $geminiError,
+            'geminiError' => '',
             'warnings' => $warnings,
             'gsc_data' => $gsc,
             'ga4_data' => $ga4,
             'serp_local_data' => ersGrowthPublicSerp([
-                'position' => $serp['position'],
-                'local_pack' => $serp['local_pack'],
-                'ai_overview' => $serp['ai_overview'],
-                'people_also_ask' => $serp['people_also_ask'],
-                'our' => $serp['our'],
-                'leader' => $serp['leader'],
-                'competitors' => $serp['competitors'],
-                'fromCache' => !empty($serp['fromCache']),
+                'position' => $hit['position'] ?? null,
+                'local_pack' => !empty($hit['localPack']),
+                'ai_overview' => $hit['aiOverview'] ?? ['present' => false, 'excerpt' => ''],
+                'people_also_ask' => $hit['peopleAlsoAsk'] ?? [],
+                'our' => $hit['our'] ?? null,
+                'leader' => $hit['leader'] ?? null,
+                'competitors' => $hit['competitors'] ?? [],
+                'fromCache' => !empty($hit['fromCache']),
             ]),
             'onpage_comparison' => [
-                'own_score' => $comparison['own_score'],
-                'top3_avg_score' => $comparison['top3_avg_score'],
-                'rows' => array_map(static function (array $row): array {
-                    unset($row['page']);
-                    return $row;
-                }, $comparison['rows']),
-                'fromCache' => !empty($onpage['fromCache']),
+                'own_score' => $comparison['own_score'] ?? null,
+                'top3_avg_score' => $comparison['top3_avg_score'] ?? null,
+                'rows' => is_array($comparison['rows'] ?? null) ? $comparison['rows'] : [],
+                'fromCache' => !empty($hit['fromCache']),
             ],
-            'tasks' => $tasks,
+            'tasks' => $kept,
         ];
         ersGrowthWritePlan($dataDir, $plan);
         return [
@@ -837,6 +928,16 @@ function ersGrowthTask(string $dataDir, array $input): array
     return ['ok' => true, 'plan' => $plan];
 }
 
+if ($ersGrowthStandalone) {
+header('Content-Type: application/json; charset=utf-8');
+header('X-Content-Type-Options: nosniff');
+header('Cache-Control: no-store');
+
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') {
+    http_response_code(204);
+    exit;
+}
+
 $dataDir = ersDataDir();
 $service = new DataForSeoService($dataDir);
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -899,4 +1000,5 @@ try {
     ersGrowthFail(400, $e->getMessage());
 } catch (Throwable $e) {
     ersGrowthFail(502, $e->getMessage());
+}
 }
