@@ -18,32 +18,30 @@ body {
   background: var(--paper);
   font-family: "Segoe UI", "Helvetica Neue", sans-serif;
   line-height: 1.5;
+  overflow-x: hidden;
 }
 
 .mast {
-  width: min(52rem, calc(100% - 2rem));
-  margin: 0 auto;
-  padding-top: 1.4rem;
+  width: 100%;
+  margin: 0;
+  padding-top: 1.15rem;
 }
 
 .mast__logo {
   display: block;
-  width: min(15.5rem, 68%);
+  width: min(16.5rem, 74%);
   height: auto;
   margin: 0 auto 0.85rem;
-  /* El archivo trae blanco puro; multiply lo iguala al papel de la página. */
-  mix-blend-mode: multiply;
 }
 
 .mast__photo {
   display: block;
-  width: min(68rem, 100vw);
-  margin-left: calc(50% - min(34rem, 50vw));
+  width: 100%;
   height: auto;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 1024 / 682;
   max-height: 32rem;
   object-fit: cover;
-  object-position: center 55%;
+  object-position: center center;
   border-bottom: 4px solid var(--accent);
 }
 
@@ -246,7 +244,7 @@ input[type="text"]:focus {
 }
 
 @media (max-width: 640px) {
-  .mast { width: min(100% - 1.25rem, 52rem); }
+  .mast__photo { max-height: none; }
   .sheet { width: min(100% - 1.25rem, 42rem); padding-top: 1.35rem; }
   .actions { display: grid; }
   .send { width: 100%; }
