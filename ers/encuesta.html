@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Encuesta · ERs</title>
+  <link rel="stylesheet" href="styles.css?v=20261125a">
+  <link rel="stylesheet" href="shell.css?v=20261125c">
+  <style>
+    .survey-page { max-width: 920px; margin: 0 auto; padding: 8px 8px 48px; }
+    .survey-page h2 { margin: 0 0 6px; font-size: 1.7rem; }
+    .survey-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 16px 0 22px; }
+    .survey-link { flex: 1 1 220px; font-size: 0.92rem; color: var(--text-secondary); }
+    .entry { border: 1px solid var(--card-border); border-radius: 14px; background: var(--card-bg); padding: 14px 16px; margin: 0 0 10px; }
+    .entry header { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+    .entry p { white-space: pre-wrap; margin: 8px 0 0; }
+    .report { margin-top: 28px; }
+    .problem { border-left: 4px solid var(--accent-primary); padding: 4px 0 12px 14px; margin: 0 0 16px; }
+    .problem.is-urgente { border-color: var(--danger-text); }
+    .problem.is-liviana { border-color: #8a8175; }
+    .problem h3 { margin: 0 0 4px; font-size: 1.05rem; }
+    .tag { display: inline-block; font-size: 0.75rem; letter-spacing: 0.04em; text-transform: uppercase; font-weight: 650; }
+    .empty { color: var(--text-secondary); }
+    @media print {
+      .sidebar, .topbar, .survey-bar, .entry button, .no-print { display: none !important; }
+      body { overflow: visible; background: #fff; }
+      .shell, .canvas, .canvas__scroll { display: block; height: auto; overflow: visible; background: #fff; }
+      .survey-page { max-width: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="sidebar__brand">
+        <div class="brand"><h1 class="brand__mark">ER<em>s</em></h1></div>
+      </div>
+      <nav class="module-nav" aria-label="Módulos">
+        <a class="module-nav__btn" href="index.html">SEO</a>
+        <a class="module-nav__btn is-active" href="encuesta.html" aria-current="page">Encuesta</a>
+      </nav>
+    </aside>
+    <div class="canvas">
+      <header class="topbar">
+        <p class="topbar__kicker">Encuesta del tribunal</p>
+      </header>
+      <div class="canvas__scroll">
+        <main class="survey-page">
+          <h2>Registros del equipo</h2>
+          <p class="empty" id="meta">Cargando…</p>
+          <div class="survey-bar no-print">
+            <a class="btn btn--ghost" href="index.html">Volver a ERs</a>
+            <span class="survey-link" id="link"></span>
+            <button class="btn btn--ghost" id="copy" type="button">Copiar enlace</button>
+            <button class="btn btn--neon" id="analyze" type="button">Generar informe con Gemini</button>
+            <button class="btn btn--ghost" id="print" type="button" hidden>Imprimir / Guardar PDF</button>
+          </div>
+          <p class="empty" id="notice" hidden></p>
+          <section id="entries"></section>
+          <section class="report" id="report" hidden></section>
+        </main>
+      </div>
+    </div>
+  </div>
+  <script src="encuesta-admin.js" defer></script>
+</body>
+</html>

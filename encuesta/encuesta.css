@@ -1,0 +1,148 @@
+:root {
+  color-scheme: light;
+  --ink: #1a1814;
+  --muted: #5c564c;
+  --line: #d9d1c3;
+  --paper: #f4f0e8;
+  --card: #fbf9f4;
+  --accent: #1e3d34;
+  --danger: #8c2f2f;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ink);
+  background:
+    linear-gradient(90deg, #1e3d34 0 6px, transparent 6px),
+    var(--paper);
+  font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+  line-height: 1.5;
+}
+
+.sheet {
+  width: min(42rem, calc(100% - 2.5rem));
+  margin: 0 auto;
+  padding: 2.5rem 0 4rem;
+}
+
+.kicker {
+  margin: 0 0 0.75rem;
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-family: Palatino, "Palatino Linotype", "Iowan Old Style", Georgia, serif;
+  font-size: clamp(1.7rem, 4vw, 2.35rem);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+.lead {
+  margin: 1rem 0 2rem;
+  max-width: 38rem;
+  color: var(--muted);
+}
+
+.field {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0 0 1.25rem;
+}
+
+.field span {
+  font-weight: 650;
+}
+
+.field small {
+  color: var(--muted);
+}
+
+textarea,
+input[type="text"] {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  padding: 0.85rem 0.9rem;
+}
+
+textarea {
+  min-height: 14rem;
+  resize: vertical;
+}
+
+textarea:focus,
+input[type="text"]:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.count {
+  justify-self: end;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-style: normal;
+}
+
+.send {
+  appearance: none;
+  border: 0;
+  border-radius: 2px;
+  background: var(--accent);
+  color: #f7f4ee;
+  font: inherit;
+  font-weight: 650;
+  padding: 0.9rem 1.2rem;
+  cursor: pointer;
+}
+
+.send:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.send--ghost {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.note {
+  margin: 0.9rem 0 0;
+  color: var(--danger);
+}
+
+.done {
+  padding-top: 0.5rem;
+}
+
+.done h2 {
+  margin: 0 0 0.4rem;
+  font-family: Palatino, "Palatino Linotype", Georgia, serif;
+  font-size: 1.8rem;
+  font-weight: 600;
+}
+
+.hp {
+  position: absolute;
+  left: -9999px;
+  height: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 640px) {
+  body { background: var(--paper); }
+  .sheet { width: min(100% - 2rem, 42rem); padding-top: 1.5rem; }
+  .send { width: 100%; }
+}

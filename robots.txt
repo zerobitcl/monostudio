@@ -3,35 +3,43 @@
 User-agent: *
 Allow: /
 Disallow: /ers/
+Disallow: /encuesta/
 Disallow: /serve.log
 
 # Rastreadores de IA: permitidos a propósito, ser citados por asistentes es parte de la propuesta
 User-agent: GPTBot
 Allow: /
 Disallow: /ers/
+Disallow: /encuesta/
 
 User-agent: OAI-SearchBot
 Allow: /
 Disallow: /ers/
+Disallow: /encuesta/
 
 User-agent: ChatGPT-User
 Allow: /
 Disallow: /ers/
+Disallow: /encuesta/
 
 User-agent: Google-Extended
 Allow: /
 Disallow: /ers/
+Disallow: /encuesta/
 
 User-agent: ClaudeBot
 Allow: /
 Disallow: /ers/
+Disallow: /encuesta/
 
 User-agent: Claude-SearchBot
 Allow: /
 Disallow: /ers/
+Disallow: /encuesta/
 
 User-agent: PerplexityBot
 Allow: /
 Disallow: /ers/
+Disallow: /encuesta/
 
 Sitemap: https://monostudio.cl/sitemap.xml

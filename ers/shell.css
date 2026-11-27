@@ -139,6 +139,11 @@ body {
   border-radius: 0;
 }
 
+a.module-nav__btn {
+  text-decoration: none;
+  color: rgba(255, 255, 255, 0.82);
+}
+
 .sidebar .module-nav__btn {
   display: flex;
   align-items: center;
