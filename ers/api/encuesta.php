@@ -33,9 +33,20 @@ function encuestaStatusPayload(array $data): array
     $entries = encuestaPublicEntries($data);
     $stamp = encuestaFingerprint($entries);
     $report = is_array($data['report'] ?? null) ? $data['report'] : null;
+    $sent = 0;
+    $drafts = 0;
+    foreach ($entries as $row) {
+        if (($row['status'] ?? '') === 'borrador') {
+            $drafts++;
+        } else {
+            $sent++;
+        }
+    }
     return [
         'ok' => true,
         'count' => count($entries),
+        'sent' => $sent,
+        'drafts' => $drafts,
         'entries' => $entries,
         'link' => 'https://monostudio.cl/encuesta/',
         'report' => $report,
@@ -153,9 +164,16 @@ function encuestaSanitizeReport(array $raw, array $entries): array
 function encuestaAnalyze(bool $force): array
 {
     $current = encuestaReadRaw();
-    $entries = encuestaPublicEntries($current);
+    $entries = array_values(array_filter(
+        encuestaPublicEntries($current),
+        static function (array $row): bool {
+            $text = trim((string) ($row['texto'] ?? ''));
+            $len = function_exists('mb_strlen') ? mb_strlen($text) : strlen($text);
+            return $len >= 10;
+        }
+    ));
     if ($entries === []) {
-        throw new RuntimeException('Todavía no hay registros para cruzar.');
+        throw new RuntimeException('Todavía no hay registros con texto suficiente para cruzar.');
     }
     $stamp = encuestaFingerprint($entries);
     if (
@@ -180,6 +198,7 @@ function encuestaAnalyze(bool $force): array
     }
     $system = <<<TXT
 Sos un relator de un equipo de tribunal. Cruzás solo lo que escribieron las personas. No inventes problemas, nombres ni cargos que no estén en los registros.
+Las inquietudes cubren el cargo, el funcionamiento del tribunal y el servicio a usuarios. Si alguien habla de atención, espera, trámites o trato a quien llega al tribunal, eso es servicio a usuarios: agrúpalo así y no lo rebajes a un detalle interno.
 Agrupá lo que se repite. Ordená las problemáticas de más urgente a más liviana: urgente = traba el trabajo o se repite con fuerza; media = duele pero se puede sostener; liviana = mejora deseable.
 Cada problemática cita los nombres reales de quienes la mencionan y las sugerencias que ellos mismos propusieron, en sus términos.
 resumen_ejecutivo: máximo 4 frases, lo más grave primero.

@@ -81,6 +81,29 @@ function encuestaMutate(callable $change)
     }
 }
 
+/** RUT chileno normalizado como 12345678-9, o vacío si el dígito no calza. */
+function encuestaNormalizeRut(string $value): string
+{
+    $value = strtoupper((string) (preg_replace('/[^0-9kK]/', '', $value) ?? ''));
+    if (strlen($value) < 8 || strlen($value) > 9) {
+        return '';
+    }
+    $dv = substr($value, -1);
+    $num = substr($value, 0, -1);
+    if (!ctype_digit($num)) {
+        return '';
+    }
+    $sum = 0;
+    $mul = 2;
+    for ($i = strlen($num) - 1; $i >= 0; $i--) {
+        $sum += (int) $num[$i] * $mul;
+        $mul = $mul === 7 ? 2 : $mul + 1;
+    }
+    $rest = 11 - ($sum % 11);
+    $expected = $rest === 11 ? '0' : ($rest === 10 ? 'K' : (string) $rest);
+    return $dv === $expected ? $num . '-' . $dv : '';
+}
+
 function encuestaPublicEntries(array $data): array
 {
     $out = [];
@@ -88,14 +111,18 @@ function encuestaPublicEntries(array $data): array
         if (!is_array($row)) {
             continue;
         }
+        $status = (string) ($row['status'] ?? '');
         $out[] = [
             'id' => (string) ($row['id'] ?? ''),
+            'rut' => (string) ($row['rut'] ?? ''),
             'nombre' => (string) ($row['nombre'] ?? ''),
             'texto' => (string) ($row['texto'] ?? ''),
+            'status' => $status === 'borrador' ? 'borrador' : 'enviado',
             'createdAt' => (int) ($row['createdAt'] ?? 0),
+            'updatedAt' => (int) ($row['updatedAt'] ?? $row['createdAt'] ?? 0),
         ];
     }
-    usort($out, static fn (array $a, array $b): int => $b['createdAt'] <=> $a['createdAt']);
+    usort($out, static fn (array $a, array $b): int => $b['updatedAt'] <=> $a['updatedAt']);
     return $out;
 }
 
@@ -103,7 +130,7 @@ function encuestaFingerprint(array $entries): string
 {
     $parts = [];
     foreach ($entries as $row) {
-        $parts[] = ($row['id'] ?? '') . '|' . ($row['texto'] ?? '') . '|' . ($row['nombre'] ?? '');
+        $parts[] = ($row['id'] ?? '') . '|' . ($row['status'] ?? '') . '|' . ($row['texto'] ?? '') . '|' . ($row['nombre'] ?? '');
     }
     sort($parts);
     return md5(implode("\n", $parts));

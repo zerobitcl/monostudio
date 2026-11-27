@@ -10,15 +10,13 @@
 <body>
   <main class="sheet">
     <p class="kicker">Funcionamiento del tribunal</p>
-    <h1>Registra aquí tus inquietudes, necesidades y sugerencias para tu cargo y para un mejor funcionamiento del tribunal</h1>
-    <p class="lead">Tu respuesta se cruza con las del resto del equipo. Escribe con claridad: qué te inquieta, qué problema ves hoy y qué mejorarías.</p>
+    <h1>Registra aquí tus inquietudes, necesidades y sugerencias para tu cargo, para un mejor funcionamiento del tribunal y para un mejor servicio a usuarios</h1>
+    <p class="lead">Tu RUT abre tu sesión. Puedes guardar y seguir después; el envío deja el texto listo para el informe del equipo.</p>
 
     <form id="survey" novalidate>
       <label class="field">
-        <span>Inquietudes, problemáticas y sugerencias</span>
-        <small>Registra tus inquietudes, identifica las problemáticas y propone sugerencias de mejora. Puedes hablar de tu cargo y del funcionamiento general.</small>
-        <textarea id="texto" name="texto" required minlength="10" maxlength="8000" rows="10" placeholder="Por ejemplo: en mi cargo falta… El problema que más se repite es… Sugiero que…"></textarea>
-        <em class="count" id="count">0 / 8000</em>
+        <span>RUT</span>
+        <input id="rut" name="rut" type="text" inputmode="text" autocomplete="off" required maxlength="12" placeholder="12.345.678-9">
       </label>
 
       <label class="field">
@@ -26,20 +24,25 @@
         <input id="nombre" name="nombre" type="text" required minlength="2" maxlength="120" autocomplete="name" placeholder="Nombre y apellido">
       </label>
 
+      <label class="field">
+        <span>Inquietudes, problemáticas y sugerencias</span>
+        <small>Registra tus inquietudes, identifica las problemáticas y propone sugerencias de mejora. Puedes hablar de tu cargo, del funcionamiento general y del servicio a quienes usan el tribunal.</small>
+        <textarea id="texto" name="texto" required minlength="10" maxlength="8000" rows="10" placeholder="Por ejemplo: en mi cargo falta… El problema que más se repite es… Para atender mejor a los usuarios, sugiero que…"></textarea>
+        <em class="count" id="count">0 / 8000</em>
+      </label>
+
       <label class="hp" aria-hidden="true">
         <span>Empresa</span>
         <input type="text" name="empresa" tabindex="-1" autocomplete="off">
       </label>
 
-      <button class="send" id="send" type="submit">Enviar registro</button>
+      <div class="actions">
+        <button class="send send--ghost" id="save" type="button">Guardar</button>
+        <button class="send" id="send" type="submit">Enviar registro</button>
+      </div>
+      <p class="state" id="state" hidden></p>
       <p class="note" id="note" hidden></p>
     </form>
-
-    <section class="done" id="done" hidden>
-      <h2>Registro recibido</h2>
-      <p>Quedó guardado. Se usará, junto con los demás, para ordenar las problemáticas de más urgentes a más livianas.</p>
-      <button class="send send--ghost" id="again" type="button">Enviar otro aporte</button>
-    </section>
   </main>
   <script src="encuesta.js" defer></script>
 </body>

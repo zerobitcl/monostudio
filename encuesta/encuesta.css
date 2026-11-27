@@ -118,6 +118,17 @@ input[type="text"]:focus {
   border: 1px solid var(--accent);
 }
 
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.state {
+  margin: 0.9rem 0 0;
+  color: var(--accent);
+}
+
 .note {
   margin: 0.9rem 0 0;
   color: var(--danger);
@@ -144,5 +155,6 @@ input[type="text"]:focus {
 @media (max-width: 640px) {
   body { background: var(--paper); }
   .sheet { width: min(100% - 2rem, 42rem); padding-top: 1.5rem; }
+  .actions { display: grid; }
   .send { width: 100%; }
 }
