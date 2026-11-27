@@ -14,7 +14,8 @@
   let timer = null;
 
   function paintCount() {
-    count.textContent = texto.value.length + " / 8000";
+    const n = texto.value.length;
+    count.textContent = n.toLocaleString("es-CL") + (n === 1 ? " caracter" : " caracteres");
     texto.style.height = "auto";
     texto.style.height = Math.max(texto.scrollHeight, 220) + "px";
   }
@@ -112,10 +113,6 @@
     const body = texto.value.trim();
     if (nombre.length < 2) {
       if (!quiet) showNote("Escribe tu nombre antes de guardar.");
-      return;
-    }
-    if (body.length > 8000) {
-      if (!quiet) showNote("El texto es demasiado largo.");
       return;
     }
     if (!quiet) {

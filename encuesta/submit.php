@@ -61,9 +61,6 @@ if ($action === 'save') {
     if (encuestaLen($nombre) < 2 || encuestaLen($nombre) > 120) {
         encuestaFail(400, 'Escribe tu nombre (entre 2 y 120 caracteres).');
     }
-    if (encuestaLen($texto) > 8000) {
-        encuestaFail(400, 'El texto es demasiado largo.');
-    }
 }
 
 $ip = hash('sha256', 'encuesta-tribunal|' . (string) ($_SERVER['REMOTE_ADDR'] ?? ''));
@@ -121,14 +118,14 @@ try {
                 'id' => bin2hex(random_bytes(8)),
                 'rut' => $rut,
                 'nombre' => encuestaClip($nombre, 120),
-                'texto' => encuestaClip($texto, 8000),
+                'texto' => $texto,
                 'status' => 'borrador',
                 'createdAt' => $now,
                 'updatedAt' => $now,
             ];
         } else {
             $data['entries'][$index]['nombre'] = encuestaClip($nombre, 120);
-            $data['entries'][$index]['texto'] = encuestaClip($texto, 8000);
+            $data['entries'][$index]['texto'] = $texto;
             $data['entries'][$index]['status'] = 'borrador';
             $data['entries'][$index]['updatedAt'] = $now;
             $data['entries'][$index]['rut'] = $rut;
