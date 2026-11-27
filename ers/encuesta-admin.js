@@ -21,10 +21,7 @@
   function paint(data) {
     state = data;
     const n = Number(data.count || 0);
-    const sent = Number(data.sent || 0);
-    const drafts = Number(data.drafts || 0);
-    meta.textContent = (n === 1 ? "1 persona" : n + " personas")
-      + " · " + sent + " enviados · " + drafts + " borradores";
+    meta.textContent = (n === 1 ? "1 persona con registro" : n + " personas con registro");
     if (data.reportStale) meta.textContent += " · el informe no incluye los últimos registros";
     link.textContent = data.link || "https://monostudio.cl/encuesta/";
     entries.replaceChildren();
@@ -35,7 +32,6 @@
       const who = document.createElement("strong");
       const bits = [row.nombre || "Sin nombre"];
       if (row.rut) bits.push(row.rut);
-      bits.push(row.status === "borrador" ? "Borrador" : "Enviado");
       who.textContent = bits.join(" · ");
       const when = document.createElement("span");
       when.textContent = stamp(row.updatedAt || row.createdAt);

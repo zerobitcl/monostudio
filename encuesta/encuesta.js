@@ -6,8 +6,9 @@
   const count = document.getElementById("count");
   const note = document.getElementById("note");
   const state = document.getElementById("state");
+  const stateTitle = document.getElementById("stateTitle");
+  const stateBody = document.getElementById("stateBody");
   const saveBtn = document.getElementById("save");
-  const send = document.getElementById("send");
   const memoryKey = "encuesta-tribunal-rut";
   let hydrating = false;
   let timer = null;
@@ -23,9 +24,20 @@
     note.textContent = text || "";
   }
 
-  function showState(text) {
-    state.hidden = !text;
-    state.textContent = text || "";
+  function showState(mode, title, body, celebrate) {
+    if (!title) {
+      state.hidden = true;
+      return;
+    }
+    state.hidden = false;
+    state.className = "state is-" + mode;
+    void state.offsetWidth;
+    if (celebrate) state.classList.add("is-saved");
+    stateTitle.textContent = title;
+    stateBody.textContent = body || "";
+    if (celebrate) {
+      state.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
   }
 
   function rutBody(value) {
@@ -73,7 +85,7 @@
       const data = await post("load");
       localStorage.setItem(memoryKey, rut);
       if (!data.found) {
-        showState("RUT nuevo. Lo que escribas puedes guardarlo y retomarlo con este mismo RUT.");
+        showState("info", "Sesión nueva", "Guarda cuando quieras y sigue después con este mismo RUT.");
         return;
       }
       hydrating = true;
@@ -81,9 +93,7 @@
       texto.value = data.texto || "";
       paintCount();
       hydrating = false;
-      showState(data.status === "enviado"
-        ? "Ya habías enviado este registro. Puedes editarlo y volver a guardar."
-        : "Retomamos tu borrador.");
+      showState("info", "Texto recuperado", "Puedes agregar, quitar y volver a guardar.");
       showNote("");
     } catch (err) {
       showNote(err.message || "No se pudo abrir la sesión.");
@@ -100,37 +110,32 @@
     rutInput.value = rut;
     const nombre = nombreInput.value.trim();
     const body = texto.value.trim();
-    if (nombre.length < 2 || (action === "send" ? body.length < 10 : body.length < 1)) {
-      if (!quiet) {
-        showNote(action === "send"
-          ? "Escribe tu nombre y al menos un párrafo breve."
-          : "Escribe tu nombre y algo de texto antes de guardar.");
-      }
+    if (nombre.length < 2) {
+      if (!quiet) showNote("Escribe tu nombre antes de guardar.");
+      return;
+    }
+    if (body.length > 8000) {
+      if (!quiet) showNote("El texto es demasiado largo.");
       return;
     }
     if (!quiet) {
       saveBtn.disabled = true;
-      send.disabled = true;
-      send.textContent = action === "send" ? "Enviando…" : "Enviar registro";
-      saveBtn.textContent = action === "save" ? "Guardando…" : "Guardar";
+      saveBtn.textContent = "Guardando…";
     }
     try {
-      const data = await post(action);
+      await post("save");
       localStorage.setItem(memoryKey, rut);
-      showState(action === "send"
-        ? "Registro enviado. Puedes volver a entrar con tu RUT."
-        : data.status === "enviado"
-          ? "Cambios guardados."
-          : "Borrador guardado en este RUT.");
+      const empty = body.length < 1;
+      showState(quiet ? "quiet" : "saved", empty ? "Texto borrado" : "Guardado", empty
+        ? "Guardamos el cuadro vacío. Puedes escribir de nuevo con este RUT."
+        : "Puedes cerrar y seguir después con tu RUT: agregar, quitar y volver a guardar.", !quiet);
       if (!quiet) showNote("");
     } catch (err) {
       showNote(err.message || "No se pudo guardar. Intenta de nuevo.");
     } finally {
       if (!quiet) {
         saveBtn.disabled = false;
-        send.disabled = false;
         saveBtn.textContent = "Guardar";
-        send.textContent = "Enviar registro";
       }
     }
   }
@@ -151,11 +156,10 @@
   });
   nombreInput.addEventListener("input", queueSave);
   rutInput.addEventListener("change", loadSession);
-  saveBtn.addEventListener("click", function () { persist("save"); });
   form.addEventListener("submit", function (event) {
     event.preventDefault();
     clearTimeout(timer);
-    persist("send");
+    persist("save");
   });
 
   paintCount();

@@ -8,10 +8,14 @@
   <link rel="stylesheet" href="encuesta.css">
 </head>
 <body>
+  <header class="mast">
+    <img class="mast__logo" src="img/poder-judicial.png" width="640" height="360" alt="Poder Judicial. República de Chile.">
+    <img class="mast__photo" src="img/tribunal.jpg" width="1200" height="800" alt="Fachada blanca del Tribunal de Juicio Oral en lo Penal y Juzgado de Garantía, con el nombre del tribunal en el muro y cielo despejado.">
+  </header>
   <main class="sheet">
     <p class="kicker">Funcionamiento del tribunal</p>
     <h1>Registra aquí tus inquietudes, necesidades y sugerencias para tu cargo, para un mejor funcionamiento del tribunal y para un mejor servicio a usuarios</h1>
-    <p class="lead">Tu RUT abre tu sesión. Puedes guardar y seguir después; el envío deja el texto listo para el informe del equipo.</p>
+    <p class="lead">Tu RUT abre lo que ya guardaste. Puedes seguir después, agregar o quitar, y volver a guardar.</p>
 
     <form id="survey" novalidate>
       <label class="field">
@@ -37,10 +41,15 @@
       </label>
 
       <div class="actions">
-        <button class="send send--ghost" id="save" type="button">Guardar</button>
-        <button class="send" id="send" type="submit">Enviar registro</button>
+        <button class="send" id="save" type="submit">Guardar</button>
       </div>
-      <p class="state" id="state" hidden></p>
+      <p class="state" id="state" hidden role="status">
+        <span class="state__mark" aria-hidden="true">✓</span>
+        <span>
+          <strong id="stateTitle"></strong>
+          <span id="stateBody"></span>
+        </span>
+      </p>
       <p class="note" id="note" hidden></p>
     </form>
   </main>

@@ -42,8 +42,11 @@ if (trim((string) ($raw['empresa'] ?? '')) !== '') {
     exit;
 }
 
-$action = (string) ($raw['action'] ?? 'send');
-if (!in_array($action, ['load', 'save', 'send'], true)) {
+$action = (string) ($raw['action'] ?? 'save');
+if ($action === 'send') {
+    $action = 'save';
+}
+if (!in_array($action, ['load', 'save'], true)) {
     encuestaFail(400, 'Acción no reconocida.');
 }
 
@@ -54,15 +57,12 @@ if ($rut === '') {
 
 $nombre = trim(preg_replace('/\s+/u', ' ', strip_tags((string) ($raw['nombre'] ?? ''))) ?? '');
 $texto = trim(strip_tags((string) ($raw['texto'] ?? '')));
-if ($action !== 'load') {
+if ($action === 'save') {
     if (encuestaLen($nombre) < 2 || encuestaLen($nombre) > 120) {
         encuestaFail(400, 'Escribe tu nombre (entre 2 y 120 caracteres).');
     }
-    $min = $action === 'send' ? 10 : 1;
-    if (encuestaLen($texto) < $min || encuestaLen($texto) > 8000) {
-        encuestaFail(400, $action === 'send'
-            ? 'Para enviar, escribe al menos un párrafo breve.'
-            : 'Escribe algo antes de guardar.');
+    if (encuestaLen($texto) > 8000) {
+        encuestaFail(400, 'El texto es demasiado largo.');
     }
 }
 
@@ -110,15 +110,10 @@ try {
             ];
         }
 
-        $status = $action === 'send' ? 'enviado' : 'borrador';
-        if ($index === null && $action === 'save') {
-            $status = 'borrador';
-        }
-        if ($index !== null && $action === 'save' && (string) ($data['entries'][$index]['status'] ?? '') === 'enviado') {
-            $status = 'enviado';
-        }
-
         if ($index === null) {
+            if ($texto === '') {
+                return ['ok' => true, 'found' => false, 'rut' => $rut, 'status' => 'borrador', 'updatedAt' => $now];
+            }
             if (count($data['entries']) >= 80) {
                 throw new RuntimeException('La encuesta ya cerró el cupo de registros.');
             }
@@ -127,25 +122,23 @@ try {
                 'rut' => $rut,
                 'nombre' => encuestaClip($nombre, 120),
                 'texto' => encuestaClip($texto, 8000),
-                'status' => $status,
+                'status' => 'borrador',
                 'createdAt' => $now,
                 'updatedAt' => $now,
             ];
         } else {
             $data['entries'][$index]['nombre'] = encuestaClip($nombre, 120);
             $data['entries'][$index]['texto'] = encuestaClip($texto, 8000);
-            $data['entries'][$index]['status'] = $status;
+            $data['entries'][$index]['status'] = 'borrador';
             $data['entries'][$index]['updatedAt'] = $now;
-            if (empty($data['entries'][$index]['rut'])) {
-                $data['entries'][$index]['rut'] = $rut;
-            }
+            $data['entries'][$index]['rut'] = $rut;
         }
 
         return [
             'ok' => true,
             'found' => true,
             'rut' => $rut,
-            'status' => $status,
+            'status' => 'borrador',
             'updatedAt' => $now,
         ];
     });
